@@ -20,6 +20,7 @@ import { isSegmentStockEnabled, SEGMENT_LEGACY_CONVERSION_LOCK } from './segment
 import { SegmentStockService } from './segment-stock.service';
 import type { SegmentSyncChange, SegmentTarget } from './segment-stock.types';
 import { computeSegmentTargets, SegmentTargetVariant } from './segment-targets.util';
+import { extraNeedOf } from '../steel-issues/phoi-need.util';
 
 /** Kết quả tính cho 1 cỡ đoạn của lệnh. */
 export interface SegmentProductionSpecResult {
@@ -279,7 +280,7 @@ export class SegmentProductionService {
       }),
       db.qcReviewSegment.findMany({
         where: { qcReview: { steelIssue: { productionInvoiceId } } },
-        select: { segmentSpecId: true, failedQty: true },
+        select: { segmentSpecId: true, failedQty: true, shortQty: true },
       }),
       db.stepBatchSegment.findMany({
         where: { stepBatch: { productionInvoiceId } },
@@ -294,6 +295,8 @@ export class SegmentProductionService {
         select: {
           segmentSpecId: true,
           failedQty: true,
+          shortQty: true,
+          scrapQty: true,
           qcReview: { select: { stepBundle: { select: { step: true } } } },
         },
       }),
@@ -331,7 +334,8 @@ export class SegmentProductionService {
       specKeyOf,
       (r) => r.qty,
     );
-    const cutFailed = sumBy(cutQc, specKeyOf, (r) => r.failedQty);
+    // P1 (18/11/2026): đoạn KCS ghi THIẾU không có thật nên trừ cùng với lỗi.
+    const cutFailed = sumBy(cutQc, specKeyOf, (r) => r.failedQty + (r.shortQty ?? 0));
 
     // Công đoạn phụ (bỏ CAT nếu lỡ có): open = chưa có đợt gửi KCS, awaiting = đợt AWAITING_QC.
     const stepKey = (specId: bigint, step: string) => `${specId.toString()}|${step}`;
@@ -349,11 +353,27 @@ export class SegmentProductionService {
       (r) => r.qty,
     );
     const stepFailed = new Map<string, number>();
+    // Σ số BỎ (cắt lại) theo (cỡ, công đoạn) - đoạn đã bị loại hẳn nên cũng trừ ở Cắt và ở các công đoạn đứng trước.
+    const stepScrap = new Map<string, number>();
     for (const r of stepQc) {
       const step = r.qcReview.stepBundle?.step;
       if (!step || step === ProcessStep.CAT) continue;
       const k = stepKey(r.segmentSpecId, step);
-      stepFailed.set(k, (stepFailed.get(k) ?? 0) + r.failedQty);
+      stepFailed.set(k, (stepFailed.get(k) ?? 0) + r.failedQty + (r.shortQty ?? 0));
+      stepScrap.set(k, (stepScrap.get(k) ?? 0) + (r.scrapQty ?? 0));
+    }
+    // Các dòng định mức (bộ công đoạn) của từng cỡ - để biết dòng nào cần cả 2 công đoạn khi chia phần bỏ.
+    const lineStepsBySpec = new Map<string, string[][]>();
+    for (const order of orders) {
+      for (const pb of pieceBoms) {
+        if (pb.bomRevisionId !== order.bomRevisionId) continue;
+        const qtyPerUnit = qtyPerUnitByKey.get(`${pb.bomRevisionId}:${pb.pieceId}`) ?? 0;
+        if (pb.qtyPerPiece * qtyPerUnit * order.quantity <= 0) continue;
+        const specKey = pb.segmentSpecId.toString();
+        const arr = lineStepsBySpec.get(specKey) ?? [];
+        arr.push([...pb.processSteps]);
+        lineStepsBySpec.set(specKey, arr);
+      }
     }
 
     // Hợp các cỡ đoạn: có số cần, có cắt, có công đoạn.
@@ -365,18 +385,27 @@ export class SegmentProductionService {
     const specs: SegmentProductionSpecResult[] = [];
     const sortedSpecs = [...specIds.entries()].sort(([, a], [, b]) => (a < b ? -1 : a > b ? 1 : 0));
     for (const [specKey, specId] of sortedSpecs) {
+      const scrapByStep: Partial<Record<string, number>> = {};
+      for (const t of SEGMENT_SUB_STEPS) {
+        const sc = stepScrap.get(stepKey(specId, t)) ?? 0;
+        if (sc > 0) scrapByStep[t] = sc;
+      }
+      const lineSteps = lineStepsBySpec.get(specKey) ?? [];
+      // Cắt trừ thêm Σ bỏ ở MỌI công đoạn phụ (phần phải cắt lại). Thiếu của Cắt đã nằm trong cutFailed.
       const cutPassedQty = passedQty(
         cutDone.get(specKey) ?? 0,
-        cutFailed.get(specKey) ?? 0,
+        (cutFailed.get(specKey) ?? 0) + extraNeedOf('CAT', scrapByStep, lineSteps),
         cutOpen.get(specKey) ?? 0,
         cutAwaiting.get(specKey) ?? 0,
       );
       const stepPassedQty: Partial<Record<SegmentSubStep, number>> = {};
       for (const t of SEGMENT_SUB_STEPS) {
         const k = stepKey(specId, t);
+        // Công đoạn T trừ thêm phần bỏ ở các công đoạn U đứng SAU T có dòng định mức cần cả T lẫn U (đoạn đã làm T
+        // nhưng bị bỏ ở U thì không còn là đoạn đủ công đoạn T).
         const p = passedQty(
           stepDone.get(k) ?? 0,
-          stepFailed.get(k) ?? 0,
+          (stepFailed.get(k) ?? 0) + extraNeedOf(t, scrapByStep, lineSteps),
           stepOpen.get(k) ?? 0,
           stepAwaiting.get(k) ?? 0,
         );

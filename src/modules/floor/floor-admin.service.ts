@@ -41,6 +41,7 @@ import {
   UpdateFloorWorkerDto,
 } from './dto/floor-worker.dto';
 import { CreateWorkstationDto, UpdateWorkstationDto } from './dto/workstation.dto';
+import { KCS_STALE_HOURS, listKcsPendingItems } from './kcs-pending.util';
 import {
   filterByQueueWorkshop,
   queueLockKey,
@@ -160,6 +161,8 @@ interface StageData {
  * - Phôi: Cắt + MỌI công đoạn phụ (Uốn/Dập/…) theo cỡ đoạn + mảnh Phôi tự báo + vật tư thành phẩm (chân nhôm) -
  *   người dùng chốt 2026-10-19 (mục 45.9-1): tổ Phôi chỉ "đủ số" khi xong cả công đoạn phụ.
  * - Hàn/Sơn: mảnh theo định mức (đạt + chờ KCS + chưa gửi; số đạt đã trừ lỗi vì KCS ghi đè `reportedQty`).
+ * P1 (18/11/2026): `done` của phoi-progress = thô − thiếu (vẫn gồm lỗi) nên số được tính = done − lỗi = thô − lỗi − thiếu; mảnh:
+ * `passedQty` đã trừ cả lỗi lẫn thiếu. Số cần của Phôi đã gồm phần cắt lại (extraNeed). Công thức giữ nguyên, chỉ đổi nghĩa đầu vào.
  * Chỉ là gợi ý nhắc QLSX, KHÔNG tự chuyển PI và không chặn gì.
  */
 function progressFrom({ phoi, plans }: StageData): FloorProgress {
@@ -897,102 +900,45 @@ export class FloorAdminService {
     return { phoi, plans, orders };
   }
 
-  /** Số đợt đang chờ QLSX gửi KCS theo tổ - chấm số trên menu "Sản lượng xưởng". */
-  async summary(userId?: string) {
-    // X4 16/11: QLSX gắn xưởng chỉ đếm đợt của xưởng mình - khớp danh sách FloorReviewService.listOpen().
+  /**
+   * Số đỏ menu "Sản lượng xưởng" theo tổ (P1, 18/11/2026): { open, awaitingKcs, stale } - cùng nguồn kcs-pending với số
+   * đỏ menu KCS và tin chờ lâu, DÒNG BỊ CHẶN (lệnh dừng / chưa gắn SKU) không đếm.
+   * - open: đợt đang mở CÓ sổ báo (đợt cắt, nhóm công đoạn phụ, lô mảnh) - khớp danh sách QLSX; pat / chân nhôm không có
+   *   sổ báo nên không đếm ở đây.
+   * - awaitingKcs: đợt KCS đã chốt, chưa chấm xong (cả 5 loại).
+   * - stale: mọi đợt chưa chấm (đang mở + đã chốt, cả 5 loại) có mốc chờ quá KCS_STALE_HOURS giờ.
+   * X4 16/11: QLSX gắn xưởng chỉ đếm đợt của xưởng mình (filterByQueueWorkshop) - khớp danh sách FloorReviewService.listOpen().
+   */
+  async summary(userId?: string, now: Date = new Date()) {
     const scope = await this.workshopScope.getScope(userId);
-    if (scope.workshopId != null) return this.summaryForWorkshop(scope.workshopId);
-    const [cut, stepBatches, pieces] = await Promise.all([
-      this.prisma.cutBundle.count({ where: { status: 'CUTTING' } }),
-      this.prisma.stepBatch.findMany({
-        where: { stepBundleId: null },
-        distinct: [
-          'productionInvoiceId',
-          'materialId',
-          'step',
-          'productionOrderId',
-          'reportedById',
-        ],
-        select: { id: true },
-      }),
-      this.prisma.productionBatch.groupBy({
-        by: ['stage'],
-        where: { status: 'OPEN' },
-        _count: { _all: true },
-      }),
-    ]);
-    const pieceBy = (stage: MfgStage) => pieces.find((p) => p.stage === stage)?._count._all ?? 0;
-    return {
-      PHOI: { open: cut + stepBatches.length + pieceBy(MfgStage.PHOI) },
-      HAN: { open: pieceBy(MfgStage.HAN) },
-      SON: { open: pieceBy(MfgStage.SON) },
+    const items = await listKcsPendingItems(this.prisma);
+    const staleBefore = now.getTime() - KCS_STALE_HOURS * 3_600_000;
+    const out: Record<
+      'PHOI' | 'HAN' | 'SON',
+      { open: number; awaitingKcs: number; stale: number }
+    > = {
+      PHOI: { open: 0, awaitingKcs: 0, stale: 0 },
+      HAN: { open: 0, awaitingKcs: 0, stale: 0 },
+      SON: { open: 0, awaitingKcs: 0, stale: 0 },
     };
-  }
-
-  /** summary() cho QLSX gắn 1 xưởng: lọc theo xưởng hàng đợi của PI ở từng tổ (filterByQueueWorkshop). */
-  private async summaryForWorkshop(workshopId: bigint) {
-    const [cutRows, stepRows, pieceRows] = await Promise.all([
-      this.prisma.cutBundle.findMany({
-        where: { status: 'CUTTING' },
-        select: { steelIssue: { select: { productionInvoiceId: true } } },
-      }),
-      this.prisma.stepBatch.findMany({
-        where: { stepBundleId: null },
-        distinct: [
-          'productionInvoiceId',
-          'materialId',
-          'step',
-          'productionOrderId',
-          'reportedById',
-        ],
-        select: { productionInvoiceId: true },
-      }),
-      this.prisma.productionBatch.findMany({
-        where: { status: 'OPEN' },
-        select: {
-          stage: true,
-          productionOrder: {
-            select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
-          },
-        },
-      }),
-    ]);
-    const piOfPiece = (r: (typeof pieceRows)[number]) =>
-      r.productionOrder.productionInvoiceItem.productionInvoiceId;
-    const count = async (stage: MfgStage) =>
-      (
-        await filterByQueueWorkshop(
-          this.prisma,
-          workshopId,
-          stage,
-          pieceRows.filter((r) => r.stage === stage),
-          piOfPiece,
-        )
-      ).length;
-    const [cut, steps, phoiPieces, han, son] = await Promise.all([
-      filterByQueueWorkshop(
+    for (const stage of ['PHOI', 'HAN', 'SON'] as const) {
+      const ofStage = items.filter((i) => i.stage === stage && !i.blockedReason);
+      const rows = await filterByQueueWorkshop(
         this.prisma,
-        workshopId,
-        MfgStage.PHOI,
-        cutRows,
-        (r) => r.steelIssue.productionInvoiceId,
-      ),
-      filterByQueueWorkshop(
-        this.prisma,
-        workshopId,
-        MfgStage.PHOI,
-        stepRows,
-        (r) => r.productionInvoiceId,
-      ),
-      count(MfgStage.PHOI),
-      count(MfgStage.HAN),
-      count(MfgStage.SON),
-    ]);
-    return {
-      PHOI: { open: cut.length + steps.length + phoiPieces },
-      HAN: { open: han },
-      SON: { open: son },
-    };
+        scope.workshopId,
+        MfgStage[stage],
+        ofStage,
+        (i) => i.productionInvoiceId,
+      );
+      for (const i of rows) {
+        if (i.state === 'AWAITING_QC') out[stage].awaitingKcs += 1;
+        else if (i.kind === 'CUT' || i.kind === 'STEP' || i.kind === 'PIECE_BATCH') {
+          out[stage].open += 1;
+        }
+        if (i.waitingSince.getTime() < staleBefore) out[stage].stale += 1;
+      }
+    }
+    return out;
   }
 
   /**

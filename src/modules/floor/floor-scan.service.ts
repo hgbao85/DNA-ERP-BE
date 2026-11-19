@@ -30,6 +30,7 @@ import {
   queueWorkshopIdsOfPis,
   workstationQueueWorkshopId,
 } from './floor-queue-workshop.util';
+import { pieceMaxNow } from './floor-review.service';
 
 const STAGE_LABEL: Record<string, string> = { PHOI: 'Phôi', HAN: 'Hàn', SON: 'Sơn' };
 
@@ -213,9 +214,10 @@ export class FloorScanService {
   }
 
   /**
-   * "Sản lượng của tôi" (mục 20.5): mọi lần MÌNH báo trong khoảng thời gian, kèm trạng thái đợt (chưa gửi KCS /
-   * chờ KCS / đã KCS) và lần bị QLSX đảo + lý do. Đây là số ĐÃ BÁO, không phải số đạt KCS - nhân sự tính
-   * công ở giai đoạn sau.
+   * "Sản lượng của tôi" (mục 20.5): mọi lần MÌNH báo trong khoảng thời gian, kèm trạng thái đợt (chờ kiểm hàng /
+   * KCS đang chấm / đã KCS) và lần bị QLSX đảo + lý do. Đây là số ĐÃ BÁO, không phải số đạt KCS - nhân sự tính
+   * công ở giai đoạn sau. P1: lần báo thuộc đợt đã chấm có thêm `kcs: { failedQty, shortQty }` = số lỗi / thiếu của
+   * CẢ ĐỢT (cộng các phiếu chấm của đợt); null với đợt đang mở / đã chốt chờ chấm, hoặc đợt cũ không có phiếu chấm.
    */
   async myOutput(userId: string, from?: string, to?: string) {
     const toDate = to ? new Date(to) : new Date();
@@ -250,13 +252,17 @@ export class FloorScanService {
         cutBundle: {
           select: {
             status: true,
+            qcReviews: { select: { failedQty: true, shortQty: true } },
             steelIssue: { select: { productionInvoice: { select: { code: true } } } },
           },
         },
         stepBatch: {
           select: {
             step: true,
-            stepBundle: { select: { status: true } },
+            stepBundleId: true,
+            stepBundle: {
+              select: { status: true, qcReviews: { select: { failedQty: true, shortQty: true } } },
+            },
             productionInvoice: { select: { code: true } },
           },
         },
@@ -264,6 +270,7 @@ export class FloorScanService {
           select: {
             stage: true,
             status: true,
+            qcReviews: { select: { failedQty: true, shortQty: true } },
             productionOrder: {
               select: {
                 productionInvoiceItem: {
@@ -279,6 +286,7 @@ export class FloorScanService {
     return rows.map((r) => {
       let piCode: string | null = null;
       let state: 'OPEN' | 'AWAITING_QC' | 'QC_DONE' | 'REMOVED' = 'REMOVED';
+      let reviews: { failedQty: number; shortQty: number }[] = [];
       if (r.cutBundle) {
         piCode = r.cutBundle.steelIssue.productionInvoice.code;
         state =
@@ -287,6 +295,7 @@ export class FloorScanService {
             : r.cutBundle.status === CutBundleStatus.AWAITING_QC
               ? 'AWAITING_QC'
               : 'QC_DONE';
+        reviews = r.cutBundle.qcReviews;
       } else if (r.stepBatch) {
         piCode = r.stepBatch.productionInvoice.code;
         state = !r.stepBatch.stepBundle
@@ -294,11 +303,30 @@ export class FloorScanService {
           : r.stepBatch.stepBundle.status === 'AWAITING_QC'
             ? 'AWAITING_QC'
             : 'QC_DONE';
+        reviews = r.stepBatch.stepBundle?.qcReviews ?? [];
       } else if (r.productionBatch) {
         piCode =
           r.productionBatch.productionOrder.productionInvoiceItem.productionInvoice?.code ?? null;
         state = r.productionBatch.status;
+        reviews = r.productionBatch.qcReviews;
       }
+      const kcs =
+        state === 'QC_DONE' && reviews.length > 0
+          ? {
+              failedQty: reviews.reduce((n, v) => n + v.failedQty, 0),
+              shortQty: reviews.reduce((n, v) => n + v.shortQty, 0),
+            }
+          : null;
+      // P1 (19/11): mã đợt KCS chấm - FE gom các lần báo cùng đợt để chỉ hiện nhãn "KCS chấm cả đợt" 1 lần (kcs là số của
+      // CẢ đợt). Công đoạn phụ: đợt = nhóm gửi KCS (stepBundle); chưa gom thì null.
+      const batchKey =
+        r.cutBundleId != null
+          ? `CUT:${r.cutBundleId.toString()}`
+          : r.stepBatch?.stepBundleId != null
+            ? `STEP:${r.stepBatch.stepBundleId.toString()}`
+            : r.productionBatchId != null
+              ? `BATCH:${r.productionBatchId.toString()}`
+              : null;
       return {
         id: r.id.toString(),
         kind: r.kind,
@@ -307,6 +335,8 @@ export class FloorScanService {
         step: r.stepBatch?.step ?? null,
         workstation: r.workstation,
         state,
+        kcs,
+        batchKey,
         reversed: r.reversedBy
           ? {
               reason: r.reversedBy.reason,
@@ -533,7 +563,9 @@ export class FloorScanService {
         orders.map((o) => o.id.toString()),
         ws.stage,
       );
-      // Kế hoạch mảnh bỏ qua đợt OPEN (chưa gửi KCS) - thêm số đó để công nhân thấy lần báo vừa lưu đã vào.
+      // Kế hoạch mảnh bỏ qua đợt OPEN (chưa báo xong cho KCS) - thêm số đó để công nhân thấy lần báo vừa lưu đã vào.
+      // P1: maxNow = max(0, cần - đạt - chờ KCS chấm - đang mở) = số tối đa lần báo kế tiếp được nhận (cùng công thức
+      // ProductionBatchesService chặn báo vượt); đạt (passedQty) đã trừ lỗi + thiếu nên đoạn lỗi được báo bù.
       const open = await this.prisma.productionBatch.groupBy({
         by: ['productionOrderId', 'pieceId'],
         where: {
@@ -551,10 +583,14 @@ export class FloorScanService {
           orderId,
           {
             ...plan,
-            items: plan.items.map((it) => ({
-              ...it,
-              openQty: openQty.get(`${orderId}:${it.pieceId}`) ?? 0,
-            })),
+            items: plan.items.map((it) => {
+              const open = openQty.get(`${orderId}:${it.pieceId}`) ?? 0;
+              return {
+                ...it,
+                openQty: open,
+                maxNow: pieceMaxNow({ ...it, openQty: open }),
+              };
+            }),
           },
         ]),
       );
@@ -562,8 +598,11 @@ export class FloorScanService {
     }
 
     // CUT/STEP: tiến độ theo loại sắt -> cỡ đoạn (byOrder cho biết cỡ nào thuộc SKU nào).
-    // 17/11/2026: `done` trả về màn quét = SỐ ĐƯỢC TÍNH = max(0, đã báo - lỗi KCS) (giống Hàn / Sơn) để báo bù đoạn
-    // lỗi không bị coi là vượt; kèm `failed` (lỗi KCS) và `reportedQty` (số đã báo thô). API phoi-progress vẫn giữ done thô.
+    // P1 (18/11/2026): `done` trả về màn quét = SỐ ĐÃ TÍNH = thô - lỗi - thiếu (API phoi-progress: done = thô - thiếu,
+    // vẫn gồm lỗi - khác nghĩa, đừng lẫn). `reportedQty` = số thô công nhân đã báo (đọc trường reportedQty của tiến độ,
+    // KHÔNG lấy done). Kèm `failed` (lỗi KCS), `shortQty` (KCS ghi thiếu), `baseRequired` / `extraNeed` (required =
+    // định mức + cắt lại), `maxNow` (lần báo kế tiếp tối đa, BE chặn đúng số này) và `physicalLeft` (số đoạn còn làm
+    // được, null với Cắt). FE chỉ hiện các số này, không tự tính lại.
     // Loại sắt chưa có lần giao nào đã nhận thì CUT chưa báo được (receivedBarCount 0) - FE hiện "chưa nhận sắt".
     const progress =
       ws.kind === WorkstationKind.CUT
@@ -586,15 +625,25 @@ export class FloorScanService {
           segmentSpecId: s.segmentSpecId,
           cutLengthMm: s.cutLengthMm,
           required: s.required,
+          baseRequired: s.baseRequired,
+          extraNeed: s.extraNeed,
           done: goodQty({ done: s.done, failed: s.failed ?? 0 }),
           failed: s.failed ?? 0,
-          reportedQty: s.done,
+          shortQty: s.shortQty,
+          reportedQty: s.reportedQty,
+          maxNow: s.maxNow,
+          physicalLeft: s.physicalLeft,
           byOrder: s.byOrder.map((b) => ({
             productionOrderId: b.productionOrderId,
             required: b.required,
+            baseRequired: b.baseRequired,
+            extraNeed: b.extraNeed,
             done: goodQty({ done: b.done, failed: b.failed ?? 0 }),
             failed: b.failed ?? 0,
-            reportedQty: b.done,
+            shortQty: b.shortQty,
+            reportedQty: b.reportedQty,
+            maxNow: b.maxNow,
+            physicalLeft: b.physicalLeft,
           })),
         })),
       })),

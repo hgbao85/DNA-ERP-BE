@@ -237,3 +237,23 @@ describe('NOTIFICATION_TYPES - PI_WORKSHOP_CHANGED (16/11/2026)', () => {
     });
   });
 });
+
+describe('NOTIFICATION_TYPES - KCS_BATCH_STALE (P1, MF1)', () => {
+  const def = NOTIFICATION_TYPES.KCS_BATCH_STALE;
+
+  it.each([
+    ['PHOI', 'kcs-phoi'],
+    ['HAN', 'kcs-han'],
+    ['SON', 'kcs-son'],
+  ] as const)('tổ %s: link về tab %s của KCS, KHÔNG có alternatives', (stage, page) => {
+    const link = def.link?.({ stage, count: 1, hours: 4 });
+    expect(link).toEqual({ module: 'production', page });
+    expect(link).not.toHaveProperty('alternatives');
+  });
+
+  it('FLOOR_BATCH_STALE (đã ngừng phát) vẫn link về san-luong-xuong như cũ', () => {
+    expect(
+      NOTIFICATION_TYPES.FLOOR_BATCH_STALE.link?.({ stage: 'HAN', count: 1, hours: 4 }),
+    ).toEqual({ module: 'production', page: 'san-luong-xuong' });
+  });
+});

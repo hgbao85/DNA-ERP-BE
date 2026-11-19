@@ -21,6 +21,7 @@ import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 import { SegmentStockService } from '../segment-stock/segment-stock.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { ProductionOrderResponseDto } from './dto/production-order-response.dto';
@@ -72,6 +73,7 @@ export class ProductionOrdersService {
     private readonly stockReservationsService: StockReservationsService,
     private readonly workshopScope: WorkshopScopeService,
     private readonly segmentStockService: SegmentStockService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   /**
@@ -588,6 +590,15 @@ export class ProductionOrdersService {
       | 'PRODUCTION_ORDER_FLOOR_FINISHED',
   ): Promise<void> {
     if (from === to) return;
+    // P1 (19/11/2026): báo cả topic 'floor' - màn KCS (có FLOOR_REPORT:VIEW, KHÔNG có PRODUCTION_ORDER:VIEW nên không nhận
+    // topic 'production-orders') và màn "Sản lượng xưởng" của QLSX tự tải lại để tô xám / mở lại đợt của lệnh vừa đổi.
+    // Payload chỉ có topic + id lệnh (như FloorRealtimeInterceptor). Phát sau khi đã ghi (lời gọi nằm sau updateMany / update).
+    this.realtime.publishEntityChanged({
+      entity: 'FLOOR_REPORT',
+      entityId: order.id,
+      action: 'UPDATED',
+      actorId: null,
+    });
     try {
       const auditLogClient = this.prisma as unknown as Pick<PrismaClient, 'auditLog'>;
       await writeAuditLog(auditLogClient, this.cls, {

@@ -25,6 +25,7 @@ import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { lockBusinessKey, lockBusinessKeyShared } from '../../common/utils/advisory-lock.util';
 import {
+  FLOOR_REPORT_REVERSED_REPLAY_MESSAGE,
   FloorReportContext,
   findFloorReportByKey,
   isIdempotencyConflict,
@@ -132,6 +133,7 @@ const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
  * Lỗi KCS cộng dồn của mảnh Phôi có khai công đoạn (vd pat: Cắt -> Dập), chấm theo PieceStepBundle chứ không qua
  * ProductionBatch (đợt chốt tự sinh không có QcReview). Cộng MỌI công đoạn: mảnh hỏng ở công đoạn nào cũng là 1 mảnh phải
  * làm lại (Cắt lỗi 3, Dập lỗi 2 -> thiếu đúng 5). `failedByStep` khoá `<lệnh>:<mảnh>:<công đoạn>`. 18/11/2026.
+ * P1: dùng chung cho cả số THIẾU (shortQty) - truyền map `short` thay cho map `failed`; hai số không bao giờ cộng vào nhau.
  */
 function sumStepFailed(
   failedByStep: Map<string, number>,
@@ -144,18 +146,25 @@ function sumStepFailed(
   );
 }
 
+/** Nhãn tổ cho câu lỗi người dùng thấy. */
+function stageLabelVi(stage: MfgStage): string {
+  return stage === MfgStage.HAN ? 'Hàn' : stage === MfgStage.SON ? 'Sơn' : 'Phôi';
+}
+
 /**
- * Báo sản lượng Hàn/Sơn (M2, thay san-luong.service.ts mock - phần baoSanLuong()). Không cap
- * theo BOM lúc báo (mock không kiểm tra) - KCS mới là bước kiểm soát, xem
- * QcReviewsService.reviewProductionBatch(). Append-create, không state machine phức tạp: chỉ
- * AWAITING_QC (khởi tạo) -> QC_DONE (do QcReviewsService cập nhật, không phải service này).
+ * Báo sản lượng Hàn/Sơn (M2, thay san-luong.service.ts mock - phần baoSanLuong()). Append-create,
+ * không state machine phức tạp: chỉ AWAITING_QC (khởi tạo) -> QC_DONE (do QcReviewsService cập nhật,
+ * không phải service này).
  *
- * Từ 2026-08-14 (xem docs/quy-doi-doan-phoi.md, quyết định nghiệp vụ #4): mỗi lần báo sản lượng
- * cũng tự động ghi StockLedger trừ tồn ĐOẠN sắt (segmentSpecId) theo PieceBom.qtyPerPiece của
- * đúng mảnh vừa báo - refType SEGMENT_CONSUME (enum value có sẵn từ đầu, chưa từng được dùng).
- * Cố ý KHÔNG chặn khi tồn đoạn không đủ (StockQuant được phép âm) - cùng triết lý "không cap
- * theo BOM lúc báo" đã áp dụng cho reportedQty, tránh chặn oan công nhân vì thủ kho nhập tồn
- * trễ hơn thực tế cắt.
+ * P1 (18/11/2026): lúc báo CÓ chặn vượt - Σ reportedQty mọi trạng thái của (lệnh, mảnh, tổ) không được quá
+ * qtyPerUnit × SL lệnh (số đợt KCS chấm lỗi / ghi thiếu đã bị trừ vào reportedQty nên được báo bù). Chặn trong khoá
+ * production-batch-open để 2 người báo cùng lúc không cùng lọt.
+ *
+ * Từ 2026-08-14 (xem docs/quy-doi-doan-phoi.md, quyết định nghiệp vụ #4): sản lượng Hàn / Sơn trừ tồn ĐOẠN sắt
+ * (segmentSpecId) theo PieceBom.qtyPerPiece - refType SEGMENT_CONSUME. P1: việc trừ dời sang LÚC KCS CHẤM
+ * (consumeSegmentsAtReviewInTx, số = báo - thiếu), không còn trừ lúc báo / chốt. Cố ý KHÔNG chặn khi tồn đoạn không
+ * đủ - thiếu thì ghi Sổ báo vượt đoạn (StockQuant được phép âm ở cách trừ cũ), tránh chặn oan công nhân vì thủ kho nhập
+ * tồn trễ hơn thực tế cắt.
  */
 @Injectable()
 export class ProductionBatchesService {
@@ -187,11 +196,12 @@ export class ProductionBatchesService {
   }
 
   /**
-   * Báo QLSX khi đợt Hàn / Sơn vừa ghi sổ báo vượt đoạn (anh Nhân 14/11). Gọi SAU khi transaction trừ đoạn commit; dedupeKey theo
-   * đợt nên gọi lại (Lưu đợt trùng / Gửi KCS) chỉ cập nhật 1 thông báo. Công tắc tắt hoặc đợt không có dòng chưa đóng -> không gửi.
+   * Báo QLSX khi đợt Hàn / Sơn vừa ghi sổ báo vượt đoạn (quyết định 14/11). P1: việc trừ đoạn xảy ra LÚC KCS CHẤM
+   * (consumeSegmentsAtReviewInTx) nên người gọi là QcReviewsService, SAU khi transaction chấm commit; `actorId` = KCS vừa chấm.
+   * dedupeKey theo đợt nên gọi lại chỉ cập nhật 1 thông báo. Công tắc tắt hoặc đợt không có dòng chưa đóng -> không gửi.
    * Best-effort: lỗi chỉ log.
    */
-  private async notifySegmentOverages(batchId: bigint, actorId: string | null): Promise<void> {
+  async afterReviewCommitted(batchId: bigint, actorId: string | null): Promise<void> {
     if (!isSegmentStockEnabled()) return;
     try {
       const rows = await this.prisma.segmentOverage.findMany({
@@ -250,26 +260,15 @@ export class ProductionBatchesService {
   ): Promise<ProductionBatchResponseDto> {
     this.assertConsumableStage(dto.stage);
     this.assertMfgRoleMatchesStage(callerMfgRole, dto.stage);
-    // Đợt 7 (chia 9 kho, user chốt 07/11): đoạn sắt/mảnh ghi ở kho Phôi của XƯỞNG LÀM LỆNH, không theo scope người báo
-    // (tài khoản tổ/QLSX đều gắn kho gốc). Lệnh chưa chọn xưởng -> kho gốc như trước.
+    // P1: không còn trừ tồn đoạn ở đây (dời sang lúc KCS chấm) nên không cần mã kho Phôi của xưởng, cũng không cần scope.
     void warehouseScope;
-    const sourceWarehouseCode = await this.phoiWarehouseCodeOfOrder(BigInt(productionOrderId));
 
     if (idempotencyKey) {
       const existing = await this.prisma.productionBatch.findUnique({
         where: { idempotencyKey },
         include: PRODUCTION_BATCH_INCLUDE,
       });
-      if (existing) {
-        await this.postSegmentConsumeEntries(
-          undefined,
-          { ...existing, bomRevisionId: existing.productionOrder.bomRevisionId },
-          reportedById,
-          sourceWarehouseCode,
-        );
-        await this.notifySegmentOverages(existing.id, reportedById);
-        return this.toResponseDto(existing);
-      }
+      if (existing) return this.toResponseDto(existing);
     }
 
     const order = await this.findOrderOrThrow(productionOrderId);
@@ -278,17 +277,20 @@ export class ProductionBatchesService {
     await this.assertPieceInBom(order.bomRevisionId, pieceBigId, dto.stage);
     await this.assertMaterialYieldReceived(order.bomRevisionId, pieceBigId, order.id, dto.stage);
 
-    // Tạo batch + ghi toàn bộ dòng StockLedger đoạn sắt tiêu thụ trong CÙNG 1 transaction - trước
-    // đây 2 bước này chạy rời nhau, 1 dòng ledger lỗi giữa chừng (mất kết nối, timeout) để lại
-    // batch đã tồn tại nhưng tồn đoạn sắt chỉ bị trừ 1 phần, không có gì phát hiện batch "dở dang".
-    // Timeout tuỳ chỉnh (mặc định Prisma chỉ 5000ms) - postSegmentConsumeEntries() ghi TUẦN TỰ 1
-    // dòng StockLedger/segmentSpecId (mảnh có thể ghép từ nhiều cỡ đoạn), đo thực tế với DB pooled
-    // remote hết ~3.7s cho 3 dòng - sát mức 5000ms mặc định, phát hiện qua browser thật 2026-08-31
-    // (báo sản lượng lỗi 500 "Database error" ngẫu nhiên - Prisma timeout transaction rơi vào
-    // nhánh default của AllExceptionsFilter.mapPrismaError(), không phải lỗi nghiệp vụ).
+    // P1 (MF3): khoá advisory production-batch-open là câu ĐẦU TIÊN của transaction (cùng thứ tự recordProductionBatch) -
+    // FOR UPDATE production_orders của assertItemPiHasActiveFloorLocked lấy SAU, nên không khoá chéo với báo QR / KCS chấm.
+    // Timeout 20 giây giữ như trước (DB pooled ở xa, transaction mặc định 5 giây dễ hết hạn - lỗi 500 "Database error").
     const created = await this.prisma.$transaction(
       async (tx) => {
+        await lockBusinessKey(tx, `production-batch-open:${order.id}:${pieceBigId}:${dto.stage}`);
         await assertItemPiHasActiveFloorLocked(tx, order.productionInvoiceItemId, 'báo sản lượng');
+        await this.assertPieceReportWithinPlanInTx(
+          tx,
+          order.id,
+          pieceBigId,
+          dto.stage,
+          dto.reportedQty,
+        );
 
         const batch = await tx.productionBatch.create({
           data: {
@@ -301,20 +303,14 @@ export class ProductionBatchesService {
           },
           include: PRODUCTION_BATCH_INCLUDE,
         });
-
-        await this.postSegmentConsumeEntries(
-          tx,
-          { ...batch, bomRevisionId: order.bomRevisionId },
-          reportedById,
-          sourceWarehouseCode,
-        );
         return batch;
       },
       { timeout: 20_000 },
     );
 
-    await this.notifySegmentOverages(created.id, reportedById);
-    return this.toResponseDto(created);
+    const response = this.toResponseDto(created);
+    response.overPlanWarning = null;
+    return response;
   }
 
   /**
@@ -324,11 +320,11 @@ export class ProductionBatchesService {
    * ngay như create()/reportProductionBatch() cũ. Ban đầu (2026-09-08 lần 1) CHỈ nhận PHOI (VTTP
    * ChotPanel) - mở rộng NHẬN CẢ 3 stage (2026-09-09, đồng bộ Hàn/Sơn theo yêu cầu người dùng) -
    * validate y hệt create() (assertConsumableStage/assertMfgRoleMatchesStage/assertPieceInBom/
-   * assertMaterialYieldReceived, hàm sau tự no-op ngoài PHOI). "Gửi KCS" (finishProductionBatch())
-   * mới thật sự đóng batch + chuyển AWAITING_QC + trừ tồn đoạn sắt (KHÔNG trừ ở đây - xem doc
-   * comment finishProductionBatch() lý do). KHÔNG cần Idempotency-Key dedup như create() - đây là
-   * hành động CỘNG DỒN (khác tạo-hoặc-trả-về), double-submit chỉ gây cộng dư số lượng (dễ nhận ra +
-   * tự sửa lại), không phải rủi ro nghiêm trọng; FE tự khoá nút lúc đang gửi (busy state).
+   * assertMaterialYieldReceived, hàm sau tự no-op ngoài PHOI). Chốt (finishProductionBatch(), KCS bấm "Chấm" hoặc tài khoản
+   * thống kê bấm "Gửi KCS") mới đóng batch + chuyển AWAITING_QC; tồn đoạn sắt chỉ bị trừ lúc KCS chấm
+   * (consumeSegmentsAtReviewInTx), không trừ ở đây cũng không trừ lúc chốt. P1 (18/11/2026): CHẶN vượt - trong khoá
+   * production-batch-open, Σ reportedQty mọi trạng thái của (lệnh, mảnh, tổ) + lần này không được quá qtyPerUnit × SL
+   * lệnh (assertPieceReportWithinPlanInTx). Idempotency-Key: gửi lại cùng khoá thì trả đợt đã cộng, không cộng lần 2.
    */
   async recordProductionBatch(
     productionOrderId: string,
@@ -361,55 +357,59 @@ export class ProductionBatchesService {
 
     let updated: ProductionBatchRow;
     try {
-      updated = await this.prisma.$transaction(async (tx) => {
-        await lockBusinessKey(tx, `production-batch-open:${order.id}:${pieceBigId}:${dto.stage}`);
-        await assertItemPiHasActiveFloorLocked(
-          tx,
-          order.productionInvoiceItemId,
-          'ghi nhận sản lượng',
-        );
+      updated = await this.prisma.$transaction(
+        async (tx) => {
+          await lockBusinessKey(tx, `production-batch-open:${order.id}:${pieceBigId}:${dto.stage}`);
+          await assertItemPiHasActiveFloorLocked(
+            tx,
+            order.productionInvoiceItemId,
+            'ghi nhận sản lượng',
+          );
+          await this.assertPieceReportWithinPlanInTx(tx, order.id, pieceBigId, dto.stage, dto.qty);
 
-        // Mỗi công nhân 1 đợt riêng (2026-10-13, mục 20.5/22): chỉ cộng vào đợt OPEN do CHÍNH người này
-        // mở (reportedById = người mở) - KCS chấm đạt/lỗi theo đợt nên biết được của ai.
-        const open = await tx.productionBatch.findFirst({
-          where: {
-            stage: dto.stage,
-            productionOrderId: order.id,
-            pieceId: pieceBigId,
-            status: ProductionBatchStatus.OPEN,
+          // Mỗi công nhân 1 đợt riêng (2026-10-13, mục 20.5/22): chỉ cộng vào đợt OPEN do CHÍNH người này
+          // mở (reportedById = người mở) - KCS chấm đạt/lỗi theo đợt nên biết được của ai.
+          const open = await tx.productionBatch.findFirst({
+            where: {
+              stage: dto.stage,
+              productionOrderId: order.id,
+              pieceId: pieceBigId,
+              status: ProductionBatchStatus.OPEN,
+              reportedById,
+            },
+          });
+          const batch = open
+            ? await tx.productionBatch.update({
+                where: { id: open.id },
+                data: { reportedQty: open.reportedQty + dto.qty },
+                include: PRODUCTION_BATCH_INCLUDE,
+              })
+            : await tx.productionBatch.create({
+                data: {
+                  stage: dto.stage,
+                  productionOrderId: order.id,
+                  pieceId: pieceBigId,
+                  reportedQty: dto.qty,
+                  reportedById,
+                  status: ProductionBatchStatus.OPEN,
+                },
+                include: PRODUCTION_BATCH_INCLUDE,
+              });
+          // Sổ ghi từng lần báo (ai/lúc nào/bao nhiêu) - ProductionBatch.reportedById chỉ là người MỞ đợt,
+          // các lần cộng dồn sau không còn dấu vết nếu không có dòng này.
+          await writeFloorReport(tx, {
+            kind: FloorReportKind.PIECE,
             reportedById,
-          },
-        });
-        const batch = open
-          ? await tx.productionBatch.update({
-              where: { id: open.id },
-              data: { reportedQty: open.reportedQty + dto.qty },
-              include: PRODUCTION_BATCH_INCLUDE,
-            })
-          : await tx.productionBatch.create({
-              data: {
-                stage: dto.stage,
-                productionOrderId: order.id,
-                pieceId: pieceBigId,
-                reportedQty: dto.qty,
-                reportedById,
-                status: ProductionBatchStatus.OPEN,
-              },
-              include: PRODUCTION_BATCH_INCLUDE,
-            });
-        // Sổ ghi từng lần báo (ai/lúc nào/bao nhiêu) - ProductionBatch.reportedById chỉ là người MỞ đợt,
-        // các lần cộng dồn sau không còn dấu vết nếu không có dòng này.
-        await writeFloorReport(tx, {
-          kind: FloorReportKind.PIECE,
-          reportedById,
-          idempotencyKey,
-          productionBatchId: batch.id,
-          workstationId: ctx?.workstationId,
-          productionInvoiceId: piItem.productionInvoiceId,
-          lines: [{ pieceId: pieceBigId, qty: dto.qty }],
-        });
-        return batch;
-      });
+            idempotencyKey,
+            productionBatchId: batch.id,
+            workstationId: ctx?.workstationId,
+            productionInvoiceId: piItem.productionInvoiceId,
+            lines: [{ pieceId: pieceBigId, qty: dto.qty }],
+          });
+          return batch;
+        },
+        { maxWait: 10_000, timeout: 20_000 },
+      );
     } catch (e) {
       if (isIdempotencyConflict(e)) {
         const replayAfterRace = await this.replayRecordedBatch(idempotencyKey);
@@ -423,16 +423,9 @@ export class ProductionBatchesService {
     // FLOOR_REPORT ('floor') cho mỗi lần quét - phát thêm 'production-batches' làm màn KCS / Phôi / Hàn tải lại theo nhịp quét.
     if (!ctx) this.publishRealtime(updated.id, 'PROGRESS', reportedById, updated.productionOrderId);
 
-    // Cảnh báo KHÔNG chặn (quyết định 2026-10-06, test lần 8: Sơn Mê ngồi báo 240 trên nhu cầu 120
-    // và KCS duyệt cả 240 mà không thấy): tổng đã báo (mọi trạng thái) vượt Σ nhu cầu của SKU.
+    // P1: báo vượt nay bị CHẶN lúc báo (không còn chỉ cảnh báo như quyết định 2026-10-06) nên không còn gì để cảnh báo.
     const response = this.toResponseDto(updated);
-    response.overPlanWarning = await this.buildOverPlanWarning(
-      order.id,
-      order.bomRevisionId,
-      order.quantity,
-      pieceBigId,
-      dto.stage,
-    );
+    response.overPlanWarning = null;
     return response;
   }
 
@@ -442,9 +435,11 @@ export class ProductionBatchesService {
   ): Promise<ProductionBatchResponseDto | null> {
     const prev = await findFloorReportByKey(this.prisma, idempotencyKey);
     if (!prev) return null;
-    if (prev.kind !== FloorReportKind.PIECE || !prev.productionBatchId) {
+    if (prev.kind !== FloorReportKind.PIECE) {
       throw new ConflictException('Idempotency-Key đã dùng cho một lần báo khác');
     }
+    // QLSX đã hủy hết lần báo này (đợt bị xoá, dòng sổ còn lại nhưng không còn gắn đợt): không ghi dòng sổ mới.
+    if (!prev.productionBatchId) throw new ConflictException(FLOOR_REPORT_REVERSED_REPLAY_MESSAGE);
     const batch = await this.prisma.productionBatch.findUniqueOrThrow({
       where: { id: prev.productionBatchId },
       include: PRODUCTION_BATCH_INCLUDE,
@@ -452,79 +447,96 @@ export class ProductionBatchesService {
     return this.toResponseDto(batch);
   }
 
-  /** Cảnh báo báo vượt nhu cầu (null = trong định mức). Chỉ đọc, không chặn. */
-  private async buildOverPlanWarning(
+  /**
+   * Chặn báo vượt số cần của mảnh (P1, 18/11/2026) - gọi TRONG transaction, SAU khi đã lấy khoá production-batch-open
+   * (đọc số cần + số đã báo ngay trong khoá nên 2 người báo cùng lúc không cùng lọt). Số cần = BomPiece.qtyPerUnit × SL lệnh;
+   * số đã báo = Σ reportedQty mọi trạng thái của (lệnh, mảnh, tổ) - đợt QC_DONE đã được ghi đè bằng số đạt (báo - lỗi - thiếu),
+   * nên lỗi / thiếu KCS ghi được báo bù. Số cần 0 (mảnh không có trong định mức của lệnh) -> câu "không cần theo định mức".
+   */
+  private async assertPieceReportWithinPlanInTx(
+    tx: PrismaTx,
     orderId: bigint,
-    bomRevisionId: bigint,
-    orderQuantity: number,
     pieceId: bigint,
     stage: MfgStage,
-  ): Promise<string | null> {
-    const bomPiece = await this.prisma.bomPiece.findFirst({
-      where: { bomRevisionId, pieceId },
-      select: { qtyPerUnit: true },
+    qty: number,
+  ): Promise<void> {
+    const order = await tx.productionOrder.findUnique({
+      where: { id: orderId },
+      select: {
+        quantity: true,
+        bomRevisionId: true,
+        mfgProduct: { select: { factoryCode: true } },
+      },
     });
-    const planned = (bomPiece?.qtyPerUnit ?? 0) * orderQuantity;
-    if (planned <= 0) return null;
-    const agg = await this.prisma.productionBatch.aggregate({
-      where: { productionOrderId: orderId, pieceId, stage },
-      _sum: { reportedQty: true },
-    });
+    if (!order) throw new NotFoundException(`Không tìm thấy lệnh xưởng ${orderId}`);
+    const [bomPiece, agg] = await Promise.all([
+      tx.bomPiece.findUnique({
+        where: { bomRevisionId_pieceId: { bomRevisionId: order.bomRevisionId, pieceId } },
+        select: { qtyPerUnit: true },
+      }),
+      tx.productionBatch.aggregate({
+        where: { productionOrderId: orderId, pieceId, stage },
+        _sum: { reportedQty: true },
+      }),
+    ]);
+    const required = (bomPiece?.qtyPerUnit ?? 0) * order.quantity;
     const reported = agg._sum.reportedQty ?? 0;
-    if (reported <= planned) return null;
-    return `Tổng đã báo ${reported} vượt nhu cầu ${planned} (${stage}). Kiểm tra lại số lượng trước khi KCS duyệt.`;
+    const maxNow = Math.max(0, required - reported);
+    if (required > 0 && qty <= maxNow) return;
+
+    const piece = await tx.piece.findUnique({
+      where: { id: pieceId },
+      select: { name: true, code: true },
+    });
+    const pieceLabel = piece?.name ?? piece?.code ?? `mảnh ${pieceId}`;
+    const sku = order.mfgProduct.factoryCode;
+    this.logger.warn(
+      `Chặn báo vượt: lệnh ${orderId}, mảnh ${pieceId}, tổ ${stage}, cần ${required}, đã báo ${reported}, nhập ${qty}`,
+    );
+    if (required <= 0) {
+      throw new BadRequestException(
+        `Lệnh không cần mảnh ${pieceLabel} theo định mức - báo QLSX để KHSX / Spec kiểm định mức.`,
+      );
+    }
+    throw new BadRequestException(
+      `${pieceLabel} (SKU ${sku}, tổ ${stageLabelVi(stage)}): cần ${required} mảnh, đã báo ${reported} (đã trừ mảnh KCS chấm lỗi / ghi thiếu) - lần này báo được tối đa ${maxNow}, bạn nhập ${qty}. Đếm lại số mảnh. Số cần sai thì báo QLSX.`,
+    );
   }
 
   /**
-   * "Gửi KCS" - đóng batch đang OPEN, chuyển AWAITING_QC (mirror finishCutBundle() bên Sắt). Sau
-   * bước này KCS duyệt qua đúng luồng cũ (QcReviewsService.reviewProductionBatch()) - không đổi gì
-   * ở đó.
+   * Chốt đợt - đóng batch đang OPEN, chuyển AWAITING_QC (mirror finishCutBundle() bên Sắt). P1 (18/11/2026): KCS tự bấm
+   * "Chấm" (FloorReviewService.closeProductionBatch, truyền opts { notifyKcs: false, gateLabel: 'chốt để chấm' } và vai của
+   * tổ, không truyền 'KCS'); tài khoản thống kê vẫn bấm "Gửi KCS" qua route cũ (opts mặc định). Sau bước này KCS chấm qua
+   * QcReviewsService.reviewProductionBatch().
    *
-   * Trừ tồn đoạn sắt (postSegmentConsumeEntries) Ở ĐÂY, KHÔNG PHẢI ở recordProductionBatch() - lý
-   * do: hàm đó dùng idempotencyKey `production-batch-segment-consume:{batch.id}:{segmentSpecId}`
-   * (CỐ ĐỊNH theo batch.id) để chống double-submit; nếu gọi lúc "Lưu đợt" (có thể bấm NHIỀU lần,
-   * mỗi lần CỘNG DỒN reportedQty vào CÙNG batch.id), lần gọi sau sẽ bị coi là trùng key với lần
-   * trước (dù reportedQty đã tăng) → chỉ trừ đúng phần đầu, không trừ theo tổng mới - âm thầm THIẾU
-   * tồn. Trừ ở finish() an toàn vì đây là điểm reportedQty trở nên BẤT BIẾN (batch chuyển AWAITING_QC,
-   * recordProductionBatch() chỉ nhận batch đang OPEN) - mỗi batch.id chỉ gọi postSegmentConsumeEntries()
-   * ĐÚNG 1 LẦN trong vòng đời, khớp giả định của idempotencyKey đó.
+   * KHÔNG trừ tồn đoạn sắt ở đây nữa (trước P1 trừ ở đây): việc trừ dời sang LÚC KCS CHẤM
+   * (consumeSegmentsAtReviewInTx, số = báo - thiếu) vì chỉ lúc đó mới biết "Thực có". Lô đã chốt trước khi cập nhật (đã có
+   * bút toán SEGMENT_CONSUME hoặc Sổ báo vượt) được bỏ qua ở bước chấm, không trừ lần 2.
    */
-  /** Đợt 7: kho Phôi của xưởng làm lệnh (đoạn sắt/mảnh của lệnh Phước An ở kho Phôi Phước An). */
-  private async phoiWarehouseCodeOfOrder(productionOrderId: bigint): Promise<string> {
-    const order = await this.prisma.productionOrder.findUnique({
-      where: { id: productionOrderId },
-      select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
-    });
-    const w = await new WorkshopWarehouseResolver(this.prisma).phoiWarehouseOfPi(
-      order?.productionInvoiceItem.productionInvoiceId ?? null,
-    );
-    return w.code;
-  }
-
   async finishProductionBatch(
     id: string,
     reportedById: string,
     callerMfgRole: string | null,
     warehouseScope: string | null,
+    opts: { notifyKcs?: boolean; gateLabel?: string } = {},
   ): Promise<ProductionBatchResponseDto> {
+    const notifyKcs = opts.notifyKcs ?? true;
+    const gateLabel = opts.gateLabel ?? 'gửi KCS';
     const batch = await this.findOneRowOrThrow(id);
     this.assertMfgRoleMatchesStage(callerMfgRole, batch.stage);
     if (batch.status !== ProductionBatchStatus.OPEN) {
-      throw new ConflictException(
-        `Đợt ${id} đang ở trạng thái ${batch.status} - chỉ OPEN mới gửi KCS được`,
-      );
+      throw new ConflictException('Lô này vừa được chốt để chấm - tải lại trang.');
     }
     await assertItemPiHasActiveFloor(
       this.prisma,
       batch.productionOrder.productionInvoiceItemId,
-      'gửi KCS',
+      gateLabel,
     );
     if (batch.reportedQty <= 0) {
-      throw new BadRequestException(`Chưa có gì để gửi KCS`);
+      throw new BadRequestException('Lô này không còn số nào để chấm - tải lại trang.');
     }
-    // Cùng idiom create() - kho Phôi của xưởng làm lệnh (Đợt 7).
+    // P1: không còn trừ tồn đoạn ở đây nên không cần mã kho Phôi / scope người gửi.
     void warehouseScope;
-    const sourceWarehouseCode = await this.phoiWarehouseCodeOfOrder(batch.productionOrderId);
 
     const updated = await this.prisma.$transaction(
       async (tx) => {
@@ -532,50 +544,129 @@ export class ProductionBatchesService {
         // server+DB dev đang chạy (12/13 lần tái hiện được, không phải ca hiếm): trước đây update()
         // vô điều kiện, KHÔNG cùng khoá với recordProductionBatch() ("Lưu đợt") - nếu 1 request
         // "Lưu đợt" đang xử lý gần như đồng thời (đã acquire lock, đã findFirst thấy OPEN, CHƯA
-        // kịp ghi) thì request "Gửi KCS" này vẫn đóng batch bình thường, rồi request "Lưu đợt" kia
-        // tiếp tục ghi tăng reportedQty lên đúng batch VỪA ĐÓNG (update theo id, không lọc status) -
-        // kết quả: batch hiển thị AWAITING_QC với reportedQty cao hơn số thực tại thời điểm gửi KCS
-        // (postSegmentConsumeEntries bên dưới đã trừ tồn theo số CŨ, thấp hơn). Khoá CÙNG key với
-        // recordProductionBatch() để 2 thao tác tự loại trừ lẫn nhau, rồi updateMany lọc kèm status
+        // kịp ghi) thì request chốt này vẫn đóng batch bình thường, rồi request "Lưu đợt" kia
+        // tiếp tục ghi tăng reportedQty lên đúng batch VỪA ĐÓNG (update theo id, không lọc status).
+        // Khoá CÙNG key với recordProductionBatch() để 2 thao tác tự loại trừ lẫn nhau, rồi updateMany lọc kèm status
         // OPEN + so count - cùng idiom mọi race-guard khác trong session này.
-        // Rà soát 14/11 TĐ5: khoá chuyển đổi tồn đoạn (dùng chung) TRƯỚC khoá đợt - cùng thứ tự với phía trừ bên trong, để lượt
-        // chuyển đổi (độc quyền) và Gửi KCS không khoá chéo nhau. Tắt công tắc thì phía trừ theo lệnh không chạy, không cần khoá.
-        if (isSegmentStockEnabled())
-          await lockBusinessKeyShared(tx, SEGMENT_LEGACY_CONVERSION_LOCK);
-        await lockBusinessKey(
-          tx,
-          `production-batch-open:${batch.productionOrderId}:${batch.pieceId}:${batch.stage}`,
-        );
+        // Rà soát 14/11 TĐ5: khoá chuyển đổi tồn đoạn (dùng chung) TRƯỚC khoá đợt - giữ thứ tự cũ (lockBatchKeysInTx) để lượt
+        // chuyển đổi (độc quyền), chốt và KCS chấm lô không khoá chéo nhau.
+        await this.lockBatchKeysInTx(tx, batch);
         const { count } = await tx.productionBatch.updateMany({
-          where: { id: batch.id, status: ProductionBatchStatus.OPEN },
+          where: { id: batch.id, status: ProductionBatchStatus.OPEN, reportedQty: { gt: 0 } },
           data: { status: ProductionBatchStatus.AWAITING_QC },
         });
         if (count === 0) {
-          throw new ConflictException(
-            `Đợt ${id} đã bị 1 yêu cầu khác xử lý trong lúc gửi KCS - không ghi đè`,
-          );
+          // P1 (AC52): đọc lại trong transaction để phân biệt "QLSX vừa hủy hết số" (lô mất / còn 0) với "vừa được chốt".
+          const now = await tx.productionBatch.findUnique({
+            where: { id: batch.id },
+            select: { reportedQty: true },
+          });
+          if (!now || now.reportedQty <= 0) {
+            throw new ConflictException(
+              'Lô này vừa bị QLSX hủy hết số - không còn gì để chấm, tải lại trang.',
+            );
+          }
+          throw new ConflictException('Lô này vừa được chốt để chấm - tải lại trang.');
         }
-        const locked = await tx.productionBatch.findUniqueOrThrow({
+        return tx.productionBatch.findUniqueOrThrow({
           where: { id: batch.id },
           include: PRODUCTION_BATCH_INCLUDE,
         });
-        await this.postSegmentConsumeEntries(
-          tx,
-          { ...locked, bomRevisionId: batch.productionOrder.bomRevisionId },
-          reportedById,
-          sourceWarehouseCode,
-        );
-        return locked;
       },
       { timeout: 20_000 },
     );
-    await this.notifySegmentOverages(updated.id, reportedById);
-    await this.notifyBatchToKcs(updated.id, {
-      piCode: updated.productionOrder.productionInvoiceItem.productionInvoice?.code ?? '?',
-      stage: updated.stage,
-    });
+    // KCS tự chấm (notifyKcs = false) thì không báo "gửi KCS" - chính KCS vừa bấm.
+    if (notifyKcs) {
+      await this.notifyBatchToKcs(updated.id, {
+        piCode: updated.productionOrder.productionInvoiceItem.productionInvoice?.code ?? '?',
+        stage: updated.stage,
+      });
+    }
     this.publishRealtime(updated.id, 'FINISHED', reportedById, updated.productionOrderId);
     return this.toResponseDto(updated);
+  }
+
+  /** Đợt 7: kho Phôi của xưởng làm lệnh (đoạn sắt/mảnh của lệnh Phước An ở kho Phôi Phước An). `db` = tx khi gọi trong transaction. */
+  private async phoiWarehouseCodeOfOrder(
+    productionOrderId: bigint,
+    db: PrismaTx = this.prisma,
+  ): Promise<string> {
+    const order = await db.productionOrder.findUnique({
+      where: { id: productionOrderId },
+      select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+    });
+    const w = await new WorkshopWarehouseResolver(db).phoiWarehouseOfPi(
+      order?.productionInvoiceItem.productionInvoiceId ?? null,
+    );
+    return w.code;
+  }
+
+  /**
+   * Khoá của 1 lô mảnh, theo thứ tự cố định (MF3 - khoá advisory trước, FOR UPDATE sau cùng): khoá CHIA SẺ chuyển đổi tồn
+   * đoạn (chỉ khi công tắc bật - lượt chuyển đổi giữ độc quyền) rồi `production-batch-open:{lệnh}:{mảnh}:{tổ}` (độc quyền,
+   * cùng khoá với báo / hủy / chốt). Gọi lại trong cùng transaction không chờ. Người gọi (KCS chấm lô) lấy khoá này TRƯỚC khi
+   * chạm dòng lô hay ô tồn đoạn.
+   */
+  async lockBatchKeysInTx(
+    tx: PrismaTx,
+    key: { productionOrderId: bigint; pieceId: bigint; stage: MfgStage },
+  ): Promise<void> {
+    if (isSegmentStockEnabled()) await lockBusinessKeyShared(tx, SEGMENT_LEGACY_CONVERSION_LOCK);
+    await lockBusinessKey(
+      tx,
+      `production-batch-open:${key.productionOrderId}:${key.pieceId}:${key.stage}`,
+    );
+  }
+
+  /**
+   * Trừ tồn đoạn LÚC KCS CHẤM lô Hàn / Sơn (P1) - QcReviewsService gọi TRONG transaction chấm, SAU khi ghi
+   * reportedQty = consumedQty (= báo - thiếu) cho lô. Tự lấy lại 2 khoá của lockBatchKeysInTx (gọi lại không chờ).
+   * Bỏ qua (không trừ lần 2) khi lô ĐÃ trừ đoạn: có bút toán SEGMENT_CONSUME refId = id lô (khoá chống trùng bất kỳ: kiểu
+   * cũ không có bộ công đoạn, kiểu mới, công tắc nào lúc gửi) hoặc đã có dòng Sổ báo vượt đoạn. Chưa thì trừ theo công tắc
+   * (bật: theo mã đoạn + Sổ báo vượt; tắt: cách cũ). Dòng Sổ báo vượt ghi người báo của lô (reportedById), không phải KCS -
+   * `actorId` (KCS) chỉ dùng khi lô thiếu người báo; tin SEGMENT_OVERAGE_REPORTED do afterReviewCommitted phát với KCS.
+   */
+  async consumeSegmentsAtReviewInTx(
+    tx: PrismaTx,
+    batchId: bigint,
+    consumedQty: number,
+    actorId: string,
+  ): Promise<void> {
+    const batch = await tx.productionBatch.findUniqueOrThrow({
+      where: { id: batchId },
+      select: {
+        id: true,
+        pieceId: true,
+        productionOrderId: true,
+        stage: true,
+        reportedById: true,
+        productionOrder: { select: { bomRevisionId: true } },
+      },
+    });
+    await this.lockBatchKeysInTx(tx, batch);
+    if (consumedQty <= 0) return;
+    const [consumed, overage] = await Promise.all([
+      tx.stockLedger.findFirst({
+        where: { refType: StockLedgerRefType.SEGMENT_CONSUME, refId: batch.id.toString() },
+        select: { id: true },
+      }),
+      tx.segmentOverage.findFirst({ where: { productionBatchId: batch.id }, select: { id: true } }),
+    ]);
+    if (consumed || overage) return;
+    // Mã kho Phôi của xưởng làm lệnh tra bằng chính tx (đọc thuần) - không mở thêm kết nối ngoài transaction đang giữ khoá.
+    const sourceWarehouseCode = await this.phoiWarehouseCodeOfOrder(batch.productionOrderId, tx);
+    await this.postSegmentConsumeEntries(
+      tx,
+      {
+        id: batch.id,
+        pieceId: batch.pieceId,
+        reportedQty: consumedQty,
+        bomRevisionId: batch.productionOrder.bomRevisionId,
+        stage: batch.stage,
+      },
+      batch.reportedById ?? actorId,
+      sourceWarehouseCode,
+    );
   }
 
   /**
@@ -600,6 +691,9 @@ export class ProductionBatchesService {
    * KHÔNG chặn "chốt lô mà chưa báo đủ công đoạn" ở create() - quyết định nghiệp vụ 2026-09-04,
    * cùng triết lý "không chặn oan công nhân, KCS mới là bước kiểm soát" đã lặp lại nhiều lần trong
    * module này. FE tự cảnh báo (không chặn) dựa trên stepProgress trả về từ getBatchPlan().
+   *
+   * P1: báo vượt số cần của công đoạn pat ĐƯỢC PHÉP (quyết định 19/11, Câu 6) - chỉ ghi log (logPieceStepOverPlanInTx),
+   * giữ khoá piece-step-batch và mọi luật khác.
    */
   async recordPieceStepBatch(
     productionOrderId: string,
@@ -657,23 +751,74 @@ export class ProductionBatchesService {
         `Mảnh ${dto.pieceId} không có công đoạn ${processStepLabel(dto.step)} theo định mức`,
       );
     }
-    const created = await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(tx, `piece-step-batch:${order.id}:${pieceBigId}:${dto.step}`);
-      await assertItemPiHasActiveFloorLocked(tx, order.productionInvoiceItemId, 'báo công đoạn');
+    const created = await this.prisma.$transaction(
+      async (tx) => {
+        await lockBusinessKey(tx, `piece-step-batch:${order.id}:${pieceBigId}:${dto.step}`);
+        await assertItemPiHasActiveFloorLocked(tx, order.productionInvoiceItemId, 'báo công đoạn');
+        await this.logPieceStepOverPlanInTx(tx, order.id, pieceBigId, dto.step, dto.qty);
 
-      return tx.pieceStepBatch.create({
-        data: {
-          productionOrderId: order.id,
-          pieceId: pieceBigId,
-          step: dto.step,
-          qty: dto.qty,
-          reportedById,
-          idempotencyKey,
-        },
-      });
-    });
+        return tx.pieceStepBatch.create({
+          data: {
+            productionOrderId: order.id,
+            pieceId: pieceBigId,
+            step: dto.step,
+            qty: dto.qty,
+            reportedById,
+            idempotencyKey,
+          },
+        });
+      },
+      { maxWait: 10_000, timeout: 20_000 },
+    );
 
+    // Bảng mốc / màn Phôi tính phần báo chưa gửi KCS là đã làm - báo để các màn đó tự tải lại (cùng "Lưu đợt").
+    this.publishRealtime(created.id, 'PROGRESS', reportedById, order.id);
     return this.toPieceStepBatchResponseDto(created);
+  }
+
+  /**
+   * Ghi log khi báo vượt số cần của 1 công đoạn mảnh có khai công đoạn (pat) - KHÔNG chặn (quyết định 19/11, Câu 6). Gọi
+   * TRONG transaction sau khoá piece-step-batch. Số cần = BomPiece.qtyPerUnit × SL lệnh; đã tính = Σ PieceStepBatch.qty - Σ (lỗi +
+   * thiếu) của các lần KCS chấm đúng công đoạn này. Vượt hoặc số cần 0 -> logger.log rồi cho tạo bình thường.
+   */
+  private async logPieceStepOverPlanInTx(
+    tx: PrismaTx,
+    orderId: bigint,
+    pieceId: bigint,
+    step: ProcessStep,
+    qty: number,
+  ): Promise<void> {
+    const order = await tx.productionOrder.findUnique({
+      where: { id: orderId },
+      select: { quantity: true, bomRevisionId: true },
+    });
+    if (!order) throw new NotFoundException(`Không tìm thấy lệnh xưởng ${orderId}`);
+    const [bomPiece, reportedAgg, reviewAgg] = await Promise.all([
+      tx.bomPiece.findUnique({
+        where: { bomRevisionId_pieceId: { bomRevisionId: order.bomRevisionId, pieceId } },
+        select: { qtyPerUnit: true },
+      }),
+      tx.pieceStepBatch.aggregate({
+        where: { productionOrderId: orderId, pieceId, step },
+        _sum: { qty: true },
+      }),
+      tx.qcReview.aggregate({
+        where: { pieceStepBundle: { productionOrderId: orderId, pieceId, step } },
+        _sum: { failedQty: true, shortQty: true },
+      }),
+    ]);
+    const required = (bomPiece?.qtyPerUnit ?? 0) * order.quantity;
+    const counted =
+      (reportedAgg._sum.qty ?? 0) -
+      (reviewAgg._sum.failedQty ?? 0) -
+      (reviewAgg._sum.shortQty ?? 0);
+    const maxNow = Math.max(0, required - counted);
+    if (required > 0 && qty <= maxNow) return;
+
+    // Quyết định 19/11 (Câu 6): pat được báo vượt số cần (kể cả số cần 0) - không chặn, chỉ ghi log.
+    this.logger.log(
+      `Báo vượt pat: lệnh ${orderId}, mảnh ${pieceId}, ${step}, cần ${required}, đã tính ${counted}, nhập ${qty} (cho phép, quyết định 19/11)`,
+    );
   }
 
   /**
@@ -682,61 +827,69 @@ export class ProductionBatchesService {
    * QcReviewsService.reviewPieceStep(). KHÔNG re-validate BOM/định mức ở đây (đã validate lúc
    * recordPieceStepBatch() tạo từng dòng) - việc DUY NHẤT ở đây là gom + khoá lại các dòng đã gom,
    * cùng khuôn lockBusinessKey tránh 2 người gửi trùng lúc.
+   *
+   * P1 (18/11/2026): KCS cũng chốt nhóm này (FloorReviewService.closePieceStepGroup, truyền vai 'PHOI' và
+   * opts.gateLabel = 'chốt để chấm' cho cổng lệnh dừng, kiểm cả ngoài lẫn trong khoá). Chỉ MỘT bên (KCS "Chấm" hoặc nút
+   * "Gửi KCS" của tài khoản thống kê) chốt được cùng một nhóm: bên sau không còn dòng nào chưa gom nên nhận câu chung 400.
+   * Không phát tin (pat không có tin *_TO_KCS).
    */
   async submitPieceStep(
     productionOrderId: string,
     dto: SubmitPieceStepDto,
     submittedById: string,
     callerMfgRole: string | null,
+    opts: { gateLabel?: string } = {},
   ): Promise<PieceStepBundleResponseDto> {
+    const gateLabel = opts.gateLabel ?? 'gửi KCS công đoạn';
     this.assertMfgRoleMatchesStage(callerMfgRole, MfgStage.PHOI);
     const order = await this.findOrderOrThrow(productionOrderId);
-    await assertItemPiHasActiveFloor(
-      this.prisma,
-      order.productionInvoiceItemId,
-      'gửi KCS công đoạn',
-    );
+    await assertItemPiHasActiveFloor(this.prisma, order.productionInvoiceItemId, gateLabel);
     const pieceBigId = parseBigIntId(dto.pieceId);
 
-    const created = await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(tx, `piece-step-bundle:${order.id}:${pieceBigId}:${dto.step}`);
-      await assertItemPiHasActiveFloorLocked(
-        tx,
-        order.productionInvoiceItemId,
-        'gửi KCS công đoạn',
-      );
+    const created = await this.prisma.$transaction(
+      async (tx) => {
+        await lockBusinessKey(tx, `piece-step-bundle:${order.id}:${pieceBigId}:${dto.step}`);
+        await assertItemPiHasActiveFloorLocked(tx, order.productionInvoiceItemId, gateLabel);
+        // Câu chung khi không còn lần báo nào chưa chấm (vừa được chốt bởi bên kia) - dùng mã mảnh, không id thô.
+        const noPendingMessage = async (): Promise<string> => {
+          const piece = await tx.piece.findUnique({
+            where: { id: pieceBigId },
+            select: { code: true },
+          });
+          return `Pat ${piece?.code ?? dto.pieceId} công đoạn ${processStepLabel(dto.step)}: không còn lần báo nào chưa chấm (có thể vừa được chốt) - tải lại trang.`;
+        };
 
-      const pending = await tx.pieceStepBatch.findMany({
-        where: {
-          productionOrderId: order.id,
-          pieceId: pieceBigId,
-          step: dto.step,
-          pieceStepBundleId: null,
-        },
-      });
-      const qty = pending.reduce((s, b) => s + b.qty, 0);
-      if (qty <= 0) {
-        throw new BadRequestException(
-          `Mảnh ${dto.pieceId} chưa có gì mới để gửi KCS ở công đoạn ${processStepLabel(dto.step)}`,
-        );
-      }
+        const pending = await tx.pieceStepBatch.findMany({
+          where: {
+            productionOrderId: order.id,
+            pieceId: pieceBigId,
+            step: dto.step,
+            pieceStepBundleId: null,
+          },
+        });
+        const qty = pending.reduce((s, b) => s + b.qty, 0);
+        if (qty <= 0) throw new BadRequestException(await noPendingMessage());
 
-      const bundle = await tx.pieceStepBundle.create({
-        data: {
-          productionOrderId: order.id,
-          pieceId: pieceBigId,
-          step: dto.step,
-          qty,
-          submittedById,
-        },
-        include: PIECE_STEP_BUNDLE_INCLUDE,
-      });
-      await tx.pieceStepBatch.updateMany({
-        where: { id: { in: pending.map((b) => b.id) } },
-        data: { pieceStepBundleId: bundle.id },
-      });
-      return bundle;
-    });
+        const bundle = await tx.pieceStepBundle.create({
+          data: {
+            productionOrderId: order.id,
+            pieceId: pieceBigId,
+            step: dto.step,
+            qty,
+            submittedById,
+          },
+          include: PIECE_STEP_BUNDLE_INCLUDE,
+        });
+        // Điều kiện "chưa gom" + so số dòng: dòng nào đã bị bên khác gom thì không gom lần 2 (transaction rollback, không bundle rỗng).
+        const { count } = await tx.pieceStepBatch.updateMany({
+          where: { id: { in: pending.map((b) => b.id) }, pieceStepBundleId: null },
+          data: { pieceStepBundleId: bundle.id },
+        });
+        if (count !== pending.length) throw new BadRequestException(await noPendingMessage());
+        return bundle;
+      },
+      { maxWait: 10_000, timeout: 20_000 },
+    );
 
     return this.toPieceStepBundleResponseDto(created);
   }
@@ -863,6 +1016,12 @@ export class ProductionBatchesService {
     if (orderedSteps.length === 0 || orderedSteps[orderedSteps.length - 1] !== step) return;
 
     await lockBusinessKey(tx, `piece-auto-finalize:${productionOrderId}:${pieceId}`);
+    // P1: lô QC_DONE tự sinh cũng tính vào "đã báo" của mảnh Phôi (chặn vượt ở recordProductionBatch / create) nên phải loại
+    // trừ với báo mảnh Phôi qua QR / thống kê - lấy khoá production-batch-open SAU piece-auto-finalize (thứ tự cố định).
+    await lockBusinessKey(
+      tx,
+      `production-batch-open:${productionOrderId}:${pieceId}:${MfgStage.PHOI}`,
+    );
 
     const [passedBundles, existingBatches] = await Promise.all([
       tx.pieceStepBundle.findMany({
@@ -872,16 +1031,17 @@ export class ProductionBatchesService {
           step,
           status: PieceStepBundleStatus.QC_PASSED,
         },
-        select: { qty: true, qcReviews: { select: { failedQty: true } } },
+        select: { qty: true, qcReviews: { select: { failedQty: true, shortQty: true } } },
       }),
       tx.productionBatch.findMany({
         where: { stage: MfgStage.PHOI, productionOrderId, pieceId },
         select: { reportedQty: true },
       }),
     ]);
+    // Số đạt = báo - lỗi - thiếu (KCS ghi thiếu cũng là mảnh không có thật, không vào kho).
     const totalPassed = passedBundles.reduce((sum, b) => {
-      const failed = b.qcReviews.reduce((fs, r) => fs + r.failedQty, 0);
-      return sum + Math.max(b.qty - failed, 0);
+      const notPassed = b.qcReviews.reduce((fs, r) => fs + r.failedQty + r.shortQty, 0);
+      return sum + Math.max(b.qty - notPassed, 0);
     }, 0);
     const alreadyFinalized = existingBatches.reduce((sum, b) => sum + b.reportedQty, 0);
     const delta = totalPassed - alreadyFinalized;
@@ -1130,17 +1290,45 @@ export class ProductionBatchesService {
       `production-batch-open:${row.productionOrderId}:${batch.pieceId}:${batch.stage}`,
     );
     const plannedPieces = (qtyPerUnit ?? 0) * row.productionOrder.quantity;
-    const siblings = await tx.productionBatch.findMany({
+    // P1 (phản biện 10): trừ đoạn dời sang lúc KCS chấm nên "đợt trước" = đợt ĐÃ TRỪ đoạn: chính đợt này, đợt QC_DONE (đã chấm),
+    // hoặc đợt gửi KCS trước khi cập nhật mà đã có bút toán SEGMENT_CONSUME / dòng Sổ báo vượt. Đợt khác đang chờ chấm chưa trừ gì
+    // thì KHÔNG cộng (2 lô 60 cho kế hoạch 100: chỉ lô chấm sau ghi vượt 20, không phải lô nào cũng ghi 40).
+    const candidates = await tx.productionBatch.findMany({
       where: {
         productionOrderId: row.productionOrderId,
         pieceId: batch.pieceId,
         stage: batch.stage,
         status: { not: ProductionBatchStatus.OPEN },
+        id: { not: batch.id },
       },
-      select: { id: true, reportedQty: true },
+      select: { id: true, reportedQty: true, status: true },
     });
-    const cumulative = siblings.reduce((s, b) => s + b.reportedQty, 0);
-    const before = cumulative - batch.reportedQty;
+    const undecided = candidates
+      .filter((b) => b.status !== ProductionBatchStatus.QC_DONE)
+      .map((b) => b.id);
+    const consumedIds = new Set<string>();
+    if (undecided.length > 0) {
+      const [ledgers, overages] = await Promise.all([
+        tx.stockLedger.findMany({
+          where: {
+            refType: StockLedgerRefType.SEGMENT_CONSUME,
+            refId: { in: undecided.map((id) => id.toString()) },
+          },
+          select: { refId: true },
+        }),
+        tx.segmentOverage.findMany({
+          where: { productionBatchId: { in: undecided } },
+          select: { productionBatchId: true },
+        }),
+      ]);
+      for (const l of ledgers) if (l.refId) consumedIds.add(l.refId);
+      for (const o of overages) consumedIds.add(o.productionBatchId.toString());
+    }
+    const siblings = candidates.filter(
+      (b) => b.status === ProductionBatchStatus.QC_DONE || consumedIds.has(b.id.toString()),
+    );
+    const before = siblings.reduce((s, b) => s + b.reportedQty, 0);
+    const cumulative = before + batch.reportedQty;
     const overPieces =
       plannedPieces > 0
         ? Math.max(0, cumulative - plannedPieces) - Math.max(0, before - plannedPieces)
@@ -1149,7 +1337,7 @@ export class ProductionBatchesService {
     if (overPieces > 0) {
       const failed = await tx.qcReview.aggregate({
         where: {
-          productionBatchId: { in: siblings.filter((b) => b.id !== batch.id).map((b) => b.id) },
+          productionBatchId: { in: siblings.map((b) => b.id) },
         },
         _sum: { failedQty: true },
       });
@@ -1280,7 +1468,7 @@ export class ProductionBatchesService {
         ? MfgStage.SON
         : batch.stage;
     if (batch.stage !== consumeStage) return empty;
-    const code = await this.phoiWarehouseCodeOfOrder(batch.productionOrder.id);
+    const code = await this.phoiWarehouseCodeOfOrder(batch.productionOrder.id, tx);
     const wh = await tx.warehouse.findUniqueOrThrow({ where: { code }, select: { id: true } });
     const neededQty = pieceBoms.reduce((n, pb) => n + pb.qtyPerPiece, 0) * batch.reportedQty;
     const r = await this.consumeSegmentsByCode(
@@ -1361,7 +1549,7 @@ export class ProductionBatchesService {
     this.assertConsumableStage(stage);
     const order = await this.findOrderWithProductOrThrow(productionOrderId);
 
-    const [bomPieces, batches, failedByOrderPiece] = await Promise.all([
+    const [bomPieces, batches, reviewedByOrderPiece] = await Promise.all([
       stage === MfgStage.PHOI
         ? this.findPhoiEligibleBomPieces(order.bomRevisionId)
         : this.prisma.bomPiece.findMany({
@@ -1372,7 +1560,7 @@ export class ProductionBatchesService {
         where: { productionOrderId: order.id, stage },
         select: { pieceId: true, status: true, reportedQty: true },
       }),
-      this.getFailedQtyByOrderPiece([order.id], stage),
+      this.getReviewQtyByOrderPiece([order.id], stage),
     ]);
 
     const awaitingByPiece = new Map<string, number>();
@@ -1412,6 +1600,7 @@ export class ProductionBatchesService {
               submitted: new Map<string, number>(),
               passed: new Map<string, number>(),
               failed: new Map<string, number>(),
+              short: new Map<string, number>(),
             },
           ];
 
@@ -1429,8 +1618,11 @@ export class ProductionBatchesService {
         awaitingQcQty: awaitingByPiece.get(key) ?? 0,
         passedQty: passedByPiece.get(key) ?? 0,
         failedQty:
-          (failedByOrderPiece.get(`${order.id}:${key}`) ?? 0) +
+          (reviewedByOrderPiece.failed.get(`${order.id}:${key}`) ?? 0) +
           sumStepFailed(stepBundleMaps.failed, `${order.id}:${key}`, processSteps),
+        shortQty:
+          (reviewedByOrderPiece.short.get(`${order.id}:${key}`) ?? 0) +
+          sumStepFailed(stepBundleMaps.short, `${order.id}:${key}`, processSteps),
         openQty: openByPiece.get(key) ?? 0,
         rawMaterialOnHand: extras?.rawMaterialOnHand ?? null,
         processSteps,
@@ -1443,6 +1635,7 @@ export class ProductionBatchesService {
             submittedQty: stepBundleMaps.submitted.get(stepKey) ?? 0,
             passedQty: stepBundleMaps.passed.get(stepKey) ?? 0,
             failedQty: stepBundleMaps.failed.get(stepKey) ?? 0,
+            shortQty: stepBundleMaps.short.get(stepKey) ?? 0,
           });
         }),
         qtyPerPiece: extras?.qtyPerPiece ?? null,
@@ -1679,7 +1872,7 @@ export class ProductionBatchesService {
       batches,
       stepBatchDoneMap,
       stepBundleMaps,
-      failedByOrderPiece,
+      reviewedByOrderPiece,
     ] = await Promise.all([
       stage === MfgStage.PHOI
         ? this.findPhoiEligibleBomPiecesBatch(revisionIds)
@@ -1700,8 +1893,9 @@ export class ProductionBatchesService {
             submitted: new Map<string, number>(),
             passed: new Map<string, number>(),
             failed: new Map<string, number>(),
+            short: new Map<string, number>(),
           }),
-      this.getFailedQtyByOrderPiece(
+      this.getReviewQtyByOrderPiece(
         orders.map((o) => o.id),
         stage,
       ),
@@ -1743,8 +1937,11 @@ export class ProductionBatchesService {
           awaitingQcQty: awaitingByOrderPiece.get(orderPieceKey) ?? 0,
           passedQty: passedByOrderPiece.get(orderPieceKey) ?? 0,
           failedQty:
-            (failedByOrderPiece.get(orderPieceKey) ?? 0) +
+            (reviewedByOrderPiece.failed.get(orderPieceKey) ?? 0) +
             sumStepFailed(stepBundleMaps.failed, orderPieceKey, processSteps),
+          shortQty:
+            (reviewedByOrderPiece.short.get(orderPieceKey) ?? 0) +
+            sumStepFailed(stepBundleMaps.short, orderPieceKey, processSteps),
           openQty: openByOrderPiece.get(orderPieceKey) ?? 0,
           rawMaterialOnHand: extras?.rawMaterialOnHand ?? null,
           processSteps,
@@ -1757,6 +1954,7 @@ export class ProductionBatchesService {
               submittedQty: stepBundleMaps.submitted.get(stepKey) ?? 0,
               passedQty: stepBundleMaps.passed.get(stepKey) ?? 0,
               failedQty: stepBundleMaps.failed.get(stepKey) ?? 0,
+              shortQty: stepBundleMaps.short.get(stepKey) ?? 0,
             });
           }),
           qtyPerPiece: extras?.qtyPerPiece ?? null,
@@ -1775,13 +1973,14 @@ export class ProductionBatchesService {
     return result;
   }
 
-  /** Σ QcReview.failedQty (lỗi KCS cộng dồn, bất biến) của các đợt ProductionBatch đã chấm (QC_DONE)
-   *  theo khoá `${orderId}:${pieceId}` - 1 truy vấn gộp, không N+1. Mỗi đợt chỉ được chấm 1 lần
-   *  (updateMany guard AWAITING_QC -> QC_DONE) nên không đếm lặp; đợt bù là đợt mới, tự có QcReview riêng. */
-  private async getFailedQtyByOrderPiece(
+  /** Σ QcReview.failedQty (lỗi KCS cộng dồn, bất biến) VÀ Σ QcReview.shortQty (KCS ghi thiếu, P1) của các đợt ProductionBatch
+   *  đã chấm (QC_DONE) theo khoá `${orderId}:${pieceId}` - 1 truy vấn gộp, không N+1. Mỗi đợt chỉ được chấm 1 lần
+   *  (updateMany guard AWAITING_QC -> QC_DONE) nên không đếm lặp; đợt bù là đợt mới, tự có QcReview riêng.
+   *  failed GIỮ ĐÚNG nghĩa N1 (chỉ lỗi, kế hoạch mảnh "lỗi chưa bù" dựa vào đây) - thiếu ghi riêng ở short, không cộng vào failed. */
+  private async getReviewQtyByOrderPiece(
     orderIds: bigint[],
     stage: MfgStage,
-  ): Promise<Map<string, number>> {
+  ): Promise<{ failed: Map<string, number>; short: Map<string, number> }> {
     const reviews = await this.prisma.qcReview.findMany({
       where: {
         productionBatch: {
@@ -1792,16 +1991,19 @@ export class ProductionBatchesService {
       },
       select: {
         failedQty: true,
+        shortQty: true,
         productionBatch: { select: { productionOrderId: true, pieceId: true } },
       },
     });
-    const map = new Map<string, number>();
+    const failed = new Map<string, number>();
+    const short = new Map<string, number>();
     for (const r of reviews) {
       if (!r.productionBatch) continue;
       const key = `${r.productionBatch.productionOrderId}:${r.productionBatch.pieceId}`;
-      map.set(key, (map.get(key) ?? 0) + r.failedQty);
+      failed.set(key, (failed.get(key) ?? 0) + r.failedQty);
+      short.set(key, (short.get(key) ?? 0) + r.shortQty);
     }
-    return map;
+    return { failed, short };
   }
 
   /** Batch của stageNeedsFilter()+bomPiece.findMany() trong getBatchPlan(), nhóm theo revision -
@@ -1947,17 +2149,19 @@ export class ProductionBatchesService {
    *  `passed` = CHỈ status=QC_PASSED (cảnh báo "vượt bước trước", xem PieceStepProgressDto doc
    *  comment). `failed` (2026-09-07 lần 2, xem changelog "Bù đủ dồn về bảng tổng") = Σ
    *  QcReview.failedQty CỘNG DỒN LỊCH SỬ (không trừ gì, mirror getStepProgress() bên Sắt) - "Lỗi"
-   *  không tự giảm, Phôi bù bằng cách báo thêm rồi gửi KCS như đợt mới. CHỈ gọi khi stage=PHOI,
-   *  cùng khuôn getStepBatchDoneMap(). */
+   *  không tự giảm, Phôi bù bằng cách báo thêm rồi gửi KCS như đợt mới. `short` (P1) = Σ QcReview.shortQty cùng cách - KCS ghi
+   *  thiếu, ghi riêng, không cộng vào `failed`. CHỈ gọi khi stage=PHOI, cùng khuôn getStepBatchDoneMap(). */
   private async getStepBundleMaps(orderIds: bigint[]): Promise<{
     submitted: Map<string, number>;
     passed: Map<string, number>;
     failed: Map<string, number>;
+    short: Map<string, number>;
   }> {
     const submitted = new Map<string, number>();
     const passed = new Map<string, number>();
     const failed = new Map<string, number>();
-    if (orderIds.length === 0) return { submitted, passed, failed };
+    const short = new Map<string, number>();
+    if (orderIds.length === 0) return { submitted, passed, failed, short };
     const [rows, failedRows] = await Promise.all([
       this.prisma.pieceStepBundle.groupBy({
         by: ['productionOrderId', 'pieceId', 'step', 'status'],
@@ -1968,6 +2172,7 @@ export class ProductionBatchesService {
         where: { pieceStepBundle: { productionOrderId: { in: orderIds } } },
         select: {
           failedQty: true,
+          shortQty: true,
           pieceStepBundle: { select: { productionOrderId: true, pieceId: true, step: true } },
         },
       }),
@@ -1984,8 +2189,9 @@ export class ProductionBatchesService {
       if (!r.pieceStepBundle) continue;
       const key = `${r.pieceStepBundle.productionOrderId}:${r.pieceStepBundle.pieceId}:${r.pieceStepBundle.step}`;
       failed.set(key, (failed.get(key) ?? 0) + r.failedQty);
+      short.set(key, (short.get(key) ?? 0) + r.shortQty);
     }
-    return { submitted, passed, failed };
+    return { submitted, passed, failed, short };
   }
 
   /**

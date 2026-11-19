@@ -12,6 +12,10 @@ export class QcReviewSegmentResponseDto {
   @Expose() @ApiProperty() cutLengthMm!: number;
   /** BẤT BIẾN - số KCS chấm lần đầu, không sửa. */
   @Expose() @ApiProperty() failedQty!: number;
+  /** P1 (18/11/2026): số đoạn KCS ghi thiếu so với số báo của cỡ này (không tính lỗi, không làm bù). */
+  @Expose() @ApiProperty() shortQty: number = 0;
+  /** P1: trong failedQty, số đoạn bỏ (cắt lại) - chỉ công đoạn phụ; Cắt luôn 0. */
+  @Expose() @ApiProperty() scrapQty: number = 0;
 
   constructor(partial: Partial<QcReviewSegmentResponseDto>) {
     Object.assign(this, partial);
@@ -39,6 +43,8 @@ export class QcReviewResponseDto {
    *  số gốc người dùng nhập (segments luôn rỗng ở nhánh đó). BẤT BIẾN mọi nhánh - số lịch sử cộng
    *  dồn, không tự giảm (xem changelog "Bù đủ dồn về bảng tổng"). */
   @Expose() @ApiProperty() failedQty!: number;
+  /** P1 (18/11/2026): số KCS ghi thiếu của cả đợt (đã trừ, không tính lỗi, không làm bù). failedQty vẫn CHỈ là lỗi. */
+  @Expose() @ApiProperty() shortQty: number = 0;
   @Expose() @ApiPropertyOptional({ nullable: true }) defectReasonId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) defectReasonLabel!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) reason!: string | null;
@@ -50,6 +56,8 @@ export class QcReviewResponseDto {
   @Type(() => QcReviewSegmentResponseDto)
   @ApiProperty({ type: [QcReviewSegmentResponseDto] })
   segments!: QcReviewSegmentResponseDto[];
+  /** P1: cảnh báo sau khi lưu (vd công đoạn sau đã báo nhiều hơn số đoạn cắt thực có). Mặc định []. */
+  @Expose() @ApiProperty({ type: [String] }) notes: string[] = [];
 
   constructor(partial: Partial<QcReviewResponseDto>) {
     Object.assign(this, partial);

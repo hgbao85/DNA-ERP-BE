@@ -41,10 +41,14 @@ describe('FloorStatsService.getStats', () => {
     at: Date,
     openedBy: ReturnType<typeof user> | null,
     segs: { id: number; mm: string; qty: number }[],
-    failed: { id: number; failedQty: number }[] = [],
+    failed: { id: number; failedQty: number; shortQty?: number }[] = [],
   ) => ({
     reviewedAt: at,
-    segments: failed.map((f) => ({ segmentSpecId: BigInt(f.id), failedQty: f.failedQty })),
+    segments: failed.map((f) => ({
+      segmentSpecId: BigInt(f.id),
+      failedQty: f.failedQty,
+      shortQty: f.shortQty ?? 0,
+    })),
     cutBundle: {
       openedById: openedBy?.id ?? null,
       openedBy: openedBy
@@ -153,6 +157,55 @@ describe('FloorStatsService.getStats', () => {
       expect(r.buckets).toEqual(['2026-10-14', '2026-10-15', '2026-10-16']);
     });
 
+    it('P1 AC27: Cắt ghi thiếu - đạt = thô − lỗi − thiếu (120 − 3 − 5 = 112), số lỗi KHÔNG gồm thiếu', async () => {
+      reviews({
+        cut: [
+          cutReview(
+            T_1510_1000_VN,
+            an,
+            [{ id: 1, mm: '441', qty: 120 }],
+            [{ id: 1, failedQty: 3, shortQty: 5 }],
+          ),
+        ],
+      });
+      const r = await service.getStats({ from: '2026-10-15', to: '2026-10-15' });
+      expect(r.rows).toEqual([
+        expect.objectContaining({ op: 'CAT', label: '441mm · Sắt phi 4', passed: 112, failed: 3 }),
+      ]);
+    });
+
+    it('P1 AC27: công đoạn phụ ghi thiếu - đạt = thô − lỗi − thiếu; thiếu lớn hơn số còn lại thì kẹp 0, không âm', async () => {
+      reviews({
+        step: [
+          {
+            reviewedAt: T_1510_1000_VN,
+            segments: [
+              { segmentSpecId: 1n, failedQty: 2, shortQty: 4 },
+              { segmentSpecId: 2n, failedQty: 1, shortQty: 9 },
+            ],
+            stepBundle: {
+              step: 'DAP',
+              reportedById: null,
+              reportedBy: null,
+              batches: [
+                {
+                  segments: [
+                    { ...spec(1, '185'), qty: 10 },
+                    { ...spec(2, '60'), qty: 3 },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      });
+      const r = await service.getStats({ from: '2026-10-15', to: '2026-10-15' });
+      expect(r.rows).toEqual([
+        expect.objectContaining({ op: 'DAP', label: '60mm · Sắt phi 4', passed: 0, failed: 1 }),
+        expect.objectContaining({ op: 'DAP', label: '185mm · Sắt phi 4', passed: 4, failed: 2 }),
+      ]);
+    });
+
     it('2 đợt cùng ngày, cùng người, cùng cỡ gộp thành 1 dòng; khác người tách dòng', async () => {
       reviews({
         cut: [
@@ -173,7 +226,7 @@ describe('FloorStatsService.getStats', () => {
         step: [
           {
             reviewedAt: T_1510_1000_VN,
-            segments: [{ segmentSpecId: 1n, failedQty: 1 }],
+            segments: [{ segmentSpecId: 1n, failedQty: 1, shortQty: 0 }],
             stepBundle: {
               step: 'UON',
               reportedById: null,

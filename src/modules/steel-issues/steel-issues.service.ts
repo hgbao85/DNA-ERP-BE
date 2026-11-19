@@ -33,6 +33,7 @@ import {
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { assertWorkshopUnchanged, lockPisForIssue } from '../../common/utils/pi-workshop-lock.util';
 import {
+  FLOOR_REPORT_REVERSED_REPLAY_MESSAGE,
   FloorReportContext,
   findFloorReportByKey,
   isIdempotencyConflict,
@@ -46,6 +47,18 @@ import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { processStepLabel } from '../../common/constants/process-steps.constant';
+import {
+  PhoiNeedIndex,
+  PhoiNeedInput,
+  PhoiStep,
+  buildCutBlockMessage,
+  buildPhoiNeedIndex,
+  buildStepBlockMessage,
+  computePhoiStep,
+  phoiOrderKey,
+  pickPhoiBlock,
+  stepsOverCutCap,
+} from './phoi-need.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { RecordCutBatchDto } from './dto/record-cut-batch.dto';
@@ -69,6 +82,10 @@ import {
   StepBundleResponseDto,
   StepBundleSegmentResponseDto,
 } from './dto/step-bundle-response.dto';
+
+const PROCESS_CAT = ProcessStep.CAT;
+
+const EMPTY_NEED_INPUT: PhoiNeedInput = { baseByStep: {}, lineSteps: [], counts: {} };
 
 const USER_NAME_SELECT = { select: { firstName: true, lastName: true, username: true } } as const;
 
@@ -134,39 +151,56 @@ type BaseInputs = {
     reworkOfId: bigint | null;
   }[];
 };
+type CutSegmentRow = {
+  segmentSpecId: bigint;
+  qty: number;
+  cutBundle: { productionOrderId: bigint | null; status: CutBundleStatus };
+};
+type CutQcRow = {
+  segmentSpecId: bigint;
+  failedQty: number;
+  /** P1: KCS ghi thiếu (không tính lỗi, không làm bù). */
+  shortQty: number;
+  qcReview: { cutBundle: { productionOrderId: bigint | null } | null };
+};
+type StepSegmentRow = {
+  segmentSpecId: bigint;
+  qty: number;
+  /** `bundleStatus` null = dòng đã báo nhưng CHƯA gom vào đợt gửi KCS nào. */
+  stepBatch: {
+    productionOrderId: bigint | null;
+    step: ProcessStep;
+    bundleStatus: StepBundleStatus | null;
+  };
+};
+type StepQcRow = {
+  segmentSpecId: bigint;
+  failedQty: number;
+  /** P1: KCS ghi thiếu / bỏ (cắt lại). */
+  shortQty: number;
+  scrapQty: number;
+  qcReview: { stepBundle: { productionOrderId: bigint | null; step: ProcessStep } | null };
+};
 /** Dữ liệu tính tiến độ CẮT của 1 PI (đã chia sẵn theo PI bởi loadPhoiInputs). */
 type CutInputs = BaseInputs & {
   /** Máy cắt của phương án đã duyệt, theo loại sắt (2026-10-23): quyết định dùng tề đầu/lưỡi của máy nào để
    *  đối chiếu sắt vào - đoạn ra. Thiếu khoá = MC Laser (phương án cũ chưa ghi máy). */
   machineByMaterial: Map<string, SolverMachine>;
-  cutSegments: {
-    segmentSpecId: bigint;
-    qty: number;
-    cutBundle: { productionOrderId: bigint | null; status: CutBundleStatus };
-  }[];
-  qcSegments: {
-    segmentSpecId: bigint;
-    failedQty: number;
-    qcReview: { cutBundle: { productionOrderId: bigint | null } | null };
-  }[];
+  cutSegments: CutSegmentRow[];
+  qcSegments: CutQcRow[];
+  /** P1: cùng mảng với StepInputs - số cần của Cắt cộng cả phần BỎ ở công đoạn phụ nên Cắt cần cả dữ liệu công đoạn. */
+  stepSegments: StepSegmentRow[];
+  stepQcSegments: StepQcRow[];
+  /** P1: giữ chỗ sắt ACTIVE còn lại theo loại sắt (gợi ý sắt còn xuất được). */
+  reservations: { materialId: bigint; remaining: number; stockLengthMm: number }[];
 };
 /** Dữ liệu tính tiến độ CÔNG ĐOẠN PHỤ của 1 PI (mọi công đoạn, lọc theo `step` khi tính). */
 type StepInputs = BaseInputs & {
-  stepSegments: {
-    segmentSpecId: bigint;
-    qty: number;
-    /** `bundleStatus` null = dòng đã báo nhưng CHƯA gom vào đợt gửi KCS nào. */
-    stepBatch: {
-      productionOrderId: bigint | null;
-      step: ProcessStep;
-      bundleStatus: StepBundleStatus | null;
-    };
-  }[];
-  qcSegments: {
-    segmentSpecId: bigint;
-    failedQty: number;
-    qcReview: { stepBundle: { productionOrderId: bigint | null; step: ProcessStep } | null };
-  }[];
+  stepSegments: StepSegmentRow[];
+  qcSegments: StepQcRow[];
+  /** P1: cùng mảng với CutInputs - vế vật lý của công đoạn phụ cần số đoạn cắt thực có. */
+  cutSegments: CutSegmentRow[];
+  cutQcSegments: CutQcRow[];
 };
 
 type OrderForBom = {
@@ -818,9 +852,8 @@ export class SteelIssuesService {
 
     // 1 đợt cắt = đúng 1 SKU (2026-09-21) - SKU phải thuộc đúng PI của lô sắt này.
     const orderId = parseBigIntId(dto.productionOrderId);
-    const order = (await this.findOrdersForInvoice(issue.productionInvoiceId)).find(
-      (o) => o.id === orderId,
-    );
+    const piOrders = await this.findOrdersForInvoice(issue.productionInvoiceId);
+    const order = piOrders.find((o) => o.id === orderId);
     if (!order) {
       throw new BadRequestException(
         `SKU (lệnh sản xuất ${dto.productionOrderId}) không thuộc PI của lô sắt này`,
@@ -864,10 +897,12 @@ export class SteelIssuesService {
 
     // Cân bằng vật chất (barCount × barLengthMm = tề đầu + đoạn + mạch cưa + mẩu nguyên + phế) đã
     // BỎ từ 2026-09-05 cùng lúc bỏ 2 ô nhập "số cây đã dùng"/"mẩu nguyên": không còn vế trái thì
-    // không có gì để cân, cũng không suy ra được phế liệu. Kéo theo mất luôn chặn "khai vượt số
-    // cây kho đã giao" - đã trao đổi rõ hệ quả và được chốt: KCS là bước kiểm soát duy nhất, đúng
-    // triết lý "không cap theo định mức lúc báo" vốn có của module này. `barCount`/`mauNguyenMm`
-    // giữ lại trong model để dữ liệu CŨ không mất, dòng mới ghi 0.
+    // không có gì để cân, cũng không suy ra được phế liệu. `barCount`/`mauNguyenMm` giữ lại trong model để dữ
+    // liệu CŨ không mất, dòng mới ghi 0.
+    // P1 (18/11/2026): KCS không còn là chốt kiểm soát duy nhất - báo CẮT vượt SỐ CẦN của (SKU, cỡ) bị chặn ngay lúc
+    // báo (phoi-need.util: số cần = định mức + phần cắt lại cho đoạn KCS bỏ; số đã tính = thô - lỗi - thiếu). Số
+    // cần đọc TRONG khoá cut-cap:{PI}:{sắt}:{SKU} gom mọi người, mọi lô sắt của PI, nên 2 người báo cùng lúc chỉ 1
+    // người qua. Đoạn cắt dư vật lý để riêng dưới xưởng, không báo.
     //
     // Đợt đang mở (CUTTING) của lô này, nếu có, nhận thêm số đoạn lần này (cộng dồn qty theo
     // UNIQUE cutBundleId+segmentSpecId) - xem doc comment trên hàm. Không có thì mới tạo đợt mới.
@@ -883,12 +918,29 @@ export class SteelIssuesService {
     }));
     let bundleId: bigint;
     try {
-      bundleId = await this.prisma.$transaction(async (tx) => {
-        // Xếp hàng các lần báo của CÙNG người cho CÙNG lô + SKU, để không mở 2 đợt song song.
-        await lockBusinessKey(tx, `cut-report:${issue.id}:${order.id}:${reportedById}`);
-        // Khoá mọi đợt ứng viên (không LIMIT: LIMIT + FOR UPDATE có thể trả thiếu dòng khi Postgres
-        // kiểm lại dòng vừa bị đổi). Sau khi khoá, đợt vừa sang AWAITING_QC / vừa bị xoá tự bị loại.
-        const candidates = await tx.$queryRaw<{ id: bigint; openedById: string | null }[]>`
+      bundleId = await this.prisma.$transaction(
+        async (tx) => {
+          // Thứ tự khoá: cut-cap (gom mọi người) -> cut-report (của riêng người báo) -> FOR UPDATE các đợt ứng viên.
+          await lockBusinessKey(
+            tx,
+            `cut-cap:${issue.productionInvoiceId}:${issue.materialId}:${order.id}`,
+          );
+          // Xếp hàng các lần báo của CÙNG người cho CÙNG lô + SKU, để không mở 2 đợt song song.
+          await lockBusinessKey(tx, `cut-report:${issue.id}:${order.id}:${reportedById}`);
+          await this.assertCutWithinNeedInTx(tx, {
+            piId: issue.productionInvoiceId,
+            materialId: issue.materialId,
+            order,
+            piOrders,
+            lines: dto.segments.map((seg) => ({
+              specId: parseBigIntId(seg.segmentSpecId),
+              qty: seg.qty,
+              mm: specById.get(parseBigIntId(seg.segmentSpecId).toString())!.cutLengthMm.toString(),
+            })),
+          });
+          // Khoá mọi đợt ứng viên (không LIMIT: LIMIT + FOR UPDATE có thể trả thiếu dòng khi Postgres
+          // kiểm lại dòng vừa bị đổi). Sau khi khoá, đợt vừa sang AWAITING_QC / vừa bị xoá tự bị loại.
+          const candidates = await tx.$queryRaw<{ id: bigint; openedById: string | null }[]>`
           SELECT "id", "openedById", "createdAt" FROM "cut_bundles"
           WHERE "steelIssueId" = ${issue.id}
             AND "productionOrderId" = ${order.id}
@@ -896,76 +948,78 @@ export class SteelIssuesService {
             AND ("openedById" = ${reportedById} OR "openedById" IS NULL)
           ORDER BY ("openedById" IS NULL), "createdAt" DESC, "id" DESC
           FOR UPDATE`;
-        // Đợt CỦA CHÍNH người báo (mới nhất) trước; không có thì đợt chưa có người mở (tạo trước cột này).
-        const openBundle = candidates.find((c) => c.openedById === reportedById) ?? candidates[0];
-        if (openBundle) {
-          if (!openBundle.openedById) {
-            await tx.cutBundle.update({
-              where: { id: openBundle.id },
-              data: { openedById: reportedById },
-            });
-          }
-          for (const seg of dto.segments) {
-            await tx.cutPatternSegment.upsert({
-              where: {
-                cutBundleId_segmentSpecId: {
+          // Đợt CỦA CHÍNH người báo (mới nhất) trước; không có thì đợt chưa có người mở (tạo trước cột này).
+          const openBundle = candidates.find((c) => c.openedById === reportedById) ?? candidates[0];
+          if (openBundle) {
+            if (!openBundle.openedById) {
+              await tx.cutBundle.update({
+                where: { id: openBundle.id },
+                data: { openedById: reportedById },
+              });
+            }
+            for (const seg of dto.segments) {
+              await tx.cutPatternSegment.upsert({
+                where: {
+                  cutBundleId_segmentSpecId: {
+                    cutBundleId: openBundle.id,
+                    segmentSpecId: parseBigIntId(seg.segmentSpecId),
+                  },
+                },
+                update: { qty: { increment: seg.qty } },
+                create: {
                   cutBundleId: openBundle.id,
                   segmentSpecId: parseBigIntId(seg.segmentSpecId),
+                  qty: seg.qty,
                 },
-              },
-              update: { qty: { increment: seg.qty } },
-              create: {
-                cutBundleId: openBundle.id,
-                segmentSpecId: parseBigIntId(seg.segmentSpecId),
-                qty: seg.qty,
-              },
+              });
+            }
+            await writeFloorReport(tx, {
+              kind: FloorReportKind.CUT,
+              reportedById,
+              idempotencyKey,
+              cutBundleId: openBundle.id,
+              workstationId: ctx?.workstationId,
+              productionInvoiceId: issue.productionInvoiceId,
+              lines: reportLines,
             });
+            return openBundle.id;
           }
+
+          const created = await tx.cutBundle.create({
+            data: {
+              steelIssueId: issue.id,
+              productionOrderId: order.id,
+              openedById: reportedById,
+              proposalPatternId: dto.proposalPatternId
+                ? parseBigIntId(dto.proposalPatternId)
+                : undefined,
+              barCount: dto.barCount ?? 0,
+              mauNguyenMm: dto.mauNguyenMm ?? 0,
+              // Đợt cắt mới bắt đầu vòng đời riêng của nó (2026-09-05) - CAT tính là xong ngay khi khai
+              // số đoạn; công đoạn phụ (Uốn/Dập...) đánh dấu tiếp qua completeStep().
+              status: CutBundleStatus.CUTTING,
+              completedSteps: [ProcessStep.CAT],
+              segments: {
+                create: dto.segments.map((seg) => ({
+                  segmentSpecId: parseBigIntId(seg.segmentSpecId),
+                  qty: seg.qty,
+                })),
+              },
+            },
+          });
           await writeFloorReport(tx, {
             kind: FloorReportKind.CUT,
             reportedById,
             idempotencyKey,
-            cutBundleId: openBundle.id,
+            cutBundleId: created.id,
             workstationId: ctx?.workstationId,
             productionInvoiceId: issue.productionInvoiceId,
             lines: reportLines,
           });
-          return openBundle.id;
-        }
-
-        const created = await tx.cutBundle.create({
-          data: {
-            steelIssueId: issue.id,
-            productionOrderId: order.id,
-            openedById: reportedById,
-            proposalPatternId: dto.proposalPatternId
-              ? parseBigIntId(dto.proposalPatternId)
-              : undefined,
-            barCount: dto.barCount ?? 0,
-            mauNguyenMm: dto.mauNguyenMm ?? 0,
-            // Đợt cắt mới bắt đầu vòng đời riêng của nó (2026-09-05) - CAT tính là xong ngay khi khai
-            // số đoạn; công đoạn phụ (Uốn/Dập...) đánh dấu tiếp qua completeStep().
-            status: CutBundleStatus.CUTTING,
-            completedSteps: [ProcessStep.CAT],
-            segments: {
-              create: dto.segments.map((seg) => ({
-                segmentSpecId: parseBigIntId(seg.segmentSpecId),
-                qty: seg.qty,
-              })),
-            },
-          },
-        });
-        await writeFloorReport(tx, {
-          kind: FloorReportKind.CUT,
-          reportedById,
-          idempotencyKey,
-          cutBundleId: created.id,
-          workstationId: ctx?.workstationId,
-          productionInvoiceId: issue.productionInvoiceId,
-          lines: reportLines,
-        });
-        return created.id;
-      });
+          return created.id;
+        },
+        { timeout: 20_000 },
+      );
     } catch (e) {
       if (isIdempotencyConflict(e)) {
         const raced = await this.replayFloorReport(idempotencyKey, FloorReportKind.CUT);
@@ -980,12 +1034,270 @@ export class SteelIssuesService {
   /** Kết quả cho lần gửi lại cùng khoá của 1 lần báo cắt đã ghi. Đợt của lần báo đó đã bị xoá (QLSX hủy
    *  hết số, FK sổ về NULL) thì báo rõ thay vì ghi lại lần 2 rồi vấp khoá trùng. */
   private async replayCutReport(cutBundleId: bigint | null): Promise<CutBundleResponseDto> {
-    if (!cutBundleId) {
-      throw new ConflictException(
-        'Lần báo này đã ghi nhận trước đó và đã bị QLSX hủy - xem lý do ở "Sản lượng của tôi", cần thì báo lại',
+    if (!cutBundleId) throw new ConflictException(FLOOR_REPORT_REVERSED_REPLAY_MESSAGE);
+    return this.toBundleResponseDto(await this.findBundleOrThrow(cutBundleId.toString()));
+  }
+
+  /** Kết quả cho lần gửi lại cùng khoá của 1 lần báo công đoạn phụ đã ghi. Lần báo đó đã bị QLSX hủy hết (dòng báo bị
+   *  xoá, FK sổ về NULL) thì báo câu lời thường, không ghi lại lần 2 rồi vấp khoá trùng (P1, AC53). */
+  private async replayStepReport(stepBatchId: bigint | null): Promise<StepBatchResponseDto> {
+    if (!stepBatchId) throw new ConflictException(FLOOR_REPORT_REVERSED_REPLAY_MESSAGE);
+    return this.toStepBatchResponse(stepBatchId);
+  }
+
+  /** Mã SKU (nhãn người dùng thấy) của 1 lệnh sản xuất - chỉ dùng khi dựng câu lỗi, lỗi tra cứu thì rơi về mã lệnh. */
+  private async skuLabelOf(db: PrismaTx, orderId: bigint): Promise<string> {
+    try {
+      const row = await db.productionOrder.findUnique({
+        where: { id: orderId },
+        select: { mfgProduct: { select: { factoryCode: true } } },
+      });
+      return row?.mfgProduct.factoryCode ?? `lệnh ${orderId}`;
+    } catch {
+      return `lệnh ${orderId}`;
+    }
+  }
+
+  /**
+   * Dữ liệu của MỘT SKU (theo skuScope) cho các cỡ `specIds` dựng thành chỉ mục số cần (phoi-need.util) - dùng cho phép
+   * chặn lúc báo, X3 và gán SKU. Gọi TRONG transaction, SAU khi đã lấy khoá, để đọc đúng số mới nhất.
+   * `excludeStepBundleId`: bỏ đợt công đoạn này khỏi số liệu (đang cân nhắc gán nó cho SKU khác).
+   */
+  private async loadNeedIndex(
+    db: PrismaTx,
+    p: {
+      piId: bigint;
+      materialId: bigint;
+      order: { id: bigint; bomRevisionId: bigint };
+      piOrders: readonly { id: bigint; bomRevisionId: bigint; quantity: number }[];
+      specIds: bigint[];
+      excludeStepBundleId?: bigint;
+    },
+  ): Promise<PhoiNeedIndex> {
+    const { piId, materialId, order, piOrders, specIds, excludeStepBundleId } = p;
+    const ofSku = this.skuScope(piOrders, order.id);
+    const [bomPieces, pieceBoms, cut, cutQc, step, stepQc] = await Promise.all([
+      db.bomPiece.findMany({
+        where: { bomRevisionId: order.bomRevisionId },
+        select: { bomRevisionId: true, pieceId: true, qtyPerUnit: true },
+      }),
+      db.pieceBom.findMany({
+        where: { bomRevisionId: order.bomRevisionId, segmentSpecId: { in: specIds } },
+        select: {
+          bomRevisionId: true,
+          pieceId: true,
+          segmentSpecId: true,
+          qtyPerPiece: true,
+          processSteps: true,
+        },
+      }),
+      db.cutPatternSegment.findMany({
+        where: {
+          segmentSpecId: { in: specIds },
+          cutBundle: { steelIssue: { productionInvoiceId: piId, materialId }, ...ofSku },
+        },
+        select: {
+          segmentSpecId: true,
+          qty: true,
+          cutBundle: { select: { productionOrderId: true } },
+        },
+      }),
+      db.qcReviewSegment.findMany({
+        where: {
+          segmentSpecId: { in: specIds },
+          // Giống loadPhoiInputs: lọc theo lô sắt, KHÔNG đòi đợt cắt tồn tại (phiếu chấm cả lô kiểu cũ có cutBundleId NULL);
+          // SKU gán ở buildPhoiNeedIndex (phoiOrderKey). Loại phiếu công đoạn (stepBundleId) khỏi phần Cắt.
+          qcReview: { steelIssue: { productionInvoiceId: piId, materialId }, stepBundleId: null },
+        },
+        select: {
+          segmentSpecId: true,
+          failedQty: true,
+          shortQty: true,
+          qcReview: { select: { cutBundle: { select: { productionOrderId: true } } } },
+        },
+      }),
+      db.stepBatchSegment.findMany({
+        where: {
+          segmentSpecId: { in: specIds },
+          stepBatch: {
+            productionInvoiceId: piId,
+            materialId,
+            ...ofSku,
+            ...(excludeStepBundleId
+              ? {
+                  AND: [
+                    {
+                      OR: [{ stepBundleId: null }, { stepBundleId: { not: excludeStepBundleId } }],
+                    },
+                  ],
+                }
+              : {}),
+          },
+        },
+        select: {
+          segmentSpecId: true,
+          qty: true,
+          stepBatch: { select: { productionOrderId: true, step: true } },
+        },
+      }),
+      db.qcReviewSegment.findMany({
+        where: {
+          segmentSpecId: { in: specIds },
+          qcReview: {
+            stepBundle: {
+              productionInvoiceId: piId,
+              materialId,
+              ...ofSku,
+              ...(excludeStepBundleId ? { id: { not: excludeStepBundleId } } : {}),
+            },
+          },
+        },
+        select: {
+          segmentSpecId: true,
+          failedQty: true,
+          shortQty: true,
+          scrapQty: true,
+          qcReview: { select: { stepBundle: { select: { productionOrderId: true, step: true } } } },
+        },
+      }),
+    ]);
+    return buildPhoiNeedIndex({
+      orders: piOrders,
+      bomPieces,
+      pieceBoms,
+      cut: cut.map((r) => ({
+        segmentSpecId: r.segmentSpecId,
+        productionOrderId: r.cutBundle.productionOrderId,
+        qty: r.qty,
+      })),
+      cutQc: cutQc.map((r) => ({
+        segmentSpecId: r.segmentSpecId,
+        productionOrderId: r.qcReview.cutBundle?.productionOrderId ?? null,
+        failedQty: r.failedQty,
+        shortQty: r.shortQty,
+      })),
+      step: step.map((r) => ({
+        segmentSpecId: r.segmentSpecId,
+        productionOrderId: r.stepBatch.productionOrderId,
+        step: r.stepBatch.step,
+        qty: r.qty,
+      })),
+      stepQc: stepQc.flatMap((r) =>
+        r.qcReview.stepBundle
+          ? [
+              {
+                segmentSpecId: r.segmentSpecId,
+                productionOrderId: r.qcReview.stepBundle.productionOrderId,
+                step: r.qcReview.stepBundle.step,
+                failedQty: r.failedQty,
+                shortQty: r.shortQty,
+                scrapQty: r.scrapQty,
+              },
+            ]
+          : [],
+      ),
+    });
+  }
+
+  /** Chặn báo CẮT vượt số cần (hợp đồng v2 mục 11): lần báo > maxNow của (SKU, cỡ) -> 400 + ghi log cảnh báo. */
+  private async assertCutWithinNeedInTx(
+    tx: PrismaTx,
+    p: {
+      piId: bigint;
+      materialId: bigint;
+      order: { id: bigint; bomRevisionId: bigint };
+      piOrders: readonly { id: bigint; bomRevisionId: bigint; quantity: number }[];
+      lines: { specId: bigint; qty: number; mm: string }[];
+    },
+  ): Promise<void> {
+    const index = await this.loadNeedIndex(tx, { ...p, specIds: p.lines.map((l) => l.specId) });
+    for (const line of p.lines) {
+      const input = index.get(p.order.id.toString(), line.specId.toString()) ?? EMPTY_NEED_INPUT;
+      const n = computePhoiStep(input, 'CAT');
+      if (line.qty <= n.maxNow) continue;
+      const sku = await this.skuLabelOf(tx, p.order.id);
+      this.logger.warn(
+        `Chặn báo vượt (cắt): PI ${p.piId}, SKU ${sku}, cỡ ${line.mm}mm, cần ${n.required}, đã tính ${n.counted}, số nhập ${line.qty}`,
+      );
+      throw new BadRequestException(
+        buildCutBlockMessage(n, { cutLengthMm: line.mm, skuLabel: sku, qty: line.qty }),
       );
     }
-    return this.toBundleResponseDto(await this.findBundleOrThrow(cutBundleId.toString()));
+  }
+
+  /** Chặn báo CÔNG ĐOẠN PHỤ vượt (vế số cần + vế vật lý, hợp đồng v2 mục 11). */
+  private async assertStepWithinNeedInTx(
+    tx: PrismaTx,
+    p: {
+      piId: bigint;
+      materialId: bigint;
+      step: PhoiStep;
+      order: { id: bigint; bomRevisionId: bigint };
+      piOrders: readonly { id: bigint; bomRevisionId: bigint; quantity: number }[];
+      lines: { specId: bigint; qty: number; mm: string }[];
+    },
+  ): Promise<void> {
+    const index = await this.loadNeedIndex(tx, { ...p, specIds: p.lines.map((l) => l.specId) });
+    for (const line of p.lines) {
+      const input = index.get(p.order.id.toString(), line.specId.toString()) ?? EMPTY_NEED_INPUT;
+      const n = computePhoiStep(input, p.step);
+      const kind = pickPhoiBlock(n, line.qty);
+      if (!kind) continue;
+      const sku = await this.skuLabelOf(tx, p.order.id);
+      this.logger.warn(
+        `Chặn báo vượt (${processStepLabel(p.step)}, vế ${kind === 'NEED' ? 'số cần' : 'vật lý'}): PI ${p.piId}, SKU ${sku}, cỡ ${line.mm}mm, cần ${n.required}, đã tính ${n.counted}, số nhập ${line.qty}`,
+      );
+      throw new BadRequestException(
+        buildStepBlockMessage(n, kind, { cutLengthMm: line.mm, skuLabel: sku, qty: line.qty }),
+      );
+    }
+  }
+
+  /**
+   * Các công đoạn phụ đã dùng NHIỀU HƠN số đoạn cắt thực có của (SKU, cỡ) - xảy ra khi KCS ghi THIẾU ở Cắt sau khi
+   * công đoạn sau đã báo (KCS lưu kết quả không khoá step-batch, chấp nhận được). Chỉ đọc; BE-1 gọi SAU commit để dựng
+   * notes[] của kết quả chấm. `productionOrderId` null: PI 1 SKU tính cho SKU duy nhất, PI nhiều SKU thì trả [].
+   */
+  async stepOveruseAfterCutShortage(
+    productionInvoiceId: bigint,
+    materialId: bigint,
+    productionOrderId: bigint | null,
+    segmentSpecIds: bigint[],
+  ): Promise<Array<{ step: ProcessStep; cutLengthMm: number; overBy: number; cutCap: number }>> {
+    if (segmentSpecIds.length === 0) return [];
+    const piOrders = await this.findOrdersForInvoice(productionInvoiceId);
+    const order =
+      piOrders.find((o) => o.id === productionOrderId) ??
+      (productionOrderId == null && piOrders.length === 1 ? piOrders[0] : undefined);
+    if (!order) return [];
+    const [index, specs] = await Promise.all([
+      this.loadNeedIndex(this.prisma, {
+        piId: productionInvoiceId,
+        materialId,
+        order,
+        piOrders,
+        specIds: segmentSpecIds,
+      }),
+      this.prisma.segmentSpec.findMany({
+        where: { id: { in: segmentSpecIds } },
+        select: { id: true, cutLengthMm: true },
+      }),
+    ]);
+    const out: Array<{ step: ProcessStep; cutLengthMm: number; overBy: number; cutCap: number }> =
+      [];
+    for (const spec of specs) {
+      const input = index.get(order.id.toString(), spec.id.toString());
+      if (!input) continue;
+      for (const o of stepsOverCutCap(input)) {
+        out.push({
+          step: o.step,
+          cutLengthMm: spec.cutLengthMm.toNumber(),
+          overBy: o.overBy,
+          cutCap: o.cutCap,
+        });
+      }
+    }
+    return out;
   }
 
   /** Lần báo đã ghi với khoá này (null = chưa có). Khoá đã dùng cho loại báo khác -> 409. */
@@ -1034,59 +1346,61 @@ export class SteelIssuesService {
       throw new BadRequestException('SKU mới trùng SKU hiện tại của đợt');
     }
     const allowed = await this.findBomSegmentSpecIds(piId, order.bomRevisionId);
-    for (const seg of bundle.segments) {
-      if (!allowed.has(seg.segmentSpecId.toString())) {
-        throw new BadRequestException(
-          `Cỡ đoạn ${seg.segmentSpec.cutLengthMm.toString()}mm không có trong định mức của SKU đã chọn`,
-        );
-      }
-    }
-    // Sửa SKU: chuyển đợt đi khỏi SKU cũ không được làm số đã Uốn/Dập của SKU cũ vượt số đã cắt còn lại của nó.
-    if (reassign && bundle.productionOrderId !== null) {
-      const ofOld = this.skuScope(piOrders, bundle.productionOrderId);
-      const specIds = bundle.segments.map((sg) => sg.segmentSpecId);
-      const materialId = bundle.steelIssue.materialId;
-      const [catRows, stepRows] = await Promise.all([
-        this.prisma.cutPatternSegment.findMany({
-          where: {
-            segmentSpecId: { in: specIds },
-            cutBundle: { steelIssue: { productionInvoiceId: piId, materialId }, ...ofOld },
-          },
-          select: { segmentSpecId: true, qty: true },
-        }),
-        this.prisma.stepBatchSegment.findMany({
-          where: {
-            segmentSpecId: { in: specIds },
-            stepBatch: { productionInvoiceId: piId, materialId, ...ofOld },
-          },
-          select: { segmentSpecId: true, qty: true, stepBatch: { select: { step: true } } },
-        }),
-      ]);
-      for (const sg of bundle.segments) {
-        const catAfter =
-          catRows
-            .filter((r) => r.segmentSpecId === sg.segmentSpecId)
-            .reduce((t, r) => t + r.qty, 0) - sg.qty;
-        const byStep = new Map<string, number>();
-        for (const r of stepRows.filter((x) => x.segmentSpecId === sg.segmentSpecId)) {
-          byStep.set(r.stepBatch.step, (byStep.get(r.stepBatch.step) ?? 0) + r.qty);
+    // Khoá theo thứ tự cố định: cut-cap (SKU đích và SKU cũ khi sửa, id SKU tăng dần) -> dòng đợt cắt FOR UPDATE ->
+    // (X3 tự lấy) step-batch. Không chặn VƯỢT ở SKU đích (Q6 A): đợt cũ là số đã cắt thật, chỉ chuyển nhãn SKU.
+    const capIds = [
+      order.id,
+      ...(reassign && bundle.productionOrderId ? [bundle.productionOrderId] : []),
+    ]
+      .filter((id, i, arr) => arr.indexOf(id) === i)
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    await this.prisma.$transaction(
+      async (tx) => {
+        for (const id of capIds) {
+          await lockBusinessKey(tx, `cut-cap:${piId}:${bundle.steelIssue.materialId}:${id}`);
         }
-        const maxStep = Math.max(0, ...byStep.values());
-        if (maxStep > catAfter) {
-          throw new BadRequestException(
-            `Chuyển đợt này đi sẽ làm SKU cũ đã làm công đoạn phụ (${maxStep}) vượt số đã cắt còn lại (${catAfter}) ở cỡ ${sg.segmentSpec.cutLengthMm.toString()}mm - sửa các đợt công đoạn phụ trước`,
+        const [locked] = await tx.$queryRaw<
+          { status: CutBundleStatus; productionOrderId: bigint | null }[]
+        >`
+          SELECT "status", "productionOrderId" FROM "cut_bundles" WHERE "id" = ${bundle.id} FOR UPDATE`;
+        if (!locked) {
+          throw new ConflictException('Đợt cắt này vừa bị QLSX hủy hết số - tải lại trang');
+        }
+        if ((locked.productionOrderId ?? null) !== bundle.productionOrderId) {
+          throw new ConflictException(`Đợt cắt ${bundleId} vừa được gắn SKU bởi người khác`);
+        }
+        // Đọc lại đoạn TRONG transaction: người báo thêm cỡ mới vào đợt đang mở lúc ta chờ khoá thì thấy ngay.
+        const segments = await tx.cutPatternSegment.findMany({
+          where: { cutBundleId: bundle.id },
+          include: { segmentSpec: true },
+        });
+        for (const seg of segments) {
+          if (!allowed.has(seg.segmentSpecId.toString())) {
+            throw new BadRequestException(
+              `Cỡ đoạn ${seg.segmentSpec.cutLengthMm.toString()}mm không có trong định mức của SKU đã chọn`,
+            );
+          }
+        }
+        // Sửa SKU: chuyển đợt đi khỏi SKU cũ không được làm Uốn/Dập... của SKU cũ vượt số đoạn cắt thực có còn lại (X3).
+        if (reassign && bundle.productionOrderId !== null) {
+          await this.assertStepsWithinCutAfterReduceInTx(
+            tx,
+            bundle.id,
+            segments.map((sg) => ({ segmentSpecId: sg.segmentSpecId, qty: sg.qty })),
+            { reassign: true },
           );
         }
-      }
-    }
-    // updateMany kèm điều kiện SKU hiện tại: 2 người sửa cùng lúc thì chỉ 1 người thắng, người sau nhận 409.
-    const res = await this.prisma.cutBundle.updateMany({
-      where: { id: bundle.id, productionOrderId: bundle.productionOrderId },
-      data: { productionOrderId: order.id },
-    });
-    if (res.count === 0) {
-      throw new ConflictException(`Đợt cắt ${bundleId} vừa được gắn SKU bởi người khác`);
-    }
+        // updateMany kèm điều kiện SKU hiện tại: phòng khi chen ngang, người sau nhận 409.
+        const res = await tx.cutBundle.updateMany({
+          where: { id: bundle.id, productionOrderId: bundle.productionOrderId },
+          data: { productionOrderId: order.id },
+        });
+        if (res.count === 0) {
+          throw new ConflictException(`Đợt cắt ${bundleId} vừa được gắn SKU bởi người khác`);
+        }
+      },
+      { timeout: 20_000 },
+    );
     await this.writeAssignAudit(
       actorId,
       'CutBundle',
@@ -1154,63 +1468,72 @@ export class SteelIssuesService {
         qtyBySpec.set(k, (qtyBySpec.get(k) ?? 0) + seg.qty);
       }
     }
-    const ofSku = this.skuScope(piOrders, order.id);
     const specIds = [...qtyBySpec.keys()].map((k) => BigInt(k));
 
-    await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(
-        tx,
-        `step-batch:${sb.productionInvoiceId}:${sb.materialId}:${sb.step}:${order.id}`,
-      );
-      const [catRows, stepRows] = await Promise.all([
-        tx.cutPatternSegment.findMany({
-          where: {
-            segmentSpecId: { in: specIds },
-            cutBundle: {
-              steelIssue: {
-                productionInvoiceId: sb.productionInvoiceId,
-                materialId: sb.materialId,
+    await this.prisma.$transaction(
+      async (tx) => {
+        await lockBusinessKey(
+          tx,
+          `step-batch:${sb.productionInvoiceId}:${sb.materialId}:${sb.step}:${order.id}`,
+        );
+        // P1: cùng công thức vật lý với recordStepBatch - số đã dùng của SKU đích (không tính đợt đang gán) cộng số đã
+        // dùng của CHÍNH đợt này (thô - thiếu - (lỗi - bỏ)) không được vượt số đoạn cắt thực có của SKU đích.
+        const [index, ownQc] = await Promise.all([
+          this.loadNeedIndex(tx, {
+            piId: sb.productionInvoiceId,
+            materialId: sb.materialId,
+            order,
+            piOrders,
+            specIds,
+            excludeStepBundleId: sb.id,
+          }),
+          tx.qcReviewSegment.findMany({
+            where: { qcReview: { stepBundleId: sb.id } },
+            select: { segmentSpecId: true, failedQty: true, shortQty: true, scrapQty: true },
+          }),
+        ]);
+        for (const [k, qty] of qtyBySpec) {
+          const base = index.get(order.id.toString(), k) ?? EMPTY_NEED_INPUT;
+          const own = { raw: qty, failed: 0, short: 0, scrap: 0 };
+          for (const r of ownQc.filter((x) => x.segmentSpecId.toString() === k)) {
+            own.failed += r.failedQty;
+            own.short += r.shortQty;
+            own.scrap += r.scrapQty;
+          }
+          const cur = base.counts[sb.step] ?? { raw: 0, failed: 0, short: 0, scrap: 0 };
+          const merged: PhoiNeedInput = {
+            ...base,
+            counts: {
+              ...base.counts,
+              [sb.step]: {
+                raw: cur.raw + own.raw,
+                failed: cur.failed + own.failed,
+                short: cur.short + own.short,
+                scrap: cur.scrap + own.scrap,
               },
-              ...ofSku,
             },
-          },
-          select: { segmentSpecId: true, qty: true },
-        }),
-        tx.stepBatchSegment.findMany({
-          where: {
-            segmentSpecId: { in: specIds },
-            stepBatch: {
-              productionInvoiceId: sb.productionInvoiceId,
-              materialId: sb.materialId,
-              step: sb.step,
-              stepBundleId: { not: sb.id }, // đợt đang gán chưa tính - tránh đếm 2 lần ở PI 1 SKU
-              ...ofSku,
-            },
-          },
-          select: { segmentSpecId: true, qty: true },
-        }),
-      ]);
-      const sum = (rows: { segmentSpecId: bigint; qty: number }[], k: string) =>
-        rows.filter((r) => r.segmentSpecId.toString() === k).reduce((t, r) => t + r.qty, 0);
-      for (const [k, qty] of qtyBySpec) {
-        if (sum(stepRows, k) + qty > sum(catRows, k)) {
-          throw new BadRequestException(
-            `Gán đợt này cho SKU đã chọn sẽ làm số đã ${processStepLabel(sb.step)} vượt số đã cắt của SKU (cỡ đoạn ${mmBySpec.has(k) ? `${mmBySpec.get(k)}mm` : k}) - gán các đợt Cắt của SKU trước`,
-          );
+          };
+          const n = computePhoiStep(merged, sb.step);
+          if (n.physicalLeft != null && n.physicalLeft < 0) {
+            throw new BadRequestException(
+              `Gán đợt này cho SKU đã chọn sẽ làm số đã ${processStepLabel(sb.step)} vượt số đã cắt của SKU (cỡ đoạn ${mmBySpec.has(k) ? `${mmBySpec.get(k)}mm` : k}) - gán các đợt Cắt của SKU trước`,
+            );
+          }
         }
-      }
-      const res = await tx.stepBundle.updateMany({
-        where: { id: sb.id, productionOrderId: sb.productionOrderId },
-        data: { productionOrderId: order.id },
-      });
-      if (res.count === 0) {
-        throw new ConflictException(`Đợt ${stepBundleId} vừa được gắn SKU bởi người khác`);
-      }
-      await tx.stepBatch.updateMany({
-        where: { stepBundleId: sb.id },
-        data: { productionOrderId: order.id },
-      });
-    });
+        const res = await tx.stepBundle.updateMany({
+          where: { id: sb.id, productionOrderId: sb.productionOrderId },
+          data: { productionOrderId: order.id },
+        });
+        if (res.count === 0) {
+          throw new ConflictException(`Đợt ${stepBundleId} vừa được gắn SKU bởi người khác`);
+        }
+        await tx.stepBatch.updateMany({
+          where: { stepBundleId: sb.id },
+          data: { productionOrderId: order.id },
+        });
+      },
+      { maxWait: 10_000, timeout: 20_000 },
+    );
     await this.writeAssignAudit(
       actorId,
       'StepBundle',
@@ -1252,102 +1575,6 @@ export class SteelIssuesService {
   }
 
   /**
-   * Hoàn tác ĐÚNG lần "Lưu đợt cắt" gần nhất (2026-09-07) - Phôi lỡ tay gõ nhầm số rồi bấm Lưu thì
-   * có đường sửa ngay, không phải đợi KCS soi ra. FE gửi lại CHÍNH XÁC `segments` vừa submit ở lần
-   * `recordCutBatch` gần nhất (không phải state hiện tại của đợt) - hàm này chỉ TRỪ ĐÚNG BẤY NHIÊU,
-   * đối xứng với phép `increment` lúc ghi, không đọc lại toàn bộ lịch sử để suy luận.
-   *
-   * CHỈ 1 CẤP DUY NHẤT (không phải undo stack nhiều lượt) - FE chỉ giữ lại delta của lần lưu GẦN
-   * NHẤT, nút "Hoàn tác" biến mất ngay khi có lần lưu tiếp theo. Chỉ hoàn tác được khi đợt còn
-   * CUTTING - đợt đã "Báo cắt xong"/qua KCS thì không còn ý nghĩa "lỡ tay" nữa.
-   *
-   * Nếu trừ hết sạch số lượng của TOÀN BỘ segment (đây là lần lưu đầu tiên tạo ra đợt) thì xoá luôn
-   * cả đợt rỗng, không để lại `CutBundle` 0 đoạn treo trong danh sách.
-   *
-   * Rủi ro đã biết, chấp nhận được: nếu có người khác (hiếm, module này 1 Phôi/ca) cũng lưu thêm
-   * vào ĐÚNG segment đó giữa lúc bấm Lưu và bấm Hoàn tác, phép trừ vẫn áp dụng lên giá trị MỚI NHẤT
-   * (không dùng optimistic lock) - có thể trừ nhầm vào phần người khác vừa thêm. Không xử lý race
-   * hiếm này để giữ đơn giản, giống mức độ chấp nhận rủi ro đã có ở các hàm khác trong module.
-   */
-  async undoLastCutBatch(
-    bundleId: string,
-    segments: { segmentSpecId: string; qty: number }[],
-    reportedById: string,
-  ): Promise<void> {
-    const bundle = await this.findBundleOrThrow(bundleId);
-    if (bundle.status !== CutBundleStatus.CUTTING) {
-      throw new ConflictException(
-        `Đợt cắt ${bundleId} đang ở trạng thái ${bundle.status} - chỉ hoàn tác được khi đang cắt`,
-      );
-    }
-
-    await this.prisma.$transaction(async (tx) => {
-      // Khoá dòng đợt cắt (như reverseCut): "Gửi KCS" chạy cùng lúc phải chờ, rồi ta thấy đúng trạng thái.
-      const [locked] = await tx.$queryRaw<{ status: CutBundleStatus }[]>`
-        SELECT "status" FROM "cut_bundles" WHERE "id" = ${bundle.id} FOR UPDATE`;
-      if (!locked) {
-        throw new ConflictException(`Đợt cắt ${bundleId} không còn - không hoàn tác được`);
-      }
-      if (locked.status !== CutBundleStatus.CUTTING) {
-        throw new ConflictException(
-          `Đợt cắt ${bundleId} đang ở trạng thái ${locked.status} - chỉ hoàn tác được khi đang cắt`,
-        );
-      }
-      const currentSegments = await tx.cutPatternSegment.findMany({
-        where: { cutBundleId: bundle.id },
-      });
-      // X3 16/11: trừ số cắt không được làm Uốn/Dập... đã báo vượt số cắt còn lại của SKU.
-      await this.assertStepsWithinCutAfterReduceInTx(
-        tx,
-        bundle.id,
-        segments.map((seg) => {
-          const specId = parseBigIntId(seg.segmentSpecId);
-          const row = currentSegments.find((s) => s.segmentSpecId === specId);
-          return { segmentSpecId: specId, qty: Math.min(seg.qty, row?.qty ?? 0) };
-        }),
-      );
-      // Ghi dòng ĐẢO vào sổ TRƯỚC khi trừ (2026-10-12) - sổ không xoá gì, "Hoàn tác" chỉ là 1 lần báo âm
-      // trỏ về lần báo gần nhất chưa bị đảo của đợt này. Ghi trước vì nếu đợt bị xoá hẳn bên dưới (hết
-      // đoạn), FK cutBundleId của sổ tự về NULL - dòng sổ vẫn còn.
-      const lastReport = await tx.floorReport.findFirst({
-        where: {
-          cutBundleId: bundle.id,
-          kind: FloorReportKind.CUT,
-          reversalOfId: null,
-          reversedBy: { is: null },
-        },
-        orderBy: { createdAt: 'desc' },
-      });
-      await writeFloorReport(tx, {
-        kind: FloorReportKind.CUT,
-        reportedById,
-        cutBundleId: bundle.id,
-        reversalOfId: lastReport?.id,
-        productionInvoiceId: bundle.steelIssue.productionInvoiceId,
-        lines: segments.map((seg) => ({
-          segmentSpecId: parseBigIntId(seg.segmentSpecId),
-          qty: -seg.qty,
-        })),
-      });
-      for (const seg of segments) {
-        const specId = parseBigIntId(seg.segmentSpecId);
-        const row = currentSegments.find((s) => s.segmentSpecId === specId);
-        if (!row) continue; // Đã bị xoá/không còn khớp - bỏ qua an toàn, không chặn cả lượt hoàn tác.
-        const newQty = row.qty - seg.qty;
-        if (newQty <= 0) {
-          await tx.cutPatternSegment.delete({ where: { id: row.id } });
-        } else {
-          await tx.cutPatternSegment.update({ where: { id: row.id }, data: { qty: newQty } });
-        }
-      }
-      const remaining = await tx.cutPatternSegment.count({ where: { cutBundleId: bundle.id } });
-      if (remaining === 0) {
-        await tx.cutBundle.delete({ where: { id: bundle.id } });
-      }
-    });
-  }
-
-  /**
    * "Báo cắt xong" cho ĐÚNG 1 ĐỢT CẮT (2026-09-05) - thay finishCutting() cũ (XOÁ 2026-09-07, dead
    * code từ trước - gate `status === RECEIVED` không còn nơi nào set được nữa sau khi vòng đời hạ
    * xuống CutBundle).
@@ -1369,18 +1596,18 @@ export class SteelIssuesService {
    * xong trước. Các công đoạn phụ giờ tự gửi KCS riêng qua submitStepBundle() (xem StepBundle doc
    * comment schema), độc lập hoàn toàn với vòng đời CutBundle này.
    */
-  async finishCutBundle(bundleId: string): Promise<CutBundleResponseDto> {
+  async finishCutBundle(
+    bundleId: string,
+    opts?: { notifyKcs?: boolean; gateLabel?: string },
+  ): Promise<CutBundleResponseDto> {
+    // P1: KCS tự chốt (notifyKcs = false, gateLabel = 'chốt để chấm') - không phát tin "gửi KCS" vì KCS tự thấy đợt.
+    const notifyKcs = opts?.notifyKcs ?? true;
+    const gateLabel = opts?.gateLabel ?? 'báo cắt xong';
     const bundle = await this.findBundleOrThrow(bundleId);
     if (bundle.status !== CutBundleStatus.CUTTING) {
-      throw new ConflictException(
-        `Đợt cắt ${bundleId} đã được gửi KCS rồi (trạng thái ${bundle.status}) - tải lại trang`,
-      );
+      throw new ConflictException('Đợt cắt này vừa được chốt để chấm - tải lại trang.');
     }
-    await assertPiHasActiveFloor(
-      this.prisma,
-      bundle.steelIssue.productionInvoiceId,
-      'báo cắt xong',
-    );
+    await assertPiHasActiveFloor(this.prisma, bundle.steelIssue.productionInvoiceId, gateLabel);
 
     // Đổi trạng thái CÓ ĐIỀU KIỆN (đang CUTTING): 2 người gửi KCS cùng lúc hoặc đợt vừa bị hủy hết
     // thì chỉ 1 lời gọi đổi được, lời gọi còn lại nhận 409 - không ghi đè completedAt, không báo lần 2.
@@ -1395,12 +1622,10 @@ export class SteelIssuesService {
       });
       if (!now) {
         throw new ConflictException(
-          `Đợt cắt ${bundleId} vừa bị hủy hết số - không còn gì để gửi KCS, tải lại trang`,
+          'Đợt cắt này vừa bị QLSX hủy hết số - không còn gì để chấm, tải lại trang.',
         );
       }
-      throw new ConflictException(
-        `Đợt cắt ${bundleId} vừa được gửi KCS (trạng thái ${now.status}) - tải lại trang`,
-      );
+      throw new ConflictException('Đợt cắt này vừa được chốt để chấm - tải lại trang.');
     }
     const updated = await this.prisma.cutBundle.findUniqueOrThrow({
       where: { id: bundle.id },
@@ -1408,14 +1633,16 @@ export class SteelIssuesService {
     });
     await this.syncIssueStatusFromBundles(bundle.steelIssueId);
 
-    const invoice = await this.prisma.productionInvoice.findUnique({
-      where: { id: bundle.steelIssue.productionInvoiceId },
-      select: { code: true },
-    });
-    await this.notifySteelIssue('CUT_BUNDLE_TO_KCS', updated.id, {
-      piCode: invoice?.code ?? `#${bundle.steelIssue.productionInvoiceId}`,
-    });
-    // PH1 rà soát 18/11: màn KCS (chỉ có quyền STEEL_ISSUE, không nhận topic 'floor' của màn QLSX) tự tải lại đợt vừa gửi.
+    if (notifyKcs) {
+      const invoice = await this.prisma.productionInvoice.findUnique({
+        where: { id: bundle.steelIssue.productionInvoiceId },
+        select: { code: true },
+      });
+      await this.notifySteelIssue('CUT_BUNDLE_TO_KCS', updated.id, {
+        piCode: invoice?.code ?? `#${bundle.steelIssue.productionInvoiceId}`,
+      });
+    }
+    // PH1 rà soát 18/11: báo màn KCS tải lại đợt vừa chốt - phát cả khi KCS tự chốt lúc bấm "Chấm" (notifyKcs false).
     this.publishRealtime(
       bundle.steelIssueId,
       'PROGRESS',
@@ -1443,25 +1670,32 @@ export class SteelIssuesService {
    * tự gọi qua SteelIssuesService đã có sẵn, không thêm phụ thuộc mới).
    */
   async syncIssueStatusFromBundles(steelIssueId: bigint): Promise<void> {
-    const bundles = await this.prisma.cutBundle.findMany({ where: { steelIssueId } });
-    if (bundles.length === 0) return;
-    const hasAwaitingQc = bundles.some((b) => b.status === CutBundleStatus.AWAITING_QC);
-    const allPassed = bundles.every((b) => b.status === CutBundleStatus.QC_PASSED);
-    const status = hasAwaitingQc
-      ? SteelIssueStatus.AWAITING_QC
-      : allPassed
-        ? SteelIssueStatus.QC_PASSED
-        : SteelIssueStatus.RECEIVED;
-    const completedAt =
-      status === SteelIssueStatus.QC_PASSED
-        ? (bundles
-            .map((b) => b.completedAt)
-            .filter((d): d is Date => d != null)
-            .sort((a, b) => b.getTime() - a.getTime())[0] ?? new Date())
-        : null;
-    await this.prisma.steelIssue.update({
-      where: { id: steelIssueId },
-      data: { status, completedAt },
+    // P1 (AC54): 2 lần đổi trạng thái đợt cùng lô sắt chạy cùng lúc (KCS chốt đợt A đúng lúc lưu kết quả đợt B) từng
+    // đọc cùng danh sách rồi ghi chồng, trạng thái lô lệch. Giờ chạy trong 1 transaction ngắn: khoá advisory (thứ tự
+    // khoá: advisory trước) rồi FOR UPDATE dòng steel_issues, SAU ĐÓ mới đọc các đợt - người đến sau chờ rồi thấy số mới.
+    await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `steel-issue-rollup:${steelIssueId}`);
+      await tx.$queryRaw`SELECT "id" FROM "steel_issues" WHERE "id" = ${steelIssueId} FOR UPDATE`;
+      const bundles = await tx.cutBundle.findMany({ where: { steelIssueId } });
+      if (bundles.length === 0) return;
+      const hasAwaitingQc = bundles.some((b) => b.status === CutBundleStatus.AWAITING_QC);
+      const allPassed = bundles.every((b) => b.status === CutBundleStatus.QC_PASSED);
+      const status = hasAwaitingQc
+        ? SteelIssueStatus.AWAITING_QC
+        : allPassed
+          ? SteelIssueStatus.QC_PASSED
+          : SteelIssueStatus.RECEIVED;
+      const completedAt =
+        status === SteelIssueStatus.QC_PASSED
+          ? (bundles
+              .map((b) => b.completedAt)
+              .filter((d): d is Date => d != null)
+              .sort((a, b) => b.getTime() - a.getTime())[0] ?? new Date())
+          : null;
+      await tx.steelIssue.update({
+        where: { id: steelIssueId },
+        data: { status, completedAt },
+      });
     });
   }
 
@@ -1490,55 +1724,77 @@ export class SteelIssuesService {
      * Không truyền (màn Phôi cũ - tài khoản tổ) -> gom hết như trước, bundle không gắn người.
      */
     worker?: { id: string | null },
+    /** P1: KCS tự chốt truyền gateLabel = 'chốt để chấm' (câu lỗi của cổng lệnh dừng). */
+    opts?: { gateLabel?: string },
   ): Promise<StepBundleResponseDto> {
+    const gateLabel = opts?.gateLabel ?? 'gửi KCS công đoạn';
     const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
     const materialBigId = parseBigIntId(materialId);
-    await assertPiHasActiveFloor(this.prisma, invoice.id, 'gửi KCS công đoạn');
+    await assertPiHasActiveFloor(this.prisma, invoice.id, gateLabel);
     // Gửi KCS theo TỪNG SKU (2026-09-21): chỉ gom các đợt gia công của SKU này.
     const piOrders = await this.findOrdersForInvoice(invoice.id);
     const order = piOrders.find((o) => o.id === parseBigIntId(productionOrderId));
     if (!order) {
       throw new BadRequestException(`SKU (lệnh sản xuất ${productionOrderId}) không thuộc PI này`);
     }
-    const ofSku = this.skuScope(piOrders, order.id);
 
-    const created = await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(tx, `step-bundle:${invoice.id}:${materialBigId}:${step}:${order.id}`);
-      await assertPiHasActiveFloorLocked(tx, invoice.id, 'gửi KCS công đoạn');
+    const created = await this.prisma.$transaction(
+      async (tx) => {
+        await lockBusinessKey(tx, `step-bundle:${invoice.id}:${materialBigId}:${step}:${order.id}`);
+        await assertPiHasActiveFloorLocked(tx, invoice.id, gateLabel);
 
-      const pending = await tx.stepBatch.findMany({
-        where: {
-          productionInvoiceId: invoice.id,
-          materialId: materialBigId,
-          step,
-          stepBundleId: null,
-          ...ofSku,
-          ...(worker ? { reportedById: worker.id } : {}),
-        },
-        include: { segments: { include: { segmentSpec: true } } },
-      });
-      if (pending.length === 0 || pending.every((b) => b.segments.length === 0)) {
-        throw new BadRequestException(
-          `Chưa có gì mới để gửi KCS ở công đoạn ${processStepLabel(step)}`,
-        );
-      }
+        // Khoá từng dòng chờ (FOR UPDATE): QLSX hủy 1 lần báo đúng lúc ta chốt thì 1 bên chờ bên kia - không còn gom
+        // dòng vừa bị xoá, không còn step_bundle rỗng (P1, AC7).
+        const skuCond =
+          piOrders.length === 1
+            ? Prisma.sql`("productionOrderId" = ${order.id} OR "productionOrderId" IS NULL)`
+            : Prisma.sql`"productionOrderId" = ${order.id}`;
+        const workerCond = worker
+          ? worker.id === null
+            ? Prisma.sql`AND "reportedById" IS NULL`
+            : Prisma.sql`AND "reportedById" = ${worker.id}`
+          : Prisma.empty;
+        const pendingRows = await tx.$queryRaw<{ id: bigint }[]>`
+        SELECT "id" FROM "step_batches"
+        WHERE "productionInvoiceId" = ${invoice.id}
+          AND "materialId" = ${materialBigId}
+          AND "step" = ${step}::"ProcessStep"
+          AND "stepBundleId" IS NULL
+          AND ${skuCond}
+          ${workerCond}
+        FOR UPDATE`;
+        const noneLeft = () =>
+          new BadRequestException(
+            `Nhóm ${processStepLabel(step)} này không còn lần báo nào chưa chấm (có thể vừa được chốt hoặc vừa bị hủy) - tải lại trang.`,
+          );
+        if (pendingRows.length === 0) throw noneLeft();
 
-      const stepBundle = await tx.stepBundle.create({
-        data: {
-          productionInvoiceId: invoice.id,
-          materialId: materialBigId,
-          step,
-          submittedById,
-          productionOrderId: order.id,
-          reportedById: worker?.id ?? null,
-        },
-      });
-      await tx.stepBatch.updateMany({
-        where: { id: { in: pending.map((b) => b.id) } },
-        data: { stepBundleId: stepBundle.id },
-      });
-      return { stepBundle, pending };
-    });
+        const stepBundle = await tx.stepBundle.create({
+          data: {
+            productionInvoiceId: invoice.id,
+            materialId: materialBigId,
+            step,
+            submittedById,
+            productionOrderId: order.id,
+            reportedById: worker?.id ?? null,
+          },
+        });
+        const pendingIds = pendingRows.map((r) => r.id);
+        const assigned = await tx.stepBatch.updateMany({
+          where: { id: { in: pendingIds }, stepBundleId: null },
+          data: { stepBundleId: stepBundle.id },
+        });
+        // Chỉ trả các dòng ĐÃ gán thật (đọc lại theo đợt vừa tạo); không gán được dòng nào thì ném để rollback, không
+        // để lại step_bundle rỗng.
+        const pending = await tx.stepBatch.findMany({
+          where: { stepBundleId: stepBundle.id },
+          include: { segments: { include: { segmentSpec: true } } },
+        });
+        if (assigned.count === 0 || pending.length === 0) throw noneLeft();
+        return { stepBundle, pending };
+      },
+      { maxWait: 10_000, timeout: 20_000 },
+    );
 
     const material = await this.prisma.material.findUniqueOrThrow({
       where: { id: materialBigId },
@@ -1764,114 +2020,140 @@ export class SteelIssuesService {
     }
     const revisionIds = [...new Set(orderRows.map((o) => o.bomRevisionId))];
 
-    const [bomPieces, pieceBoms, issues, cutSegments, cutQc, stepSegments, stepQc, machineLines] =
-      await Promise.all([
-        this.prisma.bomPiece.findMany({ where: { bomRevisionId: { in: revisionIds } } }),
-        this.prisma.pieceBom.findMany({
-          where: { bomRevisionId: { in: revisionIds } },
-          include: { segmentSpec: { include: { material: true } } },
-        }),
-        this.prisma.steelIssue.findMany({
-          where: { productionInvoiceId: { in: invoiceIds } },
-          select: {
-            productionInvoiceId: true,
-            materialId: true,
-            barCount: true,
-            barLengthMm: true,
-            status: true,
-            receivedBarCount: true,
-            reworkOfId: true,
+    const [
+      bomPieces,
+      pieceBoms,
+      issues,
+      cutSegments,
+      cutQc,
+      stepSegments,
+      stepQc,
+      machineLines,
+      reservationRows,
+    ] = await Promise.all([
+      this.prisma.bomPiece.findMany({ where: { bomRevisionId: { in: revisionIds } } }),
+      this.prisma.pieceBom.findMany({
+        where: { bomRevisionId: { in: revisionIds } },
+        include: { segmentSpec: { include: { material: true } } },
+      }),
+      this.prisma.steelIssue.findMany({
+        where: { productionInvoiceId: { in: invoiceIds } },
+        select: {
+          productionInvoiceId: true,
+          materialId: true,
+          barCount: true,
+          barLengthMm: true,
+          status: true,
+          receivedBarCount: true,
+          reworkOfId: true,
+        },
+      }),
+      this.prisma.cutPatternSegment.findMany({
+        where: { cutBundle: { steelIssue: { productionInvoiceId: { in: invoiceIds } } } },
+        select: {
+          segmentSpecId: true,
+          qty: true,
+          cutBundle: {
+            select: {
+              productionOrderId: true,
+              status: true,
+              steelIssue: { select: { productionInvoiceId: true } },
+            },
           },
-        }),
-        this.prisma.cutPatternSegment.findMany({
-          where: { cutBundle: { steelIssue: { productionInvoiceId: { in: invoiceIds } } } },
-          select: {
-            segmentSpecId: true,
-            qty: true,
-            cutBundle: {
-              select: {
-                productionOrderId: true,
-                status: true,
-                steelIssue: { select: { productionInvoiceId: true } },
+        },
+      }),
+      // KCS chấm lỗi theo cỡ đoạn - lỗi CỘNG DỒN LỊCH SỬ (xem doc comment getPhoiProgress()).
+      this.prisma.qcReviewSegment.findMany({
+        where: {
+          // Phiếu công đoạn (stepBundleId) tính ở phần công đoạn, không lẫn vào Cắt (cùng loadNeedIndex).
+          qcReview: { steelIssue: { productionInvoiceId: { in: invoiceIds } }, stepBundleId: null },
+        },
+        select: {
+          segmentSpecId: true,
+          failedQty: true,
+          shortQty: true,
+          qcReview: {
+            select: {
+              steelIssue: { select: { productionInvoiceId: true } },
+              cutBundle: { select: { productionOrderId: true } },
+            },
+          },
+        },
+      }),
+      this.prisma.stepBatchSegment.findMany({
+        where: { stepBatch: { productionInvoiceId: { in: invoiceIds } } },
+        select: {
+          segmentSpecId: true,
+          qty: true,
+          stepBatch: {
+            select: {
+              productionOrderId: true,
+              step: true,
+              productionInvoiceId: true,
+              stepBundle: { select: { status: true } },
+            },
+          },
+        },
+      }),
+      // Lỗi công đoạn phụ lọc qua stepBundle (không còn thuộc đúng 1 SteelIssue) và đúng `step`.
+      this.prisma.qcReviewSegment.findMany({
+        where: { qcReview: { stepBundle: { productionInvoiceId: { in: invoiceIds } } } },
+        select: {
+          segmentSpecId: true,
+          failedQty: true,
+          shortQty: true,
+          scrapQty: true,
+          qcReview: {
+            select: {
+              stepBundle: {
+                select: { productionOrderId: true, step: true, productionInvoiceId: true },
               },
             },
           },
-        }),
-        // KCS chấm lỗi theo cỡ đoạn - lỗi CỘNG DỒN LỊCH SỬ (xem doc comment getPhoiProgress()).
-        this.prisma.qcReviewSegment.findMany({
-          where: { qcReview: { steelIssue: { productionInvoiceId: { in: invoiceIds } } } },
-          select: {
-            segmentSpecId: true,
-            failedQty: true,
-            qcReview: {
-              select: {
-                steelIssue: { select: { productionInvoiceId: true } },
-                cutBundle: { select: { productionOrderId: true } },
-              },
-            },
-          },
-        }),
-        this.prisma.stepBatchSegment.findMany({
-          where: { stepBatch: { productionInvoiceId: { in: invoiceIds } } },
-          select: {
-            segmentSpecId: true,
-            qty: true,
-            stepBatch: {
-              select: {
-                productionOrderId: true,
-                step: true,
-                productionInvoiceId: true,
-                stepBundle: { select: { status: true } },
-              },
-            },
-          },
-        }),
-        // Lỗi công đoạn phụ lọc qua stepBundle (không còn thuộc đúng 1 SteelIssue) và đúng `step`.
-        this.prisma.qcReviewSegment.findMany({
-          where: { qcReview: { stepBundle: { productionInvoiceId: { in: invoiceIds } } } },
-          select: {
-            segmentSpecId: true,
-            failedQty: true,
-            qcReview: {
-              select: {
-                stepBundle: {
-                  select: { productionOrderId: true, step: true, productionInvoiceId: true },
-                },
-              },
-            },
-          },
-        }),
-        // Máy cắt của các phương án ĐÃ DUYỆT (neo PI hoặc neo lệnh SX của PI) - cùng điều kiện phủ với
-        // getIssuePlan(). Một query cho mọi PI, chia theo PI ở dưới.
-        this.prisma.cuttingProposalLine.findMany({
-          where: {
-            feasible: true,
-            cuttingProposal: {
-              status: CuttingProposalStatus.APPROVED,
-              OR: [
-                { productionInvoiceId: { in: invoiceIds } },
-                {
-                  productionOrder: {
-                    productionInvoiceItem: { productionInvoiceId: { in: invoiceIds } },
-                  },
-                },
-              ],
-            },
-          },
-          select: {
-            materialId: true,
-            machine: true,
-            cuttingProposal: {
-              select: {
-                productionInvoiceId: true,
+        },
+      }),
+      // Máy cắt của các phương án ĐÃ DUYỆT (neo PI hoặc neo lệnh SX của PI) - cùng điều kiện phủ với
+      // getIssuePlan(). Một query cho mọi PI, chia theo PI ở dưới.
+      this.prisma.cuttingProposalLine.findMany({
+        where: {
+          feasible: true,
+          cuttingProposal: {
+            status: CuttingProposalStatus.APPROVED,
+            OR: [
+              { productionInvoiceId: { in: invoiceIds } },
+              {
                 productionOrder: {
-                  select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+                  productionInvoiceItem: { productionInvoiceId: { in: invoiceIds } },
                 },
+              },
+            ],
+          },
+        },
+        select: {
+          materialId: true,
+          machine: true,
+          cuttingProposal: {
+            select: {
+              productionInvoiceId: true,
+              productionOrder: {
+                select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
               },
             },
           },
-        }),
-      ]);
+        },
+      }),
+      // P1: giữ chỗ sắt ACTIVE còn lại (gợi ý "sắt còn xuất được" ở steelBalance).
+      this.prisma.stockReservation.findMany({
+        where: { productionInvoiceId: { in: invoiceIds }, status: 'ACTIVE' },
+        select: {
+          productionInvoiceId: true,
+          materialId: true,
+          quantity: true,
+          consumedQty: true,
+          stockLengthMm: true,
+        },
+      }),
+    ]);
 
     for (const [piKey, orders] of ordersByPi) {
       const revs = new Set(orders.map((o) => o.bomRevisionId.toString()));
@@ -1897,28 +2179,67 @@ export class SteelIssuesService {
         if (linePi?.toString() !== piKey || line.machine !== SolverMachine.tu_dong) continue;
         machineByMaterial.set(line.materialId.toString(), SolverMachine.tu_dong);
       }
+      const piCutSegments: CutSegmentRow[] = cutSegments
+        .filter((cs) => cs.cutBundle.steelIssue.productionInvoiceId.toString() === piKey)
+        .map((cs) => ({
+          segmentSpecId: cs.segmentSpecId,
+          qty: cs.qty,
+          cutBundle: {
+            productionOrderId: cs.cutBundle.productionOrderId,
+            status: cs.cutBundle.status,
+          },
+        }));
+      const piCutQc: CutQcRow[] = cutQc
+        .filter((qs) => qs.qcReview.steelIssue?.productionInvoiceId.toString() === piKey)
+        .map((qs) => ({
+          segmentSpecId: qs.segmentSpecId,
+          failedQty: qs.failedQty,
+          shortQty: qs.shortQty,
+          qcReview: { cutBundle: qs.qcReview.cutBundle },
+        }));
+      const piStepSegments: StepSegmentRow[] = stepSegments
+        .filter((ss) => ss.stepBatch.productionInvoiceId.toString() === piKey)
+        .map((ss) => ({
+          segmentSpecId: ss.segmentSpecId,
+          qty: ss.qty,
+          stepBatch: {
+            productionOrderId: ss.stepBatch.productionOrderId,
+            step: ss.stepBatch.step,
+            bundleStatus: ss.stepBatch.stepBundle?.status ?? null,
+          },
+        }));
+      const piStepQc: StepQcRow[] = stepQc
+        .filter((qs) => qs.qcReview.stepBundle?.productionInvoiceId.toString() === piKey)
+        .map((qs) => ({
+          segmentSpecId: qs.segmentSpecId,
+          failedQty: qs.failedQty,
+          shortQty: qs.shortQty,
+          scrapQty: qs.scrapQty,
+          qcReview: {
+            stepBundle: qs.qcReview.stepBundle
+              ? {
+                  productionOrderId: qs.qcReview.stepBundle.productionOrderId,
+                  step: qs.qcReview.stepBundle.step,
+                }
+              : null,
+          },
+        }));
       cut.set(piKey, {
         machineByMaterial,
         orders,
         bomPieces: piBomPieces,
         pieceBoms: piPieceBoms,
         issues: piIssues,
-        cutSegments: cutSegments
-          .filter((cs) => cs.cutBundle.steelIssue.productionInvoiceId.toString() === piKey)
-          .map((cs) => ({
-            segmentSpecId: cs.segmentSpecId,
-            qty: cs.qty,
-            cutBundle: {
-              productionOrderId: cs.cutBundle.productionOrderId,
-              status: cs.cutBundle.status,
-            },
-          })),
-        qcSegments: cutQc
-          .filter((qs) => qs.qcReview.steelIssue?.productionInvoiceId.toString() === piKey)
-          .map((qs) => ({
-            segmentSpecId: qs.segmentSpecId,
-            failedQty: qs.failedQty,
-            qcReview: { cutBundle: qs.qcReview.cutBundle },
+        cutSegments: piCutSegments,
+        qcSegments: piCutQc,
+        stepSegments: piStepSegments,
+        stepQcSegments: piStepQc,
+        reservations: reservationRows
+          .filter((r) => r.productionInvoiceId?.toString() === piKey)
+          .map((r) => ({
+            materialId: r.materialId,
+            remaining: Math.max(0, r.quantity.toNumber() - r.consumedQty.toNumber()),
+            stockLengthMm: r.stockLengthMm,
           })),
       });
       step.set(piKey, {
@@ -1926,31 +2247,10 @@ export class SteelIssuesService {
         bomPieces: piBomPieces,
         pieceBoms: piPieceBoms,
         issues: piIssues,
-        stepSegments: stepSegments
-          .filter((ss) => ss.stepBatch.productionInvoiceId.toString() === piKey)
-          .map((ss) => ({
-            segmentSpecId: ss.segmentSpecId,
-            qty: ss.qty,
-            stepBatch: {
-              productionOrderId: ss.stepBatch.productionOrderId,
-              step: ss.stepBatch.step,
-              bundleStatus: ss.stepBatch.stepBundle?.status ?? null,
-            },
-          })),
-        qcSegments: stepQc
-          .filter((qs) => qs.qcReview.stepBundle?.productionInvoiceId.toString() === piKey)
-          .map((qs) => ({
-            segmentSpecId: qs.segmentSpecId,
-            failedQty: qs.failedQty,
-            qcReview: {
-              stepBundle: qs.qcReview.stepBundle
-                ? {
-                    productionOrderId: qs.qcReview.stepBundle.productionOrderId,
-                    step: qs.qcReview.stepBundle.step,
-                  }
-                : null,
-            },
-          })),
+        stepSegments: piStepSegments,
+        qcSegments: piStepQc,
+        cutSegments: piCutSegments,
+        cutQcSegments: piCutQc,
       });
     }
     return { cut, step };
@@ -1976,37 +2276,115 @@ export class SteelIssuesService {
   }
 
   private async computeCutProgress(inputs: CutInputs): Promise<PhoiProgressItemResponseDto[]> {
-    const { orders, bomPieces, pieceBoms, issues, cutSegments, qcSegments, machineByMaterial } =
-      inputs;
-    if (orders.length === 0) return [];
+    const byMaterial = await this.buildPhoiProgress(
+      {
+        orders: inputs.orders,
+        bomPieces: inputs.bomPieces,
+        pieceBoms: inputs.pieceBoms,
+        issues: inputs.issues,
+        cutSegments: inputs.cutSegments,
+        qcSegments: inputs.qcSegments,
+        stepSegments: inputs.stepSegments,
+        stepQc: inputs.stepQcSegments,
+      },
+      PROCESS_CAT,
+    );
+    await this.attachSteelBalance(
+      byMaterial,
+      inputs.issues,
+      inputs.machineByMaterial,
+      inputs.reservations,
+    );
+    return [...byMaterial.values()].sort((a, b) => a.materialCode.localeCompare(b.materialCode));
+  }
 
-    // Khoá (cỡ đoạn, SKU) - SKU 'none' = đợt/đánh giá CŨ chưa gắn SKU (xem CutBundle.productionOrderId).
-    // PI chỉ có ĐÚNG 1 SKU thì đợt cắt CŨ chưa gắn SKU chắc chắn là của SKU đó (không mơ hồ) -> tính cho SKU đó;
-    // PI nhiều SKU thì không biết, giữ 'none' (không chia bừa).
-    const soleOrderId = orders.length === 1 ? orders[0].id : null;
-    const orderKey = (id: bigint | null | undefined) => {
-      const resolved = id ?? soleOrderId;
-      return resolved == null ? 'none' : resolved.toString();
-    };
-    const doneBySpecOrder = new Map<string, number>();
-    // Chưa gửi KCS (đợt CUTTING) / chờ KCS (đợt AWAITING_QC) - phần của `done`, để 3 màn QLSX hiện cùng số.
+  /**
+   * Dựng tiến độ theo (LOẠI SẮT -> CỠ ĐOẠN -> SKU) cho 1 công đoạn (Cắt hoặc công đoạn phụ) - dùng chung cho
+   * computeCutProgress / computeStepProgress. Mọi con số (cần / đã tính / còn báo được) lấy từ phoi-need.util, cùng
+   * hàm với phép chặn lúc báo (P1, 18/11/2026).
+   */
+  private async buildPhoiProgress(
+    data: {
+      orders: OrderForBom[];
+      bomPieces: BaseInputs['bomPieces'];
+      pieceBoms: BaseInputs['pieceBoms'];
+      issues: BaseInputs['issues'];
+      cutSegments: CutSegmentRow[];
+      qcSegments: CutQcRow[];
+      stepSegments: StepSegmentRow[];
+      stepQc: StepQcRow[];
+    },
+    step: PhoiStep,
+  ): Promise<Map<string, PhoiProgressItemResponseDto>> {
+    const { orders, bomPieces, pieceBoms, issues } = data;
+    const byMaterial = new Map<string, PhoiProgressItemResponseDto>();
+    if (orders.length === 0) return byMaterial;
+
+    // Khoá (cỡ đoạn, SKU) - SKU 'none' = đợt/đánh giá CŨ chưa gắn SKU ở PI NHIỀU SKU (PI 1 SKU: tính cho SKU duy nhất).
+    const orderKey = (id: bigint | null | undefined) => phoiOrderKey(orders, id);
+    const index = buildPhoiNeedIndex({
+      orders,
+      bomPieces,
+      pieceBoms,
+      cut: data.cutSegments.map((r) => ({
+        segmentSpecId: r.segmentSpecId,
+        productionOrderId: r.cutBundle.productionOrderId,
+        qty: r.qty,
+      })),
+      cutQc: data.qcSegments.map((r) => ({
+        segmentSpecId: r.segmentSpecId,
+        productionOrderId: r.qcReview.cutBundle?.productionOrderId ?? null,
+        failedQty: r.failedQty,
+        shortQty: r.shortQty,
+      })),
+      step: data.stepSegments.map((r) => ({
+        segmentSpecId: r.segmentSpecId,
+        productionOrderId: r.stepBatch.productionOrderId,
+        step: r.stepBatch.step,
+        qty: r.qty,
+      })),
+      stepQc: data.stepQc.flatMap((r) =>
+        r.qcReview.stepBundle
+          ? [
+              {
+                segmentSpecId: r.segmentSpecId,
+                productionOrderId: r.qcReview.stepBundle.productionOrderId,
+                step: r.qcReview.stepBundle.step,
+                failedQty: r.failedQty,
+                shortQty: r.shortQty,
+                scrapQty: r.scrapQty,
+              },
+            ]
+          : [],
+      ),
+    });
+
+    // Chưa gửi KCS (đợt CUTTING / dòng chưa vào đợt) / chờ KCS (đợt AWAITING_QC) - phần của `done`, để 3 màn QLSX hiện cùng số.
     const openBySpecOrder = new Map<string, number>();
     const awaitingBySpecOrder = new Map<string, number>();
-    for (const cs of cutSegments) {
-      const k = `${cs.segmentSpecId}:${orderKey(cs.cutBundle.productionOrderId)}`;
-      doneBySpecOrder.set(k, (doneBySpecOrder.get(k) ?? 0) + cs.qty);
-      if (cs.cutBundle.status === CutBundleStatus.CUTTING) {
-        openBySpecOrder.set(k, (openBySpecOrder.get(k) ?? 0) + cs.qty);
-      } else if (cs.cutBundle.status === CutBundleStatus.AWAITING_QC) {
-        awaitingBySpecOrder.set(k, (awaitingBySpecOrder.get(k) ?? 0) + cs.qty);
+    const bump = (m: Map<string, number>, k: string, qty: number) =>
+      m.set(k, (m.get(k) ?? 0) + qty);
+    const stepDoneSpecs = new Set<string>();
+    if (step === PROCESS_CAT) {
+      for (const cs of data.cutSegments) {
+        stepDoneSpecs.add(cs.segmentSpecId.toString());
+        const k = `${cs.segmentSpecId}:${orderKey(cs.cutBundle.productionOrderId)}`;
+        if (cs.cutBundle.status === CutBundleStatus.CUTTING) bump(openBySpecOrder, k, cs.qty);
+        else if (cs.cutBundle.status === CutBundleStatus.AWAITING_QC) {
+          bump(awaitingBySpecOrder, k, cs.qty);
+        }
+      }
+    } else {
+      for (const ss of data.stepSegments) {
+        if (ss.stepBatch.step !== step) continue;
+        stepDoneSpecs.add(ss.segmentSpecId.toString());
+        const k = `${ss.segmentSpecId}:${orderKey(ss.stepBatch.productionOrderId)}`;
+        if (ss.stepBatch.bundleStatus === null) bump(openBySpecOrder, k, ss.qty);
+        else if (ss.stepBatch.bundleStatus === StepBundleStatus.AWAITING_QC) {
+          bump(awaitingBySpecOrder, k, ss.qty);
+        }
       }
     }
-    const failedBySpecOrder = new Map<string, number>();
-    for (const qs of qcSegments) {
-      const k = `${qs.segmentSpecId}:${orderKey(qs.qcReview.cutBundle?.productionOrderId)}`;
-      failedBySpecOrder.set(k, (failedBySpecOrder.get(k) ?? 0) + qs.failedQty);
-    }
-    const requiredBySpecOrder = new Map<string, number>();
 
     const issuedByMaterial = new Map<string, number>();
     for (const i of issues) {
@@ -2015,67 +2393,30 @@ export class SteelIssuesService {
       issuedByMaterial.set(key, (issuedByMaterial.get(key) ?? 0) + i.barCount);
     }
 
-    const doneBySpec = new Map<string, number>();
-    for (const cs of cutSegments) {
-      const key = cs.segmentSpecId.toString();
-      doneBySpec.set(key, (doneBySpec.get(key) ?? 0) + cs.qty);
-    }
-    const failedBySpec = new Map<string, number>();
-    for (const qs of qcSegments) {
-      const key = qs.segmentSpecId.toString();
-      failedBySpec.set(key, (failedBySpec.get(key) ?? 0) + qs.failedQty);
-    }
-
-    const qtyPerUnitByKey = new Map(
-      bomPieces.map((bp) => [`${bp.bomRevisionId}:${bp.pieceId}`, bp.qtyPerUnit]),
-    );
-    const pieceBomsByRevision = new Map<string, typeof pieceBoms>();
-    for (const pb of pieceBoms) {
-      const key = pb.bomRevisionId.toString();
-      const arr = pieceBomsByRevision.get(key) ?? [];
-      arr.push(pb);
-      pieceBomsByRevision.set(key, arr);
-    }
-
     // Khoá theo segmentSpecId (không phải cutLengthMm): cutLengthMm là Decimal, 2 Decimal cùng giá
     // trị không === nhau nên dùng làm khoá Map sẽ tách nhầm 1 cỡ thành nhiều dòng. segmentSpecId
     // đã @@unique([materialId, cutLengthMm]) nên khoá theo nó là tương đương mà an toàn.
-    const requiredBySpec = new Map<string, number>();
     const specMeta = new Map<
       string,
       { materialId: string; materialCode: string; materialName: string; cutLengthMm: number }
     >();
-    const registerSpec = (row: (typeof pieceBoms)[number]) => {
+    // Cắt: mọi dòng định mức (không lọc processSteps, xem resolveRequiredSteps()); công đoạn phụ: chỉ dòng có đúng step.
+    const stepRows =
+      step === PROCESS_CAT ? pieceBoms : pieceBoms.filter((pb) => pb.processSteps.includes(step));
+    for (const row of stepRows) {
       const specKey = row.segmentSpecId.toString();
-      if (!specMeta.has(specKey)) {
-        specMeta.set(specKey, {
-          materialId: row.segmentSpec.materialId.toString(),
-          materialCode: row.segmentSpec.material.code,
-          materialName: this.materialLabel(row.segmentSpec.material),
-          cutLengthMm: row.segmentSpec.cutLengthMm.toNumber(),
-        });
-      }
-      return specKey;
-    };
-
-    // Lặp theo TỪNG order (không phải từng bomRevisionId duy nhất) - mỗi order có quantity riêng,
-    // 1 PI gộp có thể chứa nhiều SKU khác bomRevision, mỗi cái đóng góp riêng vào tổng.
-    for (const order of orders) {
-      const bomKey = order.bomRevisionId.toString();
-      for (const row of pieceBomsByRevision.get(bomKey) ?? []) {
-        const qtyPerUnit = qtyPerUnitByKey.get(`${bomKey}:${row.pieceId}`) ?? 0;
-        const segments = row.qtyPerPiece * qtyPerUnit * order.quantity;
-        if (segments <= 0) continue;
-        const specKey = registerSpec(row);
-        requiredBySpec.set(specKey, (requiredBySpec.get(specKey) ?? 0) + segments);
-        const ok = `${specKey}:${order.id}`;
-        requiredBySpecOrder.set(ok, (requiredBySpecOrder.get(ok) ?? 0) + segments);
-      }
+      if (specMeta.has(specKey)) continue;
+      specMeta.set(specKey, {
+        materialId: row.segmentSpec.materialId.toString(),
+        materialCode: row.segmentSpec.material.code,
+        materialName: this.materialLabel(row.segmentSpec.material),
+        cutLengthMm: row.segmentSpec.cutLengthMm.toNumber(),
+      });
     }
 
-    // Cỡ ĐÃ cắt nhưng KHÔNG có trong định mức của PI này vẫn phải hiện ra (required = 0) - giấu đi
+    // Cỡ ĐÃ làm nhưng KHÔNG có trong định mức của PI này vẫn phải hiện ra (required = 0) - giấu đi
     // là giấu luôn dữ liệu sai, thợ sẽ không hiểu vì sao cân đối lệch.
-    const orphanSpecIds = [...doneBySpec.keys()].filter((k) => !specMeta.has(k));
+    const orphanSpecIds = [...stepDoneSpecs].filter((k) => !specMeta.has(k));
     if (orphanSpecIds.length > 0) {
       const orphans = await this.prisma.segmentSpec.findMany({
         where: { id: { in: orphanSpecIds.map((k) => BigInt(k)) } },
@@ -2091,7 +2432,6 @@ export class SteelIssuesService {
       }
     }
 
-    const byMaterial = new Map<string, PhoiProgressItemResponseDto>();
     for (const [specKey, meta] of specMeta) {
       let item = byMaterial.get(meta.materialId);
       if (!item) {
@@ -2104,27 +2444,61 @@ export class SteelIssuesService {
         });
         byMaterial.set(meta.materialId, item);
       }
-      const rawDone = doneBySpec.get(specKey) ?? 0;
-      const failed = failedBySpec.get(specKey) ?? 0;
-      // Tách theo SKU: mọi SKU có định mức / đã cắt / lỗi ở cỡ này, cộng thêm 'none' nếu có đợt cũ.
-      const byOrder = this.buildOrderBreakdown(specKey, {
-        required: requiredBySpecOrder,
-        done: doneBySpecOrder,
-        failed: failedBySpecOrder,
-        open: openBySpecOrder,
-        awaiting: awaitingBySpecOrder,
-      });
+      // Tách theo SKU: mọi SKU có định mức / đã làm / lỗi ở cỡ này, cộng thêm 'none' nếu có đợt cũ ở PI nhiều SKU.
+      const byOrder: PhoiProgressOrderSegmentDto[] = [];
+      for (const ok of index.orderKeysOf(specKey)) {
+        const input = index.get(ok, specKey)!;
+        const n = computePhoiStep(input, step);
+        const has = n.baseRequired > 0 || n.raw > 0 || n.failed > 0 || n.short > 0 || n.scrap > 0;
+        if (!has) continue;
+        const none = ok === 'none';
+        byOrder.push(
+          new PhoiProgressOrderSegmentDto({
+            productionOrderId: none ? null : ok,
+            required: none ? 0 : n.required,
+            baseRequired: none ? 0 : n.baseRequired,
+            extraNeed: none ? 0 : n.extraNeed,
+            // ĐỔI NGHĨA (P1): đã báo - thiếu (VẪN gồm lỗi); "done - failed" = số đã tính.
+            done: n.raw - n.short,
+            failed: n.failed,
+            shortQty: n.short,
+            scrapQty: n.scrap,
+            reportedQty: n.raw,
+            maxNow: none ? 0 : n.maxNow,
+            physicalLeft: none ? null : n.physicalLeft,
+            openQty: openBySpecOrder.get(`${specKey}:${ok}`) ?? 0,
+            awaitingQcQty: awaitingBySpecOrder.get(`${specKey}:${ok}`) ?? 0,
+          }),
+        );
+      }
+      byOrder.sort((a, b) =>
+        a.productionOrderId === null
+          ? 1
+          : b.productionOrderId === null
+            ? -1
+            : Number(a.productionOrderId) - Number(b.productionOrderId),
+      );
+      const sum = (pick: (o: PhoiProgressOrderSegmentDto) => number) =>
+        byOrder.reduce((t, o) => t + pick(o), 0);
+      const concrete = byOrder.filter((o) => o.productionOrderId !== null);
       item.segments.push(
         new PhoiProgressSegmentDto({
           segmentSpecId: specKey,
           cutLengthMm: meta.cutLengthMm,
-          required: requiredBySpec.get(specKey) ?? 0,
-          // BẤT BIẾN - số đã cắt thật, không trừ gì vì lỗi (xem doc comment DTO). "Còn lại" ở FE
-          // tự tính required - (done - failed).
-          done: rawDone,
-          failed,
-          openQty: byOrder.reduce((t, o) => t + o.openQty, 0),
-          awaitingQcQty: byOrder.reduce((t, o) => t + o.awaitingQcQty, 0),
+          // Σ theo SKU: phần của đợt cũ chưa gắn SKU (ở PI nhiều SKU) không vào số cần của SKU nào (AC60).
+          required: sum((o) => o.required),
+          baseRequired: sum((o) => o.baseRequired),
+          extraNeed: sum((o) => o.extraNeed),
+          done: sum((o) => o.done),
+          failed: sum((o) => o.failed),
+          shortQty: sum((o) => o.shortQty),
+          scrapQty: sum((o) => o.scrapQty),
+          reportedQty: sum((o) => o.reportedQty),
+          maxNow: concrete.reduce((t, o) => t + o.maxNow, 0),
+          physicalLeft:
+            step === PROCESS_CAT ? null : concrete.reduce((t, o) => t + (o.physicalLeft ?? 0), 0),
+          openQty: sum((o) => o.openQty),
+          awaitingQcQty: sum((o) => o.awaitingQcQty),
           byOrder,
         }),
       );
@@ -2135,8 +2509,7 @@ export class SteelIssuesService {
     for (const item of byMaterial.values()) {
       item.segments.sort((a, b) => b.cutLengthMm - a.cutLengthMm);
     }
-    await this.attachSteelBalance(byMaterial, issues, machineByMaterial);
-    return [...byMaterial.values()].sort((a, b) => a.materialCode.localeCompare(b.materialCode));
+    return byMaterial;
   }
 
   /**
@@ -2155,6 +2528,7 @@ export class SteelIssuesService {
     byMaterial: Map<string, PhoiProgressItemResponseDto>,
     issues: BaseInputs['issues'],
     machineByMaterial: Map<string, SolverMachine>,
+    reservations: CutInputs['reservations'] = [],
   ): Promise<void> {
     const config = await this.prisma.systemConfig.findUnique({
       where: { id: 1 },
@@ -2183,15 +2557,46 @@ export class SteelIssuesService {
         receivedBarCount += bars;
         usableMm += bars * Math.max(i.barLengthMm - trimMm, 0);
       }
+      // `done` mới = đã báo - thiếu: đoạn KCS ghi thiếu không có thật nên không tốn sắt.
       const reportedMm = item.segments.reduce(
         (t, sg) => t + sg.done * (sg.cutLengthMm + kerfMm),
         0,
       );
+      // Gợi ý cho P1b (chỉ đọc): còn phải cắt bao nhiêu đoạn (theo từng SKU, SKU đã dư không bù cho SKU còn thiếu),
+      // trong đó bao nhiêu là cắt LẠI, cần bao nhiêu sắt, sắt đã nhận chưa cắt và sắt còn xuất được theo giữ chỗ.
+      let remainingSegments = 0;
+      let recutSegments = 0;
+      let remainingNeedMm = 0;
+      for (const sg of item.segments) {
+        let segRemaining = 0;
+        for (const o of sg.byOrder) {
+          if (o.productionOrderId === null) continue;
+          const remaining = Math.max(0, o.required - (o.done - o.failed));
+          segRemaining += remaining;
+          recutSegments += Math.min(o.extraNeed, remaining);
+        }
+        remainingSegments += segRemaining;
+        remainingNeedMm += segRemaining * (sg.cutLengthMm + kerfMm);
+      }
+      const held = reservations.filter(
+        (r) => r.materialId.toString() === item.materialId && r.remaining > 0,
+      );
+      // Không rõ chiều dài cây của phần còn giữ chỗ thì không ước được (null), không coi là 0.
+      const issuableMm = held.some((r) => r.stockLengthMm <= 0)
+        ? null
+        : held.reduce((t, r) => t + r.remaining * r.stockLengthMm, 0);
+      const leftoverReceivedMm = Math.max(0, Math.round(usableMm) - Math.round(reportedMm));
       item.steelBalance = new PhoiSteelBalanceDto({
         receivedBarCount,
         usableMm: Math.round(usableMm),
         reportedMm: Math.round(reportedMm),
         overMm: Math.max(Math.round(reportedMm - usableMm), 0),
+        remainingSegments,
+        recutSegments,
+        remainingNeedMm: Math.round(remainingNeedMm),
+        leftoverReceivedMm,
+        issuableMm,
+        shortMm: Math.max(0, Math.round(remainingNeedMm) - leftoverReceivedMm - (issuableMm ?? 0)),
       });
     }
   }
@@ -2218,152 +2623,19 @@ export class SteelIssuesService {
     inputs: StepInputs,
     step: ProcessStep,
   ): Promise<PhoiProgressItemResponseDto[]> {
-    const { orders, bomPieces, issues } = inputs;
-    // Lọc theo công đoạn trong bộ nhớ (loader tải chung mọi công đoạn của các PI trong 1 lượt).
-    const pieceBoms = inputs.pieceBoms.filter((pb) => pb.processSteps.includes(step));
-    const stepSegments = inputs.stepSegments.filter((ss) => ss.stepBatch.step === step);
-    const qcSegments = inputs.qcSegments.filter((qs) => qs.qcReview.stepBundle?.step === step);
-    if (orders.length === 0) return [];
-
-    // Tách theo SKU (2026-09-21) - cùng quy tắc getPhoiProgress(): PI 1 SKU thì đợt cũ chưa gắn SKU tính cho SKU đó.
-    const soleOrderId = orders.length === 1 ? orders[0].id : null;
-    const orderKey = (id: bigint | null | undefined) => {
-      const resolved = id ?? soleOrderId;
-      return resolved == null ? 'none' : resolved.toString();
-    };
-    const doneBySpecOrder = new Map<string, number>();
-    // Chưa gửi KCS (dòng chưa vào đợt) / chờ KCS (đợt AWAITING_QC) - phần của `done`.
-    const openBySpecOrder = new Map<string, number>();
-    const awaitingBySpecOrder = new Map<string, number>();
-    for (const ss of stepSegments) {
-      const k = `${ss.segmentSpecId}:${orderKey(ss.stepBatch.productionOrderId)}`;
-      doneBySpecOrder.set(k, (doneBySpecOrder.get(k) ?? 0) + ss.qty);
-      if (ss.stepBatch.bundleStatus === null) {
-        openBySpecOrder.set(k, (openBySpecOrder.get(k) ?? 0) + ss.qty);
-      } else if (ss.stepBatch.bundleStatus === StepBundleStatus.AWAITING_QC) {
-        awaitingBySpecOrder.set(k, (awaitingBySpecOrder.get(k) ?? 0) + ss.qty);
-      }
-    }
-    const failedBySpecOrder = new Map<string, number>();
-    for (const qs of qcSegments) {
-      const k = `${qs.segmentSpecId}:${orderKey(qs.qcReview.stepBundle?.productionOrderId)}`;
-      failedBySpecOrder.set(k, (failedBySpecOrder.get(k) ?? 0) + qs.failedQty);
-    }
-    const requiredBySpecOrder = new Map<string, number>();
-
-    const issuedByMaterial = new Map<string, number>();
-    for (const i of issues) {
-      if (i.reworkOfId != null) continue; // chỉ đợt gốc (kế hoạch xuất), như trước khi `issues` gồm cả rework
-      const key = i.materialId.toString();
-      issuedByMaterial.set(key, (issuedByMaterial.get(key) ?? 0) + i.barCount);
-    }
-
-    const doneBySpec = new Map<string, number>();
-    for (const ss of stepSegments) {
-      const key = ss.segmentSpecId.toString();
-      doneBySpec.set(key, (doneBySpec.get(key) ?? 0) + ss.qty);
-    }
-    const failedBySpec = new Map<string, number>();
-    for (const qs of qcSegments) {
-      const key = qs.segmentSpecId.toString();
-      failedBySpec.set(key, (failedBySpec.get(key) ?? 0) + qs.failedQty);
-    }
-
-    const qtyPerUnitByKey = new Map(
-      bomPieces.map((bp) => [`${bp.bomRevisionId}:${bp.pieceId}`, bp.qtyPerUnit]),
+    const byMaterial = await this.buildPhoiProgress(
+      {
+        orders: inputs.orders,
+        bomPieces: inputs.bomPieces,
+        pieceBoms: inputs.pieceBoms,
+        issues: inputs.issues,
+        cutSegments: inputs.cutSegments,
+        qcSegments: inputs.cutQcSegments,
+        stepSegments: inputs.stepSegments,
+        stepQc: inputs.qcSegments,
+      },
+      step,
     );
-    const pieceBomsByRevision = new Map<string, typeof pieceBoms>();
-    for (const pb of pieceBoms) {
-      const key = pb.bomRevisionId.toString();
-      const arr = pieceBomsByRevision.get(key) ?? [];
-      arr.push(pb);
-      pieceBomsByRevision.set(key, arr);
-    }
-
-    const requiredBySpec = new Map<string, number>();
-    const specMeta = new Map<
-      string,
-      { materialId: string; materialCode: string; materialName: string; cutLengthMm: number }
-    >();
-    const registerSpec = (row: (typeof pieceBoms)[number]) => {
-      const specKey = row.segmentSpecId.toString();
-      if (!specMeta.has(specKey)) {
-        specMeta.set(specKey, {
-          materialId: row.segmentSpec.materialId.toString(),
-          materialCode: row.segmentSpec.material.code,
-          materialName: this.materialLabel(row.segmentSpec.material),
-          cutLengthMm: row.segmentSpec.cutLengthMm.toNumber(),
-        });
-      }
-      return specKey;
-    };
-
-    for (const order of orders) {
-      const bomKey = order.bomRevisionId.toString();
-      for (const row of pieceBomsByRevision.get(bomKey) ?? []) {
-        const qtyPerUnit = qtyPerUnitByKey.get(`${bomKey}:${row.pieceId}`) ?? 0;
-        const segments = row.qtyPerPiece * qtyPerUnit * order.quantity;
-        if (segments <= 0) continue;
-        const specKey = registerSpec(row);
-        requiredBySpec.set(specKey, (requiredBySpec.get(specKey) ?? 0) + segments);
-        const ok = `${specKey}:${order.id}`;
-        requiredBySpecOrder.set(ok, (requiredBySpecOrder.get(ok) ?? 0) + segments);
-      }
-    }
-
-    const orphanSpecIds = [...doneBySpec.keys()].filter((k) => !specMeta.has(k));
-    if (orphanSpecIds.length > 0) {
-      const orphans = await this.prisma.segmentSpec.findMany({
-        where: { id: { in: orphanSpecIds.map((k) => BigInt(k)) } },
-        include: { material: true },
-      });
-      for (const o of orphans) {
-        specMeta.set(o.id.toString(), {
-          materialId: o.materialId.toString(),
-          materialCode: o.material.code,
-          materialName: this.materialLabel(o.material),
-          cutLengthMm: o.cutLengthMm.toNumber(),
-        });
-      }
-    }
-
-    const byMaterial = new Map<string, PhoiProgressItemResponseDto>();
-    for (const [specKey, meta] of specMeta) {
-      let item = byMaterial.get(meta.materialId);
-      if (!item) {
-        item = new PhoiProgressItemResponseDto({
-          materialId: meta.materialId,
-          materialCode: meta.materialCode,
-          materialName: meta.materialName,
-          issuedBarCount: issuedByMaterial.get(meta.materialId) ?? 0,
-          segments: [],
-        });
-        byMaterial.set(meta.materialId, item);
-      }
-      const byOrder = this.buildOrderBreakdown(specKey, {
-        required: requiredBySpecOrder,
-        done: doneBySpecOrder,
-        failed: failedBySpecOrder,
-        open: openBySpecOrder,
-        awaiting: awaitingBySpecOrder,
-      });
-      item.segments.push(
-        new PhoiProgressSegmentDto({
-          segmentSpecId: specKey,
-          cutLengthMm: meta.cutLengthMm,
-          required: requiredBySpec.get(specKey) ?? 0,
-          done: doneBySpec.get(specKey) ?? 0,
-          failed: failedBySpec.get(specKey) ?? 0,
-          openQty: byOrder.reduce((t, o) => t + o.openQty, 0),
-          awaitingQcQty: byOrder.reduce((t, o) => t + o.awaitingQcQty, 0),
-          byOrder,
-        }),
-      );
-    }
-
-    for (const item of byMaterial.values()) {
-      item.segments.sort((a, b) => b.cutLengthMm - a.cutLengthMm);
-    }
     return [...byMaterial.values()].sort((a, b) => a.materialCode.localeCompare(b.materialCode));
   }
 
@@ -2387,8 +2659,9 @@ export class SteelIssuesService {
       throw new BadRequestException('Công đoạn Cắt dùng route cut-batches riêng, không qua đây');
     }
     // Gửi lại cùng khoá -> trả đúng đợt đã ghi (2026-10-12, xem FloorReport).
+    // Đã hủy hết lần báo đó (stepBatchId về NULL) thì báo câu lời thường, không ghi lại (P1, AC53).
     const replay = await this.replayFloorReport(idempotencyKey, FloorReportKind.STEP);
-    if (replay?.stepBatchId) return this.toStepBatchResponse(replay.stepBatchId);
+    if (replay) return this.replayStepReport(replay.stepBatchId);
     const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
     const materialBigId = parseBigIntId(dto.materialId);
     await assertPiHasActiveFloor(this.prisma, invoice.id, 'nhập công đoạn chi tiết');
@@ -2400,7 +2673,6 @@ export class SteelIssuesService {
         `SKU (lệnh sản xuất ${dto.productionOrderId}) không thuộc PI này`,
       );
     }
-    const ofSku = this.skuScope(piOrders, order.id);
     const requiredSteps = await this.resolveRequiredSteps(invoice.id, materialBigId);
     if (!requiredSteps.includes(dto.step)) {
       throw new BadRequestException(
@@ -2433,110 +2705,74 @@ export class SteelIssuesService {
       }
     }
 
-    // Đính chính audit độc lập 09/09 (Nghiêm trọng #6) - trước đây `catRows`/`stepDoneRows` đọc
-    // NGOÀI transaction, không khoá, rồi mới create() - 2 request báo công đoạn gần như đồng thời
-    // cho cùng (invoice, material, step) đều đọc cùng `stepDoneSoFar` cũ, đều pass check "không
-    // vượt catDone", đều tạo dòng -> tổng đã báo công đoạn VƯỢT số thực đã cắt (bất biến nghiệp vụ
-    // bị phá), sai lệch không có gì tự đối chiếu lại sau đó. Mirror ĐÚNG khuôn
+    // Đính chính audit độc lập 09/09 (Nghiêm trọng #6) - số đã báo phải đọc TRONG khoá, không phải ngoài
+    // transaction: 2 request báo công đoạn gần như đồng thời cho cùng (invoice, material, step) mà đọc ngoài khoá
+    // đều thấy số cũ, đều qua phép chặn, tổng đã báo VƯỢT. Mirror ĐÚNG khuôn
     // ProductionBatchesService.recordPieceStepBatch() (đã làm đúng cho nhánh VTTP): bọc
     // $transaction + lockBusinessKey theo (invoice, material, step) trước khi đọc lại
     // stepDoneSoFar, giữ khoá tới khi ghi xong dòng mới.
     let created: { id: bigint };
     try {
-      created = await this.prisma.$transaction(async (tx) => {
-        await lockBusinessKey(
-          tx,
-          `step-batch:${invoice.id}:${materialBigId}:${dto.step}:${order.id}`,
-        );
-        await assertPiHasActiveFloorLocked(tx, invoice.id, 'nhập công đoạn chi tiết');
+      created = await this.prisma.$transaction(
+        async (tx) => {
+          await lockBusinessKey(
+            tx,
+            `step-batch:${invoice.id}:${materialBigId}:${dto.step}:${order.id}`,
+          );
+          await assertPiHasActiveFloorLocked(tx, invoice.id, 'nhập công đoạn chi tiết');
 
-        const [catRows, stepDoneRows] = await Promise.all([
-          tx.cutPatternSegment.findMany({
-            where: {
-              segmentSpecId: { in: specIds },
-              cutBundle: {
-                steelIssue: { productionInvoiceId: invoice.id, materialId: materialBigId },
-                ...ofSku,
-              },
-            },
-            select: { segmentSpecId: true, qty: true },
-          }),
-          tx.stepBatchSegment.findMany({
-            where: {
-              segmentSpecId: { in: specIds },
-              stepBatch: {
-                productionInvoiceId: invoice.id,
-                materialId: materialBigId,
-                step: dto.step,
-                ...ofSku,
-              },
-            },
-            select: { segmentSpecId: true, qty: true },
-          }),
-        ]);
-
-        const catDoneBySpec = new Map<string, number>();
-        for (const r of catRows) {
-          const k = r.segmentSpecId.toString();
-          catDoneBySpec.set(k, (catDoneBySpec.get(k) ?? 0) + r.qty);
-        }
-        const stepDoneBySpec = new Map<string, number>();
-        for (const r of stepDoneRows) {
-          const k = r.segmentSpecId.toString();
-          stepDoneBySpec.set(k, (stepDoneBySpec.get(k) ?? 0) + r.qty);
-        }
-
-        for (const seg of dto.segments) {
-          const specKey = parseBigIntId(seg.segmentSpecId).toString();
-          const spec = specById.get(specKey)!;
-          const catDone = catDoneBySpec.get(specKey) ?? 0;
-          const stepDoneSoFar = stepDoneBySpec.get(specKey) ?? 0;
-          if (stepDoneSoFar + seg.qty > catDone) {
-            throw new BadRequestException(
-              `Cỡ đoạn ${spec.cutLengthMm.toString()}mm: đã cắt ${catDone} đoạn (của SKU này), đã báo ` +
-                // "kể cả đoạn KCS chấm lỗi": màn quét hiện số đã trừ lỗi (17/11/2026), số ở đây là số đã báo thô.
-                `${processStepLabel(dto.step)} ${stepDoneSoFar} đoạn (kể cả đoạn KCS chấm lỗi) - không thể báo thêm ${seg.qty}. ` +
-                // Chỉ cần cắt thêm PHẦN VƯỢT số đã cắt (vd đã cắt 8, đã báo 6, báo thêm 5 -> cắt thêm 3), không phải cả số định báo.
-                `Muốn báo ${processStepLabel(dto.step)} bù thì báo cắt thêm ${stepDoneSoFar + seg.qty - catDone} đoạn ${spec.cutLengthMm.toString()}mm ở máy cắt trước.`,
-            );
-          }
-        }
-
-        const batch = await tx.stepBatch.create({
-          data: {
-            productionInvoiceId: invoice.id,
+          // P1: chặn theo SỐ CẦN (kể cả phần làm bù cho đoạn KCS bỏ) và theo GIỚI HẠN VẬT LÝ (đoạn cắt thực có - đoạn đã
+          // dùng), cùng hàm với số "còn báo được" hiện ở màn quét. Đọc ngay trong khoá step-batch.
+          await this.assertStepWithinNeedInTx(tx, {
+            piId: invoice.id,
             materialId: materialBigId,
             step: dto.step,
-            productionOrderId: order.id,
-            // Người báo (2026-10-13): "Gửi KCS" của QLSX gom đợt THEO NGƯỜI để KCS chấm biết của ai.
-            reportedById,
-            segments: {
-              create: dto.segments.map((seg) => ({
-                segmentSpecId: parseBigIntId(seg.segmentSpecId),
-                qty: seg.qty,
-              })),
+            order,
+            piOrders,
+            lines: dto.segments.map((seg) => ({
+              specId: parseBigIntId(seg.segmentSpecId),
+              qty: seg.qty,
+              mm: specById.get(parseBigIntId(seg.segmentSpecId).toString())!.cutLengthMm.toString(),
+            })),
+          });
+
+          const batch = await tx.stepBatch.create({
+            data: {
+              productionInvoiceId: invoice.id,
+              materialId: materialBigId,
+              step: dto.step,
+              productionOrderId: order.id,
+              // Người báo (2026-10-13): "Gửi KCS" của QLSX gom đợt THEO NGƯỜI để KCS chấm biết của ai.
+              reportedById,
+              segments: {
+                create: dto.segments.map((seg) => ({
+                  segmentSpecId: parseBigIntId(seg.segmentSpecId),
+                  qty: seg.qty,
+                })),
+              },
             },
-          },
-        });
-        // Người báo từng lần nằm ở sổ floor_reports (cùng transaction); cột reportedById trên StepBatch dùng để gom đợt.
-        await writeFloorReport(tx, {
-          kind: FloorReportKind.STEP,
-          reportedById,
-          idempotencyKey,
-          stepBatchId: batch.id,
-          workstationId: ctx?.workstationId,
-          productionInvoiceId: invoice.id,
-          lines: dto.segments.map((seg) => ({
-            segmentSpecId: parseBigIntId(seg.segmentSpecId),
-            qty: seg.qty,
-          })),
-        });
-        return batch;
-      });
+          });
+          // Người báo từng lần nằm ở sổ floor_reports (cùng transaction); cột reportedById trên StepBatch dùng để gom đợt.
+          await writeFloorReport(tx, {
+            kind: FloorReportKind.STEP,
+            reportedById,
+            idempotencyKey,
+            stepBatchId: batch.id,
+            workstationId: ctx?.workstationId,
+            productionInvoiceId: invoice.id,
+            lines: dto.segments.map((seg) => ({
+              segmentSpecId: parseBigIntId(seg.segmentSpecId),
+              qty: seg.qty,
+            })),
+          });
+          return batch;
+        },
+        { timeout: 20_000 },
+      );
     } catch (e) {
       if (isIdempotencyConflict(e)) {
         const raced = await this.replayFloorReport(idempotencyKey, FloorReportKind.STEP);
-        if (raced?.stepBatchId) return this.toStepBatchResponse(raced.stepBatchId);
+        if (raced) return this.replayStepReport(raced.stepBatchId);
       }
       throw e;
     }
@@ -2561,37 +2797,6 @@ export class SteelIssuesService {
           }),
       ),
     });
-  }
-
-  /** Tách (cỡ đoạn) theo SKU từ các map khoá `${specKey}:${orderKey|'none'}` - dùng cho cả Cắt lẫn công đoạn phụ. */
-  private buildOrderBreakdown(
-    specKey: string,
-    maps: {
-      required: Map<string, number>;
-      done: Map<string, number>;
-      failed: Map<string, number>;
-      open: Map<string, number>;
-      awaiting: Map<string, number>;
-    },
-  ): PhoiProgressOrderSegmentDto[] {
-    const orderKeys = new Set<string>();
-    for (const m of [maps.required, maps.done, maps.failed]) {
-      for (const k of m.keys())
-        if (k.startsWith(`${specKey}:`)) orderKeys.add(k.slice(specKey.length + 1));
-    }
-    return [...orderKeys]
-      .sort((a, b) => (a === 'none' ? 1 : b === 'none' ? -1 : Number(a) - Number(b)))
-      .map(
-        (ok) =>
-          new PhoiProgressOrderSegmentDto({
-            productionOrderId: ok === 'none' ? null : ok,
-            required: maps.required.get(`${specKey}:${ok}`) ?? 0,
-            done: maps.done.get(`${specKey}:${ok}`) ?? 0,
-            failed: maps.failed.get(`${specKey}:${ok}`) ?? 0,
-            openQty: maps.open.get(`${specKey}:${ok}`) ?? 0,
-            awaitingQcQty: maps.awaiting.get(`${specKey}:${ok}`) ?? 0,
-          }),
-      );
   }
 
   /**
@@ -2619,11 +2824,15 @@ export class SteelIssuesService {
    * Gọi TRONG transaction, sau khi đã khoá dòng cut_bundles. Khoá thêm step-batch của MỌI công đoạn (cùng khoá
    * recordStepBatch, theo thứ tự cố định) rồi mới đọc: 1 lần báo công đoạn hay 1 lần hủy báo cắt khác của cùng SKU
    * chạy cùng lúc phải chờ, sau đó đọc được số mới.
+   *
+   * `opts.reassign` (ADMIN sửa SKU của đợt cắt, P1): đợt đi cả phiếu KCS của nó sang SKU khác nên SKU cũ mất luôn số
+   * thô lẫn số thiếu / lỗi của chính đợt đó - trừ cả ba rồi so; câu lỗi nói về việc sửa SKU, không phải hủy.
    */
   async assertStepsWithinCutAfterReduceInTx(
     tx: PrismaTx,
     cutBundleId: bigint,
     reduce: { segmentSpecId: bigint; qty: number }[],
+    opts: { reassign?: boolean } = {},
   ): Promise<void> {
     const reduceBySpec = new Map<string, number>();
     for (const r of reduce) {
@@ -2643,55 +2852,72 @@ export class SteelIssuesService {
     const { productionInvoiceId: piId, materialId } = bundle.steelIssue;
     const piOrders = await tx.productionOrder.findMany({
       where: { productionInvoiceItem: { productionInvoiceId: piId } },
-      select: { id: true },
+      select: { id: true, bomRevisionId: true, quantity: true },
     });
     // Đợt chưa gắn SKU ở PI nhiều SKU không tính cho SKU nào (skuScope) - trừ nó không đổi số cắt của SKU nào.
     const orderId = bundle.productionOrderId ?? (piOrders.length === 1 ? piOrders[0].id : null);
     if (orderId == null) return;
+    const order = piOrders.find((o) => o.id === orderId);
+    if (!order) return;
 
     for (const step of Object.values(ProcessStep)) {
       if (step === ProcessStep.CAT) continue;
       await lockBusinessKey(tx, `step-batch:${piId}:${materialId}:${step}:${orderId}`);
     }
-    const ofSku = this.skuScope(piOrders, orderId);
     const specIds = [...reduceBySpec.keys()].map((k) => BigInt(k));
-    const [catRows, stepRows, specs] = await Promise.all([
-      tx.cutPatternSegment.findMany({
-        where: {
-          segmentSpecId: { in: specIds },
-          cutBundle: { steelIssue: { productionInvoiceId: piId, materialId }, ...ofSku },
-        },
-        select: { segmentSpecId: true, qty: true },
-      }),
-      tx.stepBatchSegment.findMany({
-        where: {
-          segmentSpecId: { in: specIds },
-          stepBatch: { productionInvoiceId: piId, materialId, ...ofSku },
-        },
-        select: { segmentSpecId: true, qty: true, stepBatch: { select: { step: true } } },
-      }),
+    const [index, specs] = await Promise.all([
+      this.loadNeedIndex(tx, { piId, materialId, order, piOrders, specIds }),
       tx.segmentSpec.findMany({
         where: { id: { in: specIds } },
         select: { id: true, cutLengthMm: true },
       }),
     ]);
-    for (const [specKey, minus] of reduceBySpec) {
-      const catAfter =
-        catRows
-          .filter((r) => r.segmentSpecId.toString() === specKey)
-          .reduce((t, r) => t + r.qty, 0) - minus;
-      const byStep = new Map<ProcessStep, number>();
-      for (const r of stepRows) {
-        if (r.segmentSpecId.toString() !== specKey) continue;
-        byStep.set(r.stepBatch.step, (byStep.get(r.stepBatch.step) ?? 0) + r.qty);
+    // Sửa SKU: phiếu KCS của chính đợt đi theo đợt sang SKU mới nên cũng bị bỏ khỏi SKU cũ (thiếu / lỗi của Cắt).
+    const ownFailedBySpec = new Map<string, number>();
+    const ownShortBySpec = new Map<string, number>();
+    if (opts.reassign) {
+      const ownQc = await tx.qcReviewSegment.findMany({
+        where: { segmentSpecId: { in: specIds }, qcReview: { cutBundleId } },
+        select: { segmentSpecId: true, failedQty: true, shortQty: true },
+      });
+      for (const r of ownQc) {
+        const k = r.segmentSpecId.toString();
+        ownFailedBySpec.set(k, (ownFailedBySpec.get(k) ?? 0) + r.failedQty);
+        ownShortBySpec.set(k, (ownShortBySpec.get(k) ?? 0) + r.shortQty);
       }
-      for (const [step, done] of byStep) {
-        if (done > catAfter) {
+    }
+    for (const [specKey, minus] of reduceBySpec) {
+      const base = index.get(orderId.toString(), specKey) ?? EMPTY_NEED_INPUT;
+      // P1: vế vật lý = đoạn cắt thực có (thô - thiếu) SAU khi trừ `minus` so với số đoạn đã DÙNG của từng công đoạn
+      // (thô - thiếu - phần làm lại) - đoạn KCS cho làm lại không tốn đoạn cắt mới.
+      const cutCounts = base.counts.CAT ?? { raw: 0, failed: 0, short: 0, scrap: 0 };
+      const after: PhoiNeedInput = {
+        ...base,
+        counts: {
+          ...base.counts,
+          CAT: {
+            ...cutCounts,
+            raw: cutCounts.raw - minus,
+            failed: cutCounts.failed - (ownFailedBySpec.get(specKey) ?? 0),
+            short: cutCounts.short - (ownShortBySpec.get(specKey) ?? 0),
+          },
+        },
+      };
+      for (const step of Object.values(ProcessStep)) {
+        if (step === ProcessStep.CAT || !after.counts[step]?.raw) continue;
+        const n = computePhoiStep(after, step);
+        if (n.used != null && n.cutCap != null && n.used > n.cutCap) {
           const mm =
             specs.find((s) => s.id.toString() === specKey)?.cutLengthMm.toString() ?? specKey;
+          if (opts.reassign) {
+            throw new BadRequestException(
+              `Sửa SKU đợt cắt này làm ${processStepLabel(step)} cỡ ${mm}mm của SKU cũ vượt số đoạn cắt thực có ` +
+                `${Math.max(n.cutCap, 0)} đoạn (đã dùng ${n.used}) - hủy bớt lần báo ${processStepLabel(step)} của SKU cũ trước.`,
+            );
+          }
           throw new BadRequestException(
-            `Hủy số cắt này làm cỡ ${mm}mm của SKU chỉ còn ${Math.max(catAfter, 0)} đoạn đã cắt, ít hơn ` +
-              `${done} đoạn đã báo ${processStepLabel(step)} - hủy lần báo ${processStepLabel(step)} trước rồi hủy lần báo cắt`,
+            `Hủy số cắt này làm cỡ ${mm}mm của SKU chỉ còn ${Math.max(n.cutCap, 0)} đoạn đã cắt, ít hơn ` +
+              `${n.used} đoạn đã báo ${processStepLabel(step)} - hủy lần báo ${processStepLabel(step)} trước rồi hủy lần báo cắt`,
           );
         }
       }

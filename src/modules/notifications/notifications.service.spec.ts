@@ -282,7 +282,9 @@ describe('NotificationsService', () => {
         { data: { title: string; message: string } },
       ];
       expect(legacy.data.title).toBe('PI-2026-044: KCS chấm lỗi 3');
-      expect(legacy.data.message).toContain('Công nhân báo bù bằng quét mã QR');
+      expect(legacy.data.message).toContain(
+        'Công nhân làm bù 3 rồi quét mã QR báo bù; KCS tự chấm đợt mới',
+      );
     });
 
     it('Câu 8 (Sản xuất): QC_FAILED với piCode PI- hiện số LSX ở tiêu đề; loại ngoài danh sách không tra PI', async () => {
@@ -553,6 +555,54 @@ describe('NotificationsService', () => {
         params: { stage: 'PHOI', count: 4, hours: 4 },
       });
       expect(created().title).toBe('Tổ Phôi: 4 đợt chờ gửi KCS quá 4 giờ');
+    });
+
+    it('KCS_BATCH_STALE: tiêu đề có tên xưởng, bỏ khoá xưởng thì bỏ phần " · "; nội dung nói KCS chưa chấm', async () => {
+      await service.emit('KCS_BATCH_STALE', {
+        entityId: 'HAN:2',
+        params: { stage: 'HAN', count: 3, hours: 4, workshopId: '2', workshopName: 'Xưởng B' },
+      });
+      expect(created().title).toBe('Tổ Hàn · Xưởng B: 3 đợt chờ KCS chấm quá 4 giờ');
+      expect(created().message).toBe(
+        'Công nhân đã báo, KCS chưa chấm quá 4 giờ - vào màn KCS Hàn chấm các đợt này.',
+      );
+      expect(created().link).toEqual({ module: 'production', page: 'kcs-han' });
+      prisma.notification.create.mockClear();
+      await service.emit('KCS_BATCH_STALE', {
+        entityId: 'SON:none',
+        params: { stage: 'SON', count: 1, hours: 4 },
+      });
+      expect(created().title).toBe('Tổ Sơn: 1 đợt chờ KCS chấm quá 4 giờ');
+    });
+
+    it('QC_FAILED: câu mặc định dùng failedQty, có todo thì todo thắng', async () => {
+      await service.emit('QC_FAILED', {
+        entityId: '1',
+        params: { piCode: 'GP-1', failedQty: 5, senderRole: 'HAN_STAFF' },
+      });
+      expect(created().message).toBe(
+        'Công nhân làm bù 5 rồi quét mã QR báo bù; KCS tự chấm đợt mới. Vật tư TP thì báo bù ở Lệnh sản xuất.',
+      );
+      prisma.notification.create.mockClear();
+      await service.emit('QC_FAILED', {
+        entityId: '1',
+        params: { piCode: 'GP-1', failedQty: 5, senderRole: 'PHOI_STAFF', todo: 'Cắt bù 5 đoạn' },
+      });
+      expect(created().message).toBe('Cắt bù 5 đoạn');
+    });
+
+    it('QC_PASSED: có note thì hiện note, không có thì "Không có lỗi."', async () => {
+      await service.emit('QC_PASSED', {
+        entityId: '1',
+        params: {
+          piCode: 'GP-1',
+          note: 'KCS ghi thiếu 2 đoạn so với số báo (đã trừ, không tính lỗi, không cần làm bù).',
+        },
+      });
+      expect(created().message).toContain('KCS ghi thiếu 2 đoạn');
+      prisma.notification.create.mockClear();
+      await service.emit('QC_PASSED', { entityId: '2', params: { piCode: 'GP-1' } });
+      expect(created().message).toBe('Không có lỗi.');
     });
 
     it('FLOOR_STAGE_COMPLETE: nội dung dùng tên nút "Chuyển lệnh tiếp"', async () => {

@@ -170,8 +170,8 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
   // @RequireRole('BOSS') (xem production-invoices controller).
   [BUSINESS_ROLES.PRODUCTION_MANAGER]: [
     // QR tại máy (2026-10-13): QLSX quản lý điểm làm việc + in mã QR, tài khoản công nhân, hàng đợi PI
-    // theo tổ ("Chuyển PI tiếp"), kiểm rồi "Gửi KCS" (APPROVE), đảo 1 lần báo sai. Route của module này gắn
-    // thêm @RequireRole(PRODUCTION_MANAGER) nên BOSS (VIEW+APPROVE mọi module) không tự gửi KCS được.
+    // theo tổ ("Chuyển PI tiếp"), kiểm và đảo 1 lần báo sai. Từ P1 (18/11/2026) KCS tự chấm nên QLSX không còn "Gửi KCS"
+    // (3 route send-kcs trả 403). Route của module này gắn thêm @RequireRole(PRODUCTION_MANAGER) nên BOSS không tự thao tác được.
     { module: PERMISSION_MODULES.FLOOR_REPORT, actions: 'ALL' },
     // 2026-10-19 (changelog 10-08 mục 46.4-1/47): chỉ VIEW - QLSX xem kết quả/lý do KCS chấm và nhận realtime KCS;
     // việc chấm vẫn là của KCS_STAFF. Production phải chạy lại `npm run seed` để vai trò có quyền này.
@@ -657,6 +657,13 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     // đang tạm dừng. Chỉ VIEW - Bắt đầu/Tạm dừng/Kết thúc lệnh vẫn là việc của QLSX.
     {
       module: PERMISSION_MODULES.PRODUCTION_ORDER,
+      actions: [PermissionAction.VIEW],
+    },
+    // P1 (18/11/2026): KCS tự chuyển - KCS tự thấy và chốt các đợt công nhân vừa báo (GET /floor/review), nhận realtime
+    // phòng 'floor'. Chỉ VIEW, KHÔNG CREATE (không tự báo sản lượng, không hủy lần báo). Phải nằm cùng commit với migration
+    // 20261118100100 vì seed đồng bộ quyền bằng cách xoá dòng thừa (prisma/seed.ts).
+    {
+      module: PERMISSION_MODULES.FLOOR_REPORT,
       actions: [PermissionAction.VIEW],
     },
   ],

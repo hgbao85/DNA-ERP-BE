@@ -5,6 +5,7 @@ import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { BomRevisionStatus, CuttingProposalStatus } from '../../generated/prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SegmentStockService } from '../segment-stock/segment-stock.service';
+import { RealtimeService } from '../../realtime/realtime.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { ProductionOrdersService } from './production-orders.service';
@@ -48,6 +49,7 @@ describe('ProductionOrdersService', () => {
   let notifications: { emit: jest.Mock; resolve: jest.Mock };
   let stockReservationsService: { releaseByProductionInvoice: jest.Mock };
   let segmentStockService: { releaseOrderHoldings: jest.Mock };
+  let realtime: { publishEntityChanged: jest.Mock };
   const tx = { tag: 'tx' };
 
   const activeRevision = { id: 5n, mfgProductId: 2n, status: BomRevisionStatus.ACTIVE };
@@ -107,6 +109,7 @@ describe('ProductionOrdersService', () => {
     segmentStockService = {
       releaseOrderHoldings: jest.fn().mockResolvedValue({ releasedQty: 0, reservationCount: 0 }),
     };
+    realtime = { publishEntityChanged: jest.fn() };
     // Mặc định mọi lệnh của PI đã Kết thúc (count chưa-xong = 0) - test riêng của nhả giữ chỗ tự override.
     prisma.productionOrder.count.mockResolvedValue(0);
     prisma.productionInvoiceItem.findUniqueOrThrow.mockResolvedValue({ productionInvoiceId: 500n });
@@ -117,6 +120,7 @@ describe('ProductionOrdersService', () => {
       stockReservationsService as unknown as StockReservationsService,
       makeScope(),
       segmentStockService as unknown as SegmentStockService,
+      realtime as unknown as RealtimeService,
     );
     // Mặc định không có bản ACTIVE nào khớp -> bomOutOfDate=false, không phá các test không quan
     // tâm field này - test riêng của bomOutOfDate tự override lại mock này.
@@ -807,7 +811,28 @@ describe('ProductionOrdersService', () => {
 
       expect(auditCalls()).toHaveLength(0);
       expect(notifications.emit).not.toHaveBeenCalled();
+      expect(realtime.publishEntityChanged).not.toHaveBeenCalled();
     });
+
+    // P1 (19/11): KCS không có PRODUCTION_ORDER:VIEW nên không nhận topic 'production-orders' -> đổi trạng thái xưởng phát
+    // thêm FLOOR_REPORT (topic 'floor') để màn KCS tô xám / mở lại đợt của lệnh ngay.
+    it.each([
+      ['Tạm dừng', 'ACTIVE', 'PAUSED', (id: string) => service.pauseFloor(id)],
+      ['Tiếp tục', 'PAUSED', 'ACTIVE', (id: string) => service.startFloor(id)],
+      ['Kết thúc', 'ACTIVE', 'FINISHED', (id: string) => service.finishFloor(id)],
+    ] as const)(
+      'P1: %s phát FLOOR_REPORT (topic floor) cho màn KCS',
+      async (_label, from, to, call) => {
+        prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: from }));
+        prisma.productionOrder.update.mockResolvedValue(order({ floorStage: to }));
+
+        await call('9');
+
+        expect(realtime.publishEntityChanged).toHaveBeenCalledWith(
+          expect.objectContaining({ entity: 'FLOOR_REPORT', entityId: '9', action: 'UPDATED' }),
+        );
+      },
+    );
 
     it('lỗi phát thông báo KHÔNG làm hỏng việc đổi trạng thái đã ghi', async () => {
       prisma.productionOrder.findUnique.mockResolvedValue(order({ floorStage: 'ACTIVE' }));

@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { MaterialYieldRecipesModule } from '../material-yield-recipes/material-yield-recipes.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ProductionBatchesModule } from '../production-batches/production-batches.module';
 import { SteelIssuesModule } from '../steel-issues/steel-issues.module';
@@ -19,6 +20,8 @@ import { FloorStatsService } from './floor-stats.service';
   imports: [
     SteelIssuesModule,
     ProductionBatchesModule,
+    // P1: KCS chốt nhóm chân nhôm (MaterialYieldRecipeProductionService.submitStep). Module này chỉ import Stock / Notifications -> không vòng.
+    MaterialYieldRecipesModule,
     NotificationsModule,
     WarehouseTransfersModule,
   ],

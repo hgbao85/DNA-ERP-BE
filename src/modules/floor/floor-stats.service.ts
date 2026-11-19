@@ -85,9 +85,9 @@ const specLabel = (s: SegSpec) => `${s.cutLengthMm.toString()}mm · ${s.material
  * giờ VN). Sau KCS không đảo được nữa (floor-review.service) nên số ổn định, hợp làm số chính thức cho tính công sau này.
  *
  * Nguồn theo từng nhánh (đúng cách KCS ghi, xem qc-reviews.service):
- *  - Cắt:        đã cắt theo cỡ = Σ cut_pattern_segments của đợt; lỗi theo cỡ = qc_review_segments; đạt = đã cắt − lỗi.
- *  - Công đoạn phụ (Uốn/Dập/...): đã làm theo cỡ = Σ step_batch_segments của các đợt trong bundle; lỗi/đạt như trên.
- *  - Hàn/Sơn (và mảnh Phôi): `production_batches.reportedQty` ĐÃ bị ghi đè = phần ĐẠT khi KCS duyệt; lỗi = qc_reviews.failedQty.
+ *  - Cắt:        đã cắt theo cỡ = Σ cut_pattern_segments của đợt; lỗi / thiếu theo cỡ = qc_review_segments; đạt = đã cắt − lỗi − thiếu (P1: thiếu không tính lỗi).
+ *  - Công đoạn phụ (Uốn/Dập/...): đã làm theo cỡ = Σ step_batch_segments của các đợt trong bundle; lỗi / thiếu / đạt như trên.
+ *  - Hàn/Sơn (và mảnh Phôi): `production_batches.reportedQty` ĐÃ bị ghi đè = phần ĐẠT (đã trừ lỗi + thiếu) khi KCS duyệt; lỗi = qc_reviews.failedQty.
  * Người làm: chủ đợt (cut_bundles.openedById / step_bundles.reportedById / production_batches.reportedById).
  *
  * Trả các dòng chi tiết (kỳ × loại việc × công nhân × cỡ/mảnh); màn hình tự cộng + lọc nên đổi bộ lọc không gọi lại máy chủ.
@@ -139,7 +139,7 @@ export class FloorStatsService {
             },
             select: {
               reviewedAt: true,
-              segments: { select: { segmentSpecId: true, failedQty: true } },
+              segments: { select: { segmentSpecId: true, failedQty: true, shortQty: true } },
               cutBundle: {
                 select: {
                   openedById: true,
@@ -160,7 +160,7 @@ export class FloorStatsService {
             },
             select: {
               reviewedAt: true,
-              segments: { select: { segmentSpecId: true, failedQty: true } },
+              segments: { select: { segmentSpecId: true, failedQty: true, shortQty: true } },
               stepBundle: {
                 select: {
                   step: true,
@@ -262,14 +262,16 @@ export class FloorStatsService {
       const failedBySpec = new Map(
         r.segments.map((s) => [s.segmentSpecId.toString(), s.failedQty]),
       );
+      const shortBySpec = new Map(r.segments.map((s) => [s.segmentSpecId.toString(), s.shortQty]));
       for (const seg of b.segments) {
         const failed = failedBySpec.get(seg.segmentSpecId.toString()) ?? 0;
+        const short = shortBySpec.get(seg.segmentSpecId.toString()) ?? 0;
         add(
           r.reviewedAt,
           'CAT',
           { id: b.openedById, user: b.openedBy },
           specLabel(seg.segmentSpec),
-          Math.max(0, seg.qty - failed),
+          Math.max(0, seg.qty - failed - short),
           failed,
         );
       }
@@ -281,6 +283,7 @@ export class FloorStatsService {
       const failedBySpec = new Map(
         r.segments.map((s) => [s.segmentSpecId.toString(), s.failedQty]),
       );
+      const shortBySpec = new Map(r.segments.map((s) => [s.segmentSpecId.toString(), s.shortQty]));
       // Đã làm theo cỡ = cộng mọi đợt báo trong bundle.
       const doneBySpec = new Map<string, { qty: number; spec: SegSpec }>();
       for (const batch of b.batches) {
@@ -293,12 +296,13 @@ export class FloorStatsService {
       }
       for (const [k, d] of doneBySpec) {
         const failed = failedBySpec.get(k) ?? 0;
+        const short = shortBySpec.get(k) ?? 0;
         add(
           r.reviewedAt,
           b.step,
           { id: b.reportedById, user: b.reportedBy },
           specLabel(d.spec),
-          Math.max(0, d.qty - failed),
+          Math.max(0, d.qty - failed - short),
           failed,
         );
       }

@@ -4,7 +4,7 @@ import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 import {
   NOTIFICATION_TYPES,
-  type FloorBatchStaleParams,
+  type KcsBatchStaleParams,
   type NotificationType,
 } from '../notifications/notification-types';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -21,21 +21,12 @@ import {
 import { CutSnapshotCache } from './cut-allocation-snapshot';
 import type { SteelGap } from './cut-allocation-types';
 import { FloorAdminService } from './floor-admin.service';
-import {
-  groupStaleByQueueWorkshop,
-  staleBucketKey,
-  type StaleBucket,
-  type StaleItem,
-} from './floor-stale.util';
+import { KCS_STALE_HOURS, listKcsPendingItems } from './kcs-pending.util';
+import { groupStaleByQueueWorkshop, staleBucketKey, type StaleBucket } from './floor-stale.util';
 
 type CutMachineAlertType = 'CUT_MACHINE_LOW_WORK' | 'CUT_MACHINE_IDLE';
 const CUT_MACHINE_ALERT_TYPES: CutMachineAlertType[] = ['CUT_MACHINE_LOW_WORK', 'CUT_MACHINE_IDLE'];
 
-/**
- * Đợt công nhân đã báo mà QLSX chưa gửi KCS quá bấy nhiêu giờ thì nhắc (FE cũng tô ⚠ cùng ngưỡng
- * này).
- */
-export const STALE_HOURS = 4;
 /**
  * Quét định kỳ - bổ sung cho kiểm tra ngay sau mỗi thao tác ghi (bắt cả báo từ màn thống kê cũ và
  * sự kiện lỡ).
@@ -60,8 +51,8 @@ function autoPullEnabled(): boolean {
 }
 
 /**
- * Nhắc QLSX: (1) tổ Hàn/Sơn báo ĐỦ số cần của PI đang chạy -> kiểm + "Chuyển PI tiếp"; (2) đợt chờ
- * gửi KCS quá STALE_HOURS giờ. Chỉ là nhắc - không chặn, không tự chuyển PI. (3) Tổ PHÔI không còn
+ * Nhắc QLSX: (1) tổ Hàn/Sơn báo ĐỦ số cần của PI đang chạy -> kiểm + "Chuyển PI tiếp"; (2) đợt công
+ * nhân đã báo mà KCS chưa chấm quá KCS_STALE_HOURS giờ (KCS_BATCH_STALE, từ P1; QLSX không còn "gửi KCS"). Chỉ là nhắc - không chặn, không tự chuyển PI. (3) Tổ PHÔI không còn
  * nhắc: lệnh xong Phôi khi mọi dòng tổ Phôi đã KCS đạt đủ thì hệ thống TỰ đóng
  * (FloorAdminService.autoCompletePhoi) rồi báo FLOOR_PHOI_DONE. (4) Máy cắt còn ≤ 20 cây / đã cắt
  * hết việc được chia thì báo KHSX + QLSX.
@@ -645,13 +636,21 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Đợt chờ gửi KCS quá STALE_HOURS giờ: mỗi (tổ, xưởng hàng đợi) 1 tin, người nhận là QLSX của xưởng
-   * đó (và QLSX chung) nhờ params.workshopId.
+   * Đợt công nhân đã báo mà KCS chưa chấm (đang mở + đã chốt chưa chấm xong) quá KCS_STALE_HOURS giờ: mỗi (tổ,
+   * xưởng hàng đợi) 1 tin KCS_BATCH_STALE; người nhận là KCS và QLSX của xưởng đó (và QLSX chung) nhờ
+   * params.workshopId. Dòng bị chặn (lệnh dừng / chưa gắn SKU) không tính. Cuối lượt đóng mọi tin
+   * FLOOR_BATCH_STALE còn mở (ngừng phát từ P1, kể cả entityId kiểu cũ).
    */
   private async checkStale(now: Date): Promise<void> {
-    const items = await this.listStaleItems(new Date(now.getTime() - STALE_HOURS * 3_600_000));
-    const buckets = await groupStaleByQueueWorkshop(this.prisma, items);
-    await this.syncStageWorkshopAlerts('FLOOR_BATCH_STALE', buckets);
+    const items = await listKcsPendingItems(this.prisma, {
+      staleBefore: new Date(now.getTime() - KCS_STALE_HOURS * 3_600_000),
+    });
+    const buckets = await groupStaleByQueueWorkshop(
+      this.prisma,
+      items.filter((i) => !i.blockedReason),
+    );
+    await this.syncStageWorkshopAlerts('KCS_BATCH_STALE', buckets);
+    await this.syncStageWorkshopAlerts('FLOOR_BATCH_STALE', []);
   }
 
   /**
@@ -661,7 +660,7 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
    * không còn nhóm nào (hết đợt quá hạn, hoặc tin kiểu cũ entityId 'PHOI' / 'HAN' / 'SON') thì đóng.
    */
   protected async syncStageWorkshopAlerts(
-    type: Extract<NotificationType, 'FLOOR_BATCH_STALE'>,
+    type: Extract<NotificationType, 'FLOOR_BATCH_STALE' | 'KCS_BATCH_STALE'>,
     buckets: StaleBucket[],
   ): Promise<void> {
     const wsIds = [
@@ -681,10 +680,10 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
       const key = staleBucketKey(b.stage, b.workshopId);
       active.add(key);
       const wsName = b.workshopId != null ? names.get(b.workshopId.toString()) : undefined;
-      const params: FloorBatchStaleParams = {
+      const params: KcsBatchStaleParams = {
         stage: b.stage,
         count: b.count,
-        hours: STALE_HOURS,
+        hours: KCS_STALE_HOURS,
         // Dòng hàng đợi cũ không có xưởng (null) thì không thêm workshopId vào params.
         ...(b.workshopId != null ? { workshopId: b.workshopId.toString() } : {}),
         ...(wsName ? { workshopName: wsName } : {}),
@@ -724,63 +723,12 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /**
-   * Các đợt chưa gửi KCS mà lần báo CÒN HIỆU LỰC (chưa bị đảo) đầu tiên đã quá `threshold` - cùng
-   * cách tính "chờ x giờ" ở màn QLSX, kèm lệnh để gom theo xưởng. Đợt cũ không có sổ báo không được
-   * tính.
-   */
-  async listStaleItems(threshold: Date): Promise<StaleItem[]> {
-    const old = {
-      some: { createdAt: { lt: threshold }, reversalOfId: null, reversedBy: { is: null } },
-    };
-    const [cut, steps, pieces] = await Promise.all([
-      this.prisma.cutBundle.findMany({
-        where: { status: 'CUTTING', floorReports: old },
-        select: { steelIssue: { select: { productionInvoiceId: true } } },
-      }),
-      this.prisma.stepBatch.findMany({
-        where: { stepBundleId: null, floorReports: old },
-        distinct: [
-          'productionInvoiceId',
-          'materialId',
-          'step',
-          'productionOrderId',
-          'reportedById',
-        ],
-        select: { productionInvoiceId: true },
-      }),
-      this.prisma.productionBatch.findMany({
-        where: { status: 'OPEN', floorReports: old },
-        select: {
-          stage: true,
-          productionOrder: {
-            select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
-          },
-        },
-      }),
-    ]);
-    const out: StaleItem[] = [];
-    for (const c of cut) {
-      out.push({ stage: 'PHOI', productionInvoiceId: c.steelIssue?.productionInvoiceId ?? null });
-    }
-    for (const s of steps)
-      out.push({ stage: 'PHOI', productionInvoiceId: s.productionInvoiceId ?? null });
-    for (const p of pieces) {
-      if (p.stage !== MfgStage.HAN && p.stage !== MfgStage.SON && p.stage !== MfgStage.PHOI)
-        continue;
-      out.push({
-        stage: p.stage,
-        productionInvoiceId: p.productionOrder?.productionInvoiceItem?.productionInvoiceId ?? null,
-      });
-    }
-    return out;
-  }
-
   private async emitOnce(
     type: Extract<
       NotificationType,
       | 'FLOOR_STAGE_COMPLETE'
       | 'FLOOR_BATCH_STALE'
+      | 'KCS_BATCH_STALE'
       | 'FLOOR_PHOI_DONE'
       | 'CUT_MACHINE_LOW_WORK'
       | 'CUT_MACHINE_IDLE'

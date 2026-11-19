@@ -28,6 +28,9 @@ export class PieceStepProgressDto {
    *  FE hiện nút "Bù đủ" khi remaining > 0 && failedQty > 0, chỉ gợi ý sẵn số lượng vào ô nhập -
    *  Phôi làm thêm rồi gửi KCS như đợt mới, "Còn lại" tự đúng vì cộng thêm doneQty. */
   @Expose() @ApiProperty() failedQty!: number;
+  /** P1 (18/11/2026): Σ QcReview.shortQty cộng dồn của đúng bước này - KCS ghi thiếu so với số báo (đã trừ, không tính
+   *  lỗi, không làm bù). Mặc định 0. */
+  @Expose() @ApiProperty() shortQty: number = 0;
 
   constructor(partial: Partial<PieceStepProgressDto>) {
     Object.assign(this, partial);

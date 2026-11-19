@@ -16,11 +16,26 @@ export class QcReviewSegmentInputDto {
   segmentSpecId!: string;
 
   /** Số đoạn KHÔNG ĐẠT - đoạn hỏng thật, Phôi phải bù bằng sắt tự kiếm ngoài thực tế (không đụng
-   *  cây sắt kho đã cấp). Lỗi nhẹ (giũa/nắn lại được) xem như không phải lỗi, không liệt kê ở đây. */
+   *  cây sắt kho đã cấp). Lỗi nhẹ (giũa/nắn lại được) xem như không phải lỗi, không liệt kê ở đây.
+   *  P1 (18/11/2026): hạ xuống ≥ 0 vì dòng có thể chỉ ghi thiếu; luật "failedQty + shortQty ≥ 1" kiểm ở service. */
   @ApiProperty()
   @IsInt()
-  @Min(1)
+  @Min(0)
   failedQty!: number;
+
+  /** P1: số đoạn KCS ghi THIẾU so với số báo của cỡ này (đã trừ, không tính lỗi, không làm bù). Mặc định 0. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  shortQty?: number;
+
+  /** P1: trong failedQty, số đoạn phải BỎ và cắt lại (chỉ đợt công đoạn phụ; đợt Cắt bỏ qua, lưu 0). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  scrapQty?: number;
 }
 
 /** KCS chấm 1 SteelIssue (nhánh Phôi) THEO TỪNG CỠ ĐOẠN - thay CreateQcReviewDto (scalar

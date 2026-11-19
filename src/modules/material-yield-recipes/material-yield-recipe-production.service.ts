@@ -34,6 +34,7 @@ import { MaterialYieldStepBundleResponseDto } from './dto/material-yield-step-bu
 import { SubmitMaterialYieldStepDto } from './dto/submit-material-yield-step.dto';
 import { MaterialYieldRecipeIssuesService } from './material-yield-recipe-issues.service';
 import { MaterialYieldRecipesService } from './material-yield-recipes.service';
+import { loadMaterialYieldNeed, materialYieldNeedKey } from './material-yield-need.util';
 import { processStepLabel } from '../../common/constants/process-steps.constant';
 
 const BUNDLE_INCLUDE = {
@@ -57,6 +58,8 @@ const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
  * theo TỪNG bundle riêng (không cộng dồn kiểu delta như bên piece) vì đây là đường DUY NHẤT sinh ra
  * output - không có path tạo thủ công nào khác cần khớp lại, nên không cần logic "đã chốt bao
  * nhiêu rồi" phức tạp.
+ *
+ * P1 (18/11/2026): báo vượt số cần ĐƯỢC PHÉP (quyết định 19/11, chỉ ghi log); KCS tự chốt nhóm (submitStep với opts) và tự chấm.
  */
 @Injectable()
 export class MaterialYieldRecipeProductionService {
@@ -71,6 +74,10 @@ export class MaterialYieldRecipeProductionService {
     private readonly cls: ClsService<AppClsStore>,
   ) {}
 
+  /**
+   * Báo 1 lần làm xong N cái ở 1 công đoạn. P1: vượt số cần của PI theo định mức (loadMaterialYieldNeed, đọc trong khoá
+   * material-yield-step-batch) hoặc số cần 0 thì chỉ ghi log "Báo vượt ... (cho phép)", không chặn (quyết định 19/11, Câu 6).
+   */
   async recordStepBatch(
     productionInvoiceId: string,
     dto: CreateMaterialYieldStepBatchDto,
@@ -110,21 +117,37 @@ export class MaterialYieldRecipeProductionService {
       );
     }
 
-    const created = await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(tx, `material-yield-step-batch:${piId}:${recipeBigId}:${dto.step}`);
-      await assertPiHasActiveFloorLocked(tx, piId, 'báo công đoạn');
+    const created = await this.prisma.$transaction(
+      async (tx) => {
+        await lockBusinessKey(tx, `material-yield-step-batch:${piId}:${recipeBigId}:${dto.step}`);
+        await assertPiHasActiveFloorLocked(tx, piId, 'báo công đoạn');
 
-      return tx.materialYieldStepBatch.create({
-        data: {
-          productionInvoiceId: piId,
-          recipeId: recipeBigId,
-          step: dto.step,
-          qty: dto.qty,
-          reportedById,
-          idempotencyKey,
-        },
-      });
-    });
+        const need = (await loadMaterialYieldNeed(tx, [piId])).get(
+          materialYieldNeedKey(piId, recipeBigId, dto.step),
+        );
+        const required = need?.required ?? 0;
+        const counted = need?.counted ?? 0;
+        const maxNow = Math.max(0, Math.floor(required - counted + 1e-9));
+        if (required <= 0 || dto.qty > maxNow) {
+          // Quyết định 19/11 (Câu 6): chân nhôm được báo vượt số cần (kể cả số cần 0) - chỉ ghi log, không chặn.
+          this.logger.log(
+            `Báo vượt chân nhôm: PI ${piId}, công thức ${recipeBigId}, ${dto.step}, cần ${required}, đã tính ${counted}, nhập ${dto.qty} (cho phép, quyết định 19/11)`,
+          );
+        }
+
+        return tx.materialYieldStepBatch.create({
+          data: {
+            productionInvoiceId: piId,
+            recipeId: recipeBigId,
+            step: dto.step,
+            qty: dto.qty,
+            reportedById,
+            idempotencyKey,
+          },
+        });
+      },
+      { maxWait: 10_000, timeout: 20_000 },
+    );
 
     await auditEvent(this.prisma, this.cls, this.logger, {
       action: AuditAction.CREATE,
@@ -140,52 +163,70 @@ export class MaterialYieldRecipeProductionService {
     return this.toBatchResponseDto(created);
   }
 
+  /**
+   * Gom các lần báo chưa gửi (materialYieldStepBundleId NULL) của (PI, công thức, công đoạn) thành 1 đợt chờ KCS chấm.
+   * P1: KCS cũng chốt nhóm này (FloorReviewService.closeMaterialYieldGroup, vai 'PHOI', opts { notifyKcs: false, gateLabel:
+   * 'chốt để chấm' }); nút "Gửi KCS" của tài khoản thống kê vẫn gọi với opts mặc định. Chỉ MỘT bên chốt được một nhóm: bên sau
+   * không còn dòng chưa gom nên nhận câu chung 400. Cổng lệnh dừng kiểm cả ngoài lẫn trong khoá, nhãn = opts.gateLabel.
+   */
   async submitStep(
     productionInvoiceId: string,
     dto: SubmitMaterialYieldStepDto,
     submittedById: string,
     callerMfgRole: string | null,
+    opts: { notifyKcs?: boolean; gateLabel?: string } = {},
   ): Promise<MaterialYieldStepBundleResponseDto> {
+    const notifyKcs = opts.notifyKcs ?? true;
+    const gateLabel = opts.gateLabel ?? 'gửi KCS công đoạn';
     this.assertMfgRoleIsPhoi(callerMfgRole);
     const piId = parseBigIntId(productionInvoiceId);
-    await assertPiHasActiveFloor(this.prisma, piId, 'gửi KCS công đoạn');
+    await assertPiHasActiveFloor(this.prisma, piId, gateLabel);
     const recipeBigId = parseBigIntId(dto.recipeId);
 
-    const created = await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(tx, `material-yield-step-bundle:${piId}:${recipeBigId}:${dto.step}`);
-      await assertPiHasActiveFloorLocked(tx, piId, 'gửi KCS công đoạn');
+    const created = await this.prisma.$transaction(
+      async (tx) => {
+        await lockBusinessKey(tx, `material-yield-step-bundle:${piId}:${recipeBigId}:${dto.step}`);
+        await assertPiHasActiveFloorLocked(tx, piId, gateLabel);
+        // Câu chung khi không còn lần báo nào chưa chấm (vừa được chốt bởi bên kia) - dùng mã vật tư, không id thô.
+        const noPendingMessage = async (): Promise<string> => {
+          const recipe = await tx.materialYieldRecipe.findUnique({
+            where: { id: recipeBigId },
+            select: { outputMaterial: { select: { code: true } } },
+          });
+          return `${recipe?.outputMaterial.code ?? dto.recipeId} công đoạn ${processStepLabel(dto.step)}: không còn lần báo nào chưa chấm (có thể vừa được chốt) - tải lại trang.`;
+        };
 
-      const pending = await tx.materialYieldStepBatch.findMany({
-        where: {
-          productionInvoiceId: piId,
-          recipeId: recipeBigId,
-          step: dto.step,
-          materialYieldStepBundleId: null,
-        },
-      });
-      const qty = pending.reduce((s, b) => s + b.qty, 0);
-      if (qty <= 0) {
-        throw new BadRequestException(
-          `Công thức ${dto.recipeId} chưa có gì mới để gửi KCS ở công đoạn ${processStepLabel(dto.step)}`,
-        );
-      }
+        const pending = await tx.materialYieldStepBatch.findMany({
+          where: {
+            productionInvoiceId: piId,
+            recipeId: recipeBigId,
+            step: dto.step,
+            materialYieldStepBundleId: null,
+          },
+        });
+        const qty = pending.reduce((s, b) => s + b.qty, 0);
+        if (qty <= 0) throw new BadRequestException(await noPendingMessage());
 
-      const bundle = await tx.materialYieldStepBundle.create({
-        data: {
-          productionInvoiceId: piId,
-          recipeId: recipeBigId,
-          step: dto.step,
-          qty,
-          submittedById,
-        },
-        include: BUNDLE_INCLUDE,
-      });
-      await tx.materialYieldStepBatch.updateMany({
-        where: { id: { in: pending.map((b) => b.id) } },
-        data: { materialYieldStepBundleId: bundle.id },
-      });
-      return bundle;
-    });
+        const bundle = await tx.materialYieldStepBundle.create({
+          data: {
+            productionInvoiceId: piId,
+            recipeId: recipeBigId,
+            step: dto.step,
+            qty,
+            submittedById,
+          },
+          include: BUNDLE_INCLUDE,
+        });
+        // Điều kiện "chưa gom" + so số dòng: dòng đã bị bên khác gom thì không gom lần 2 (rollback, không bundle rỗng).
+        const { count } = await tx.materialYieldStepBatch.updateMany({
+          where: { id: { in: pending.map((b) => b.id) }, materialYieldStepBundleId: null },
+          data: { materialYieldStepBundleId: bundle.id },
+        });
+        if (count !== pending.length) throw new BadRequestException(await noPendingMessage());
+        return bundle;
+      },
+      { maxWait: 10_000, timeout: 20_000 },
+    );
 
     await auditEvent(this.prisma, this.cls, this.logger, {
       action: AuditAction.CREATE,
@@ -199,7 +240,7 @@ export class MaterialYieldRecipeProductionService {
         event: 'submit-to-kcs',
       },
     });
-    await this.notifyBundleToKcs(created);
+    if (notifyKcs) await this.notifyBundleToKcs(created);
     return this.toBundleResponseDto(created);
   }
 
@@ -268,19 +309,20 @@ export class MaterialYieldRecipeProductionService {
    * NẾU step vừa duyệt là công đoạn CUỐI theo processSteps của recipe, credit StockLedger/StockQuant
    * cho outputMaterial (kho của chính outputMaterial) - xem doc comment class. Gọi NGAY TRONG
    * transaction duyệt KCS (QcReviewsService.reviewMaterialYieldStep()), SAU khi bundle chuyển
-   * QC_PASSED.
+   * QC_PASSED. P1: tham số thứ 3 hiểu là "số không đạt" = lỗi + thiếu (KCS ghi thiếu cũng không vào kho) - chữ ký giữ nguyên,
+   * người gọi truyền tổng; tên tham số đổi theo nghĩa mới.
    */
   async finalizeRecipeOutputIfLastStepComplete(
     tx: PrismaTx,
     bundle: MaterialYieldStepBundleRow,
-    failedQty: number,
+    notPassedQty: number,
     createdById: string,
   ): Promise<void> {
     const orderedSteps = sortProcessSteps(bundle.recipe.processSteps);
     if (orderedSteps.length === 0 || orderedSteps[orderedSteps.length - 1] !== bundle.step) {
       return;
     }
-    const passedQty = Math.max(bundle.qty - failedQty, 0);
+    const passedQty = Math.max(bundle.qty - notPassedQty, 0);
     if (passedQty <= 0) return;
 
     const outputMaterial = bundle.recipe.outputMaterial;

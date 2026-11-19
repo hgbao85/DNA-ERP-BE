@@ -375,6 +375,10 @@ export interface FloorBatchStaleParams {
   workshopName?: string;
 }
 
+/** Đợt công nhân đã báo, KCS chưa chấm quá lâu (P1, 18/11/2026). Cùng dạng với FloorBatchStaleParams:
+ *  không có xưởng thì BỎ khoá workshopId / workshopName, không ghi null. */
+export type KcsBatchStaleParams = FloorBatchStaleParams;
+
 /** SKU đóng gói đủ, chờ QLSX bấm "Kết thúc" (N1, 18/11/2026). */
 export interface PiItemReadyToFinishParams {
   piCode: string;
@@ -421,6 +425,15 @@ export interface QcResultNotificationParams {
   detail?: string;
   /** 17/11/2026 (TUỲ CHỌN): việc QLSX phải làm tiếp. Có thì thay câu chung ở nội dung tin. */
   todo?: string;
+  /** P1 (18/11/2026, TUỲ CHỌN): xưởng của lệnh (id, chuỗi số) để lọc tin theo xưởng QLSX. Thiếu = không suy ra được xưởng. */
+  workshopId?: string;
+}
+
+/** KCS chấm đạt (P1, 18/11/2026). `note` (vd câu "KCS ghi thiếu N ... so với số báo") thay câu mặc định "Không có lỗi.". */
+export interface QcPassedNotificationParams {
+  piCode: string;
+  workshopId?: string;
+  note?: string;
 }
 
 /** Phase 3b, nhóm 7.5-ii "Xuất vật tư tiêu hao / vật tư thành phẩm / bao bì" (xem changelog
@@ -1237,7 +1250,7 @@ const notificationTypeDefinitions = {
     title: (p: FloorStageCompleteParams) =>
       `Tổ ${FLOOR_STAGE_LABEL[p.stage]} đã báo đủ số của ${p.piCode}`,
     message: (p: FloorStageCompleteParams) =>
-      `Kiểm các đợt đang chờ rồi bấm “Chuyển lệnh tiếp” cho tổ ${FLOOR_STAGE_LABEL[p.stage]} (${p.piCode}).`,
+      `KCS chấm hết các đợt đang chờ rồi bấm “Chuyển lệnh tiếp” cho tổ ${FLOOR_STAGE_LABEL[p.stage]} (${p.piCode}).`,
     link: () => ({ module: 'production', page: 'san-luong-xuong' }),
     recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_MANAGER] }),
   } satisfies NotificationTypeDef<FloorStageCompleteParams>,
@@ -1334,7 +1347,8 @@ const notificationTypeDefinitions = {
     }),
   } satisfies NotificationTypeDef<CutPullSteelToIssueParams>,
 
-  /** Có đợt chờ gửi KCS quá lâu -> QLSX gửi KCS hoặc xử lý. ACTION_REQUIRED, mỗi tổ 1 thông báo, tự đóng khi hết đợt quá hạn. */
+  /** Ngừng phát từ P1 (KCS tự chấm, không còn bước QLSX gửi KCS), giữ để hiện tin cũ. Tin cũ còn mở được đóng bằng
+   *  migration 20261118100100 và lượt quét FloorAlertsService. */
   FLOOR_BATCH_STALE: {
     category: 'ACTION_REQUIRED',
     severity: 'WARNING',
@@ -1346,6 +1360,26 @@ const notificationTypeDefinitions = {
     link: () => ({ module: 'production', page: 'san-luong-xuong' }),
     recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_MANAGER] }),
   } satisfies NotificationTypeDef<FloorBatchStaleParams>,
+
+  /** P1 (18/11/2026): đợt công nhân đã báo mà KCS chưa chấm quá N giờ -> KCS tổ đó + QLSX vào màn KCS chấm. ACTION_REQUIRED,
+   *  mỗi (tổ x xưởng) 1 tin, tự đóng khi hết đợt quá hạn (FloorAlertsService). Link chỉ về tab KCS của tổ, KHÔNG có
+   *  alternatives (MF1): QLSX mở tab kcs-* thì FE chuyển sang 'san-luong-xuong'. */
+  KCS_BATCH_STALE: {
+    category: 'ACTION_REQUIRED',
+    severity: 'WARNING',
+    entityType: 'FLOOR_STAGE',
+    title: (p: KcsBatchStaleParams) =>
+      `Tổ ${FLOOR_STAGE_LABEL[p.stage]}${p.workshopName ? ` · ${p.workshopName}` : ''}: ${p.count} đợt chờ KCS chấm quá ${p.hours} giờ`,
+    message: (p: KcsBatchStaleParams) =>
+      `Công nhân đã báo, KCS chưa chấm quá ${p.hours} giờ - vào màn KCS ${FLOOR_STAGE_LABEL[p.stage]} chấm các đợt này.`,
+    link: (p: KcsBatchStaleParams) => ({
+      module: 'production',
+      page: p.stage === 'PHOI' ? 'kcs-phoi' : p.stage === 'HAN' ? 'kcs-han' : 'kcs-son',
+    }),
+    recipients: () => ({
+      roles: [BUSINESS_ROLES.KCS_STAFF, BUSINESS_ROLES.PRODUCTION_MANAGER],
+    }),
+  } satisfies NotificationTypeDef<KcsBatchStaleParams>,
 
   /** Phôi báo xong 1 đợt cắt - chờ KCS chấm. Tự đóng khi KCS `reviewCutBundle()`. `link` thêm ở
    *  mục 22.2 - cùng lý do STEEL_ISSUE_TO_PHOI, recipient chỉ KCS_STAFF nên an toàn nối. */
@@ -1532,11 +1566,12 @@ const notificationTypeDefinitions = {
       p.detail
         ? `${p.piCode}: KCS chấm lỗi - ${p.detail}`
         : `${p.piCode}: KCS chấm lỗi ${p.failedQty}`,
-    // Áp cho mọi đợt gửi KCS (Phôi / Hàn / Sơn): tài khoản thống kê không còn tự báo bù, trừ Vật tư TP.
-    // 17/11/2026: đợt Phôi truyền todo (việc cụ thể cho QLSX); thiếu thì giữ câu chung cũ.
+    // Áp cho mọi đợt KCS chấm (Phôi / Hàn / Sơn): tài khoản thống kê không còn tự báo bù, trừ Vật tư TP.
+    // 17/11/2026: đợt Cắt / công đoạn phụ truyền todo (việc cụ thể cho QLSX); P1 (18/11): Hàn / Sơn / pat / chân nhôm
+    // KHÔNG truyền todo nên dùng câu mặc định (công nhân báo bù, KCS tự chấm đợt mới).
     message: (p: QcResultNotificationParams) =>
       p.todo ??
-      'Công nhân báo bù bằng quét mã QR, QLSX kiểm rồi gửi KCS; Vật tư TP thì báo bù ở Lệnh sản xuất.',
+      `Công nhân làm bù ${p.failedQty} rồi quét mã QR báo bù; KCS tự chấm đợt mới. Vật tư TP thì báo bù ở Lệnh sản xuất.`,
     recipients: (p: QcResultNotificationParams) => ({
       roles: [p.senderRole, BUSINESS_ROLES.PRODUCTION_MANAGER],
     }),
@@ -1555,10 +1590,10 @@ const notificationTypeDefinitions = {
     severity: 'INFO',
     entityType: 'QC_REVIEW',
     link: () => ({ module: 'production', page: 'ke-hoach' }),
-    title: (p: QcSubmittedNotificationParams) => `${p.piCode}: KCS duyệt đạt`,
-    message: () => 'Không có lỗi.',
+    title: (p: QcPassedNotificationParams) => `${p.piCode}: KCS duyệt đạt`,
+    message: (p: QcPassedNotificationParams) => p.note ?? 'Không có lỗi.',
     recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_MANAGER] }),
-  } satisfies NotificationTypeDef<QcSubmittedNotificationParams>,
+  } satisfies NotificationTypeDef<QcPassedNotificationParams>,
 
   // ─── Phase 3b, nhóm 7.5-ii "Xuất vật tư tiêu hao / vật tư thành phẩm / bao bì" (2026-09-28,
   // xem changelog mục 22) ───────────────────────────────────────────────────────────────────────

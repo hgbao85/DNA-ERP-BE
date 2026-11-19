@@ -10,6 +10,13 @@ import { PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { FloorAdminService } from './floor-admin.service';
+import { listKcsPendingItems, type KcsPendingItem } from './kcs-pending.util';
+
+jest.mock('./kcs-pending.util', () => ({
+  ...jest.requireActual<typeof import('./kcs-pending.util')>('./kcs-pending.util'),
+  listKcsPendingItems: jest.fn(),
+}));
+const listPending = listKcsPendingItems as jest.MockedFunction<typeof listKcsPendingItems>;
 
 const PHU_AN = 1n;
 const PHUOC_AN = 2n;
@@ -62,6 +69,9 @@ describe('FloorAdminService', () => {
     failed?: number;
     openQty?: number;
     awaitingQcQty?: number;
+    baseRequired?: number;
+    extraNeed?: number;
+    shortQty?: number;
   }) => ({ failed: 0, openQty: 0, awaitingQcQty: 0, ...s });
 
   beforeEach(() => {
@@ -1251,6 +1261,41 @@ describe('FloorAdminService', () => {
       ]);
     });
 
+    it('P1: KCS ghi thiếu đã trừ khỏi done (done = thô - thiếu), lỗi trừ tiếp -> được tính = done - lỗi; "cần" gồm cả phần cắt lại', async () => {
+      prisma.floorQueueEntry.findMany.mockResolvedValue([running('PHOI')]);
+      steelIssues.getPhoiProgressBatch.mockResolvedValue({
+        45: [
+          {
+            steelBalance: { receivedBarCount: 12 },
+            // thô 100, KCS ghi thiếu 10 -> done 90; lỗi 4 -> được tính 86; cần 100 + cắt lại 3 = 103
+            segments: [
+              seg({
+                required: 103,
+                baseRequired: 100,
+                extraNeed: 3,
+                done: 90,
+                failed: 4,
+                shortQty: 10,
+              }),
+            ],
+            steps: [],
+          },
+        ],
+      });
+
+      const [e] = await service.listQueue('q', 'PHOI');
+
+      expect(e.progress).toMatchObject({
+        required: 103,
+        reported: 86,
+        passed: 86,
+        failed: 4,
+        percent: 83,
+        complete: false,
+        missing: { lines: 1 },
+      });
+    });
+
     it('Phôi: thiếu PI trong kết quả batch (PI lỗi) → progress null, không coi là xong', async () => {
       prisma.floorQueueEntry.findMany.mockResolvedValue([running('PHOI')]);
       steelIssues.getPhoiProgressBatch.mockResolvedValue({});
@@ -1386,60 +1431,132 @@ describe('FloorAdminService', () => {
     });
   });
 
-  describe('summary (số đỏ menu "Sản lượng xưởng")', () => {
-    it('nhóm công đoạn phụ tách theo người báo (reportedById) như danh sách thẻ, giữ các khoá cũ', async () => {
-      prisma.cutBundle.count.mockResolvedValue(1);
-      prisma.stepBatch.findMany.mockResolvedValue([{ id: 1n }, { id: 2n }]);
-
-      const r = await service.summary();
-
-      expect(prisma.stepBatch.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { stepBundleId: null },
-          distinct: [
-            'productionInvoiceId',
-            'materialId',
-            'step',
-            'productionOrderId',
-            'reportedById',
-          ],
-        }),
-      );
-      expect(r.PHOI.open).toBe(3);
+  describe('summary (số đỏ menu "Sản lượng xưởng": open / awaitingKcs / stale)', () => {
+    const NOW = new Date('2026-11-18T12:00:00Z');
+    const hoursAgo = (h: number) => new Date(NOW.getTime() - h * 3_600_000);
+    const item = (
+      stage: 'PHOI' | 'HAN' | 'SON',
+      piId: bigint | null,
+      over: Partial<KcsPendingItem> = {},
+    ): KcsPendingItem => ({
+      stage,
+      productionInvoiceId: piId,
+      kind: stage === 'PHOI' ? 'CUT' : 'PIECE_BATCH',
+      state: 'OPEN',
+      waitingSince: hoursAgo(1),
+      blockedReason: null,
+      ...over,
     });
 
-    it('X4 16/11: QLSX gắn xưởng chỉ đếm đợt của PI thuộc xưởng mình (khớp danh sách thẻ)', async () => {
+    beforeEach(() => {
+      listPending.mockReset();
+      listPending.mockResolvedValue([]);
+    });
+
+    it('không có đợt nào -> 0 hết, đủ 3 tổ x 3 khoá', async () => {
+      const r = await service.summary(undefined, NOW);
+
+      expect(r).toEqual({
+        PHOI: { open: 0, awaitingKcs: 0, stale: 0 },
+        HAN: { open: 0, awaitingKcs: 0, stale: 0 },
+        SON: { open: 0, awaitingKcs: 0, stale: 0 },
+      });
+      expect(listPending).toHaveBeenCalledWith(prisma);
+    });
+
+    it('đếm theo tổ: open (có sổ báo) / awaitingKcs / stale (mốc quá 4 giờ, cả đang mở lẫn đã chốt)', async () => {
+      listPending.mockResolvedValue([
+        item('PHOI', 45n), // cắt đang mở
+        item('PHOI', 45n, { kind: 'STEP', waitingSince: hoursAgo(5) }), // công đoạn phụ mở, quá hạn
+        item('PHOI', 45n, { kind: 'CUT', state: 'AWAITING_QC', waitingSince: hoursAgo(6) }),
+        item('PHOI', 45n, { kind: 'PIECE_BATCH' }), // lô mảnh Phôi mở
+        item('HAN', 45n, { state: 'AWAITING_QC' }),
+        item('SON', 45n, { waitingSince: hoursAgo(4.5) }),
+      ]);
+
+      const r = await service.summary(undefined, NOW);
+
+      expect(r).toEqual({
+        PHOI: { open: 3, awaitingKcs: 1, stale: 2 },
+        HAN: { open: 0, awaitingKcs: 1, stale: 0 },
+        SON: { open: 1, awaitingKcs: 0, stale: 1 },
+      });
+    });
+
+    it('pat / chân nhôm: không có sổ báo nên KHÔNG vào open; đã chốt thì vào awaitingKcs; vẫn tính stale', async () => {
+      listPending.mockResolvedValue([
+        item('PHOI', 45n, { kind: 'PIECE_STEP', waitingSince: hoursAgo(9) }),
+        item('PHOI', 45n, { kind: 'MATERIAL_YIELD' }),
+        item('PHOI', 45n, { kind: 'PIECE_STEP', state: 'AWAITING_QC' }),
+        item('PHOI', 45n, { kind: 'MATERIAL_YIELD', state: 'AWAITING_QC' }),
+      ]);
+
+      const r = await service.summary(undefined, NOW);
+
+      expect(r.PHOI).toEqual({ open: 0, awaitingKcs: 2, stale: 1 });
+    });
+
+    it('dòng xám (lệnh dừng / chưa gắn SKU) không đếm vào cả 3 số (AC16)', async () => {
+      listPending.mockResolvedValue([
+        item('PHOI', 45n, { blockedReason: 'LENH_DUNG', waitingSince: hoursAgo(10) }),
+        item('PHOI', 45n, { blockedReason: 'CHUA_GAN_SKU', kind: 'STEP' }),
+        item('PHOI', 45n, { blockedReason: 'LENH_DUNG', state: 'AWAITING_QC' }),
+        item('PHOI', 45n),
+      ]);
+
+      const r = await service.summary(undefined, NOW);
+
+      expect(r.PHOI).toEqual({ open: 1, awaitingKcs: 0, stale: 0 });
+    });
+
+    it('stale lấy mốc waitingSince: đúng 4 giờ chưa tính, quá 4 giờ mới tính', async () => {
+      listPending.mockResolvedValue([
+        item('HAN', 45n, { waitingSince: hoursAgo(4) }),
+        item('HAN', 45n, { waitingSince: new Date(hoursAgo(4).getTime() - 1) }),
+      ]);
+
+      const r = await service.summary(undefined, NOW);
+
+      expect(r.HAN.stale).toBe(1);
+    });
+
+    it('tài khoản không gắn xưởng: không lọc, không tra xưởng của PI', async () => {
+      listPending.mockResolvedValue([item('PHOI', 45n), item('PHOI', 46n)]);
+
+      const r = await service.summary('qlsx-chung', NOW);
+
+      expect(r.PHOI.open).toBe(2);
+      expect(prisma.productionInvoiceItem.findMany).not.toHaveBeenCalled();
+    });
+
+    it('X4 16/11: QLSX gắn xưởng chỉ đếm đợt của PI thuộc xưởng mình; PI chưa suy ra xưởng thì vẫn thấy', async () => {
       prisma.user.findUnique.mockResolvedValue({
         workshopId: 1n,
         workshop: { name: 'Xưởng 1', paintsFor: [] },
       });
-      // PI 45 ở xưởng 1, PI 46 ở xưởng 2.
+      // PI 45 ở xưởng 1, PI 46 ở xưởng 2; PI 47 chưa có xưởng + không có xưởng mặc định.
       prisma.productionInvoiceItem.findMany.mockResolvedValue([
         { productionInvoiceId: 45n, workshopId: 1n },
         { productionInvoiceId: 46n, workshopId: 2n },
       ]);
-      (prisma.cutBundle as Record<string, jest.Mock>).findMany = jest
-        .fn()
-        .mockResolvedValue([
-          { steelIssue: { productionInvoiceId: 45n } },
-          { steelIssue: { productionInvoiceId: 46n } },
-        ]);
-      prisma.stepBatch.findMany.mockResolvedValue([
-        { productionInvoiceId: 46n },
-        { productionInvoiceId: 46n },
+      listPending.mockResolvedValue([
+        item('PHOI', 45n),
+        item('PHOI', 46n),
+        item('PHOI', 46n, { kind: 'STEP' }),
+        item('PHOI', 46n, { state: 'AWAITING_QC' }),
+        item('PHOI', 45n, { state: 'AWAITING_QC', waitingSince: hoursAgo(8) }),
+        item('HAN', 45n),
+        item('HAN', 46n),
+        item('SON', 45n),
       ]);
-      const piece = (stage: string, piId: bigint) => ({
-        stage,
-        productionOrder: { productionInvoiceItem: { productionInvoiceId: piId } },
+
+      const r = await service.summary('qlsx-xuong-1', NOW);
+
+      expect(r).toEqual({
+        PHOI: { open: 1, awaitingKcs: 1, stale: 1 },
+        HAN: { open: 1, awaitingKcs: 0, stale: 0 },
+        SON: { open: 1, awaitingKcs: 0, stale: 0 },
       });
-      (prisma.productionBatch as Record<string, jest.Mock>).findMany = jest
-        .fn()
-        .mockResolvedValue([piece('HAN', 45n), piece('HAN', 46n), piece('SON', 45n)]);
-
-      const r = await service.summary('qlsx-xuong-1');
-
-      expect(r).toEqual({ PHOI: { open: 1 }, HAN: { open: 1 }, SON: { open: 1 } });
-      expect(prisma.cutBundle.count).not.toHaveBeenCalled();
     });
   });
 
