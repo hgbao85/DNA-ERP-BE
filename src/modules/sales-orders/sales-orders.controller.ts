@@ -14,7 +14,9 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
+import { RequireRole } from '../../common/decorators/require-role.decorator';
 import { CreateSalesOrderDto } from './dto/create-sales-order.dto';
 import { CreateSalesOrderItemDto } from './dto/create-sales-order-item.dto';
 import { UpdateSalesOrderDto } from './dto/update-sales-order.dto';
@@ -29,6 +31,7 @@ export class SalesOrdersController {
 
   @Post()
   @RequirePermissions({ module: PERMISSION_MODULES.SALES_ORDER, action: PermissionAction.CREATE })
+  @RequireRole(BUSINESS_ROLES.SALES_STAFF, DEFAULT_ROLES.ADMIN)
   create(@Body() dto: CreateSalesOrderDto) {
     return this.salesOrdersService.create(dto);
   }
@@ -47,6 +50,7 @@ export class SalesOrdersController {
 
   @Patch(':id')
   @RequirePermissions({ module: PERMISSION_MODULES.SALES_ORDER, action: PermissionAction.UPDATE })
+  @RequireRole(BUSINESS_ROLES.SALES_STAFF, DEFAULT_ROLES.ADMIN)
   update(@Param('id') id: string, @Body() dto: UpdateSalesOrderDto) {
     return this.salesOrdersService.update(id, dto);
   }
@@ -54,6 +58,7 @@ export class SalesOrdersController {
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequirePermissions({ module: PERMISSION_MODULES.SALES_ORDER, action: PermissionAction.DELETE })
+  @RequireRole(BUSINESS_ROLES.SALES_STAFF, DEFAULT_ROLES.ADMIN)
   remove(@Param('id') id: string) {
     return this.salesOrdersService.remove(id);
   }
@@ -62,12 +67,14 @@ export class SalesOrdersController {
 
   @Post(':id/items')
   @RequirePermissions({ module: PERMISSION_MODULES.SALES_ORDER, action: PermissionAction.UPDATE })
+  @RequireRole(BUSINESS_ROLES.SALES_STAFF, DEFAULT_ROLES.ADMIN)
   addItem(@Param('id') id: string, @Body() dto: CreateSalesOrderItemDto) {
     return this.salesOrdersService.addItem(id, dto);
   }
 
   @Patch(':id/items/:itemId')
   @RequirePermissions({ module: PERMISSION_MODULES.SALES_ORDER, action: PermissionAction.UPDATE })
+  @RequireRole(BUSINESS_ROLES.SALES_STAFF, DEFAULT_ROLES.ADMIN)
   updateItem(
     @Param('id') id: string,
     @Param('itemId') itemId: string,
@@ -77,4 +84,7 @@ export class SalesOrdersController {
   }
 
   // Đợt 10b (5.7): bỏ nút "Xuất giao" - mọi lần xuất hàng đi qua booking (POST /booking-shipments/:id/ship).
+  // 2026-11-19 (lỗi C1): mọi route GHI của sales-orders chỉ Sales + Admin. WAREHOUSE_STAFF (vai nền của mọi
+  // tài khoản văn phòng) vẫn giữ SALES_ORDER:UPDATE cho /booking-shipments nên phải chặn theo vai trò ở đây.
+  // Route đọc (GET) giữ nguyên, chỉ cần SALES_ORDER:VIEW.
 }
