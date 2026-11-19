@@ -498,7 +498,7 @@ export class NotificationsService {
     // xem changelog notification 2026-09-25 mục 20.6) đều lọc trên quan hệ `notification` - gộp
     // chung 1 object thay vì 2 `...(cond ? {notification: ...} : {})` sẽ đè nhau.
     const notificationFilter: Prisma.NotificationWhereInput = {};
-    if (query.category) notificationFilter.category = query.category as NotificationCategory;
+    if (query.category) notificationFilter.category = query.category;
     if (query.search?.trim()) {
       const term = query.search.trim();
       notificationFilter.OR = [
@@ -563,12 +563,12 @@ export class NotificationsService {
     return this.toResponseDto(updated.notification, updated);
   }
 
-  async markAllRead(userId: string, category?: string): Promise<{ count: number }> {
+  async markAllRead(userId: string, category?: NotificationCategory): Promise<{ count: number }> {
     const result = await this.prisma.notificationRecipient.updateMany({
       where: {
         userId,
         readAt: null,
-        ...(category ? { notification: { category: category as NotificationCategory } } : {}),
+        ...(category ? { notification: { category } } : {}),
       },
       data: { readAt: new Date() },
     });

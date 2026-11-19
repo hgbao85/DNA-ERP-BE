@@ -7,6 +7,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { ListNotificationsQueryDto } from './dto/list-notifications-query.dto';
+import { MarkAllReadQueryDto } from './dto/mark-all-read-query.dto';
 import { NotificationsService } from './notifications.service';
 
 /**
@@ -44,8 +45,8 @@ export class NotificationsController {
   @Post('read-all')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions({ module: PERMISSION_MODULES.NOTIFICATION, action: PermissionAction.VIEW })
-  markAllRead(@CurrentUser('id') userId: string, @Query('category') category?: string) {
-    return this.notificationsService.markAllRead(userId, category);
+  markAllRead(@CurrentUser('id') userId: string, @Query() query: MarkAllReadQueryDto) {
+    return this.notificationsService.markAllRead(userId, query.category);
   }
 
   @Get()

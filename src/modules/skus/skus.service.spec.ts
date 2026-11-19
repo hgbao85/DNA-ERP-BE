@@ -533,6 +533,24 @@ describe('SkusService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
+    it('T4-9 (19/11/2026): 2 mảnh trùng tên (sau trim, không phân biệt hoa thường) -> 400 "Hai mảnh trùng tên", không xoá/ghi gì', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
+      const seg = [{ materialId: '30', cutLengthMm: 930, qtyPerPiece: 4 }];
+
+      await expect(
+        service.updateManhQuota('5', {
+          pieces: [
+            { name: 'Manh tua', qtyPerUnit: 2, segments: seg },
+            { name: '  MANH TUA ', qtyPerUnit: 1, segments: seg },
+          ],
+          enteredBy: 'NV Sat',
+        }),
+      ).rejects.toThrow('Hai mảnh trùng tên: Manh tua');
+      expect(prisma.bomPiece.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.bomPiece.createMany).not.toHaveBeenCalled();
+    });
+
     it('rejects editing quota once the owned revision is no longer DRAFT (already approved)', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'ACTIVE' });

@@ -9,12 +9,7 @@ import {
   Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import {
-  CutBundleStatus,
-  MfgRole,
-  PermissionAction,
-  ProcessStep,
-} from '../../generated/prisma/client';
+import { MfgRole, PermissionAction, ProcessStep } from '../../generated/prisma/client';
 import {
   LEGACY_CUT_REPORT_CLOSED_MESSAGE,
   LEGACY_STEEL_RECEIVE_CLOSED_MESSAGE,
@@ -26,6 +21,7 @@ import { RequireRole } from '../../common/decorators/require-role.decorator';
 import { DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { RequireMfgRole } from '../../common/decorators/require-mfg-role.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
+import { ListCutBundlesQueryDto } from './dto/list-cut-bundles-query.dto';
 import { ListStepBundlesQueryDto } from './dto/list-step-bundles-query.dto';
 import { ListSteelIssuesQueryDto } from './dto/list-steel-issues-query.dto';
 import { AssignProductionOrderDto } from './dto/assign-production-order.dto';
@@ -185,11 +181,8 @@ export class SteelIssuesController {
   /** Mọi đợt cắt - lọc theo PI (màn Phôi) hoặc theo trạng thái (màn KCS lấy thẳng AWAITING_QC). */
   @Get('cut-bundles')
   @RequirePermissions(VIEW)
-  findAllBundles(
-    @Query('productionInvoiceId') productionInvoiceId?: string,
-    @Query('status') status?: CutBundleStatus,
-  ) {
-    return this.steelIssuesService.findAllBundles(productionInvoiceId, status);
+  findAllBundles(@Query() query: ListCutBundlesQueryDto) {
+    return this.steelIssuesService.findAllBundles(query.productionInvoiceId, query.status);
   }
 
   /** "Báo cắt xong" cho ĐÚNG đợt cắt này - các đợt khác của cùng lô vẫn cắt tiếp bình thường. KHÔNG

@@ -28,3 +28,37 @@ describe('SkusController - metadata PATCH :id/container-load (Phần A – Đợ
     expect(Reflect.getMetadata(ROLE_KEY, SkusController)).toBeUndefined();
   });
 });
+
+/** Lỗi T4-1 (19/11/2026): route ghi định mức chỉ đúng vai chuyên trách + Admin (2 vai cùng có SKU:UPDATE nên phải chặn theo vai trò). */
+describe('SkusController - tách quyền ghi định mức mảnh / chi tiết (T4-1)', () => {
+  const proto = SkusController.prototype;
+  const update = [{ module: PERMISSION_MODULES.SKU, action: PermissionAction.UPDATE }];
+
+  it.each([
+    ['updateManhQuota', proto.updateManhQuota],
+    ['saveManhDraft', proto.saveManhDraft],
+    ['clearManhDraft', proto.clearManhDraft],
+  ])('%s: SKU:UPDATE + vai trò [SPEC_STEEL_STAFF, ADMIN]', (_n, handler) => {
+    expect(Reflect.getMetadata(PERMISSIONS_KEY, handler)).toEqual(update);
+    expect(Reflect.getMetadata(ROLE_KEY, handler)).toEqual(['SPEC_STEEL_STAFF', 'ADMIN']);
+  });
+
+  it.each([
+    ['updateDetailQuota', proto.updateDetailQuota],
+    ['saveDetailDraft', proto.saveDetailDraft],
+    ['clearDetailDraft', proto.clearDetailDraft],
+  ])('%s: SKU:UPDATE + vai trò [SPEC_ACCESSORY_PACKAGING_STAFF, ADMIN]', (_n, handler) => {
+    expect(Reflect.getMetadata(PERMISSIONS_KEY, handler)).toEqual(update);
+    expect(Reflect.getMetadata(ROLE_KEY, handler)).toEqual([
+      'SPEC_ACCESSORY_PACKAGING_STAFF',
+      'ADMIN',
+    ]);
+  });
+
+  it.each([
+    ['reviewManhQuota', proto.reviewManhQuota],
+    ['reviewDetailQuota', proto.reviewDetailQuota],
+  ])('%s: không đổi, không chặn vai trò', (_n, handler) => {
+    expect(Reflect.getMetadata(ROLE_KEY, handler)).toBeUndefined();
+  });
+});

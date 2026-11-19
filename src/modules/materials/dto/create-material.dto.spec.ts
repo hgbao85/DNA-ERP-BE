@@ -48,3 +48,30 @@ describe('CreateMaterialDto - validate maxCuttingWastePercentage/purchaseWastePe
     expect(errors.filter((e) => e.property.includes('WastePercentage'))).toHaveLength(0);
   });
 });
+
+describe('CreateMaterialDto - enum detailKind / steelSubGroup (T1-7, 19/11/2026)', () => {
+  const base = { name: 'Sat cay', unit: 'kg' };
+
+  it('từ chối detailKind sai enum bằng câu tiếng Việt', async () => {
+    const errors = await validate(
+      plainToInstance(CreateMaterialDto, { ...base, detailKind: 'XYZ' }),
+    );
+    const e = errors.find((x) => x.property === 'detailKind');
+    expect(Object.values(e?.constraints ?? {})).toContain('Loại chi tiết vật tư không hợp lệ');
+  });
+
+  it('từ chối steelSubGroup sai enum bằng câu tiếng Việt', async () => {
+    const errors = await validate(
+      plainToInstance(CreateMaterialDto, { ...base, steelSubGroup: 'XYZ' }),
+    );
+    const e = errors.find((x) => x.property === 'steelSubGroup');
+    expect(Object.values(e?.constraints ?? {})).toContain('Nhóm con của sắt không hợp lệ');
+  });
+
+  it('cho phép bỏ trống và giá trị đúng enum', async () => {
+    expect(await validate(plainToInstance(CreateMaterialDto, base))).toHaveLength(0);
+    expect(
+      await validate(plainToInstance(CreateMaterialDto, { ...base, steelSubGroup: 'SELF_CALC' })),
+    ).toHaveLength(0);
+  });
+});

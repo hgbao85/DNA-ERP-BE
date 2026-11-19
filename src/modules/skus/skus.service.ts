@@ -1416,6 +1416,17 @@ export class SkusService {
     mfgProductId: bigint,
     pieces: QuotaPieceDto[],
   ): Promise<{ orphanedPhotoUrls: string[] }> {
+    // 19/11/2026 (T4-9): 2 mảnh cùng tên (so sau trim, không phân biệt hoa thường) sẽ vỡ khoá
+    // duy nhất (P2002) ở bước ghi - chặn sớm bằng câu rõ ràng, trước mọi lần xoá/ghi.
+    const seenPieceNames = new Map<string, string>();
+    for (const p of pieces) {
+      const key = p.name.trim().toLowerCase();
+      const first = seenPieceNames.get(key);
+      if (first !== undefined) {
+        throw new BadRequestException(`Hai mảnh trùng tên: ${first}`);
+      }
+      seenPieceNames.set(key, p.name.trim());
+    }
     const steelGroupId = await this.resolveSystemGroupId(tx, MATERIAL_GROUP_SYSTEM_KEYS.STEEL_BAR);
     // Ảnh (Dây, xem PieceMaterialItem.photoUrl) không có bảng riêng để "cascade xoá theo dõi" -
     // full-replace bên dưới xoá sạch rồi tạo lại, nên phải chụp URL đang có TRƯỚC khi xoá để biết

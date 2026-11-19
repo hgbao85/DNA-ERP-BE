@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayUnique,
   IsArray,
+  IsDefined,
   IsInt,
   IsOptional,
   IsString,
@@ -42,10 +43,14 @@ export class QcReviewSegmentInputDto {
  *  failedQty) cho riêng route POST steel-issues/:id/qc-review. CreateQcReviewDto giữ nguyên cho
  *  POST production-batches/:id/qc-review (Hàn/Sơn/VTTP chốt cuối). */
 export class CreateSteelIssueQcReviewDto {
-  /** Rỗng = đạt hết, không cỡ nào lỗi. */
+  /** Rỗng = đạt hết, không cỡ nào lỗi. Thiếu hẳn thì báo "thiếu danh sách" (T4-9, 19/11/2026:
+   *  trước đây ra câu "có giá trị bị trùng" vì ArrayUnique cũng rớt khi undefined). */
   @ApiProperty({ type: [QcReviewSegmentInputDto] })
-  @IsArray()
-  @ArrayUnique((s: QcReviewSegmentInputDto) => s.segmentSpecId)
+  @IsDefined({ message: 'Thiếu danh sách cỡ đoạn, đạt hết thì gửi danh sách rỗng' })
+  @IsArray({ message: 'Danh sách cỡ đoạn phải là một mảng' })
+  @ArrayUnique((s: QcReviewSegmentInputDto) => s.segmentSpecId, {
+    message: 'Danh sách cỡ đoạn có cỡ bị trùng',
+  })
   @ValidateNested({ each: true })
   @Type(() => QcReviewSegmentInputDto)
   segments!: QcReviewSegmentInputDto[];

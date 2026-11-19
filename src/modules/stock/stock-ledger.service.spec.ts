@@ -589,6 +589,44 @@ describe('StockLedgerService', () => {
       );
     });
 
+    it('T3-10: toDate dạng ngày thuần tính hết ngày đó theo giờ VN; fromDate thuần = 00:00 giờ VN', async () => {
+      prisma.stockLedger.findMany.mockResolvedValue([]);
+      prisma.stockLedger.count.mockResolvedValue(0);
+
+      await service.findAll({
+        page: 1,
+        limit: 20,
+        sortOrder: 'desc' as never,
+        fromDate: '2026-11-19',
+        toDate: '2026-11-19',
+      } as never);
+
+      const where = (
+        prisma.stockLedger.findMany.mock.calls[0] as [
+          { where: { createdAt: { gte: Date; lte: Date } } },
+        ]
+      )[0].where;
+      expect(where.createdAt.gte.toISOString()).toBe('2026-11-18T17:00:00.000Z');
+      expect(where.createdAt.lte.toISOString()).toBe('2026-11-19T16:59:59.999Z');
+    });
+
+    it('toDate có giờ cụ thể giữ nguyên', async () => {
+      prisma.stockLedger.findMany.mockResolvedValue([]);
+      prisma.stockLedger.count.mockResolvedValue(0);
+
+      await service.findAll({
+        page: 1,
+        limit: 20,
+        sortOrder: 'desc' as never,
+        toDate: '2026-11-19T10:00:00.000Z',
+      } as never);
+
+      const where = (
+        prisma.stockLedger.findMany.mock.calls[0] as [{ where: { createdAt: { lte: Date } } }]
+      )[0].where;
+      expect(where.createdAt.lte.toISOString()).toBe('2026-11-19T10:00:00.000Z');
+    });
+
     it('K5 16/11: thủ kho chỉ đọc bút toán có 1 chân thuộc họ kho mình; tổng kho không lọc', async () => {
       prisma.stockLedger.findMany.mockResolvedValue([]);
       prisma.stockLedger.count.mockResolvedValue(0);

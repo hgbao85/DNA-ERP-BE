@@ -1137,6 +1137,14 @@ describe('CutAllocationService', () => {
       );
       expect(allocations).toHaveLength(1);
     });
+
+    it('dòng chỉ có 1 cây -> câu rõ ràng, không "từ 1 đến 0" (T4-9, 19/11/2026)', async () => {
+      nextId = 1n;
+      allocations = [baseAllocation({ workstationId: 2n, barCount: 1, seq: 1 })];
+      await expect(service.split('u1', '1', { barCount: 1, workstationId: '2' })).rejects.toThrow(
+        'Dòng chỉ có 1 cây - không tách được',
+      );
+    });
   });
 
   describe('reorder', () => {

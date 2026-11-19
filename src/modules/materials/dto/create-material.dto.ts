@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsNumber, IsOptional, Max, Min } from 'class-validator';
+import { IsBoolean, IsEnum, IsNumber, IsOptional, Max, Min } from 'class-validator';
 import { MaterialDetailKind, SteelSubGroup } from '../../../generated/prisma/client';
 
 /**
@@ -47,6 +47,7 @@ export class CreateMaterialDto {
       'Bắt buộc khi materialGroupId thuộc nhóm systemKey OTHER ("Vật tư khác") - phân biệt Sơn/Phụ kiện/Bao bì cho picker của trang Định mức chi tiết (SpecDetailQuotaPage), vì cả 3 tab đó giờ dùng chung 1 nhóm vật tư. Bị bỏ qua (ghi null) với mọi nhóm khác - xem MaterialsService.resolveDetailKind.',
   })
   @IsOptional()
+  @IsEnum(MaterialDetailKind, { message: 'Loại chi tiết vật tư không hợp lệ' })
   detailKind?: MaterialDetailKind;
 
   @ApiPropertyOptional({
@@ -55,6 +56,7 @@ export class CreateMaterialDto {
       'Nhóm con của Sắt (SOFTWARE/SELF_CALC/FINISHED_COMPONENT) - bắt buộc khi materialGroupId thuộc nhóm systemKey STEEL_BAR, bị bỏ qua (ghi null) với mọi nhóm khác. Xem MaterialsService.resolveSteelSubGroup.',
   })
   @IsOptional()
+  @IsEnum(SteelSubGroup, { message: 'Nhóm con của sắt không hợp lệ' })
   steelSubGroup?: SteelSubGroup;
 
   @ApiPropertyOptional({ description: 'Kho vật tư này sẽ nằm khi được tạo' })
