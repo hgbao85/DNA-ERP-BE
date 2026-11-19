@@ -7,7 +7,19 @@ import { CutSnapshotCache } from './cut-allocation-snapshot';
 import { FloorAdminService } from './floor-admin.service';
 import { PaintTransferReminderService } from '../warehouse-transfers/paint-transfer-reminder.service';
 import { CutAllocationFollowUpService } from './cut-allocation-follow-up.service';
-import { FloorAlertsService, MIN_EVALUATE_GAP_MS, STALE_HOURS } from './floor-alerts.service';
+import { FloorAlertsService, MIN_EVALUATE_GAP_MS } from './floor-alerts.service';
+import {
+  KCS_STALE_HOURS,
+  listKcsPendingItems,
+  type KcsBlockedReason,
+  type KcsPendingItem,
+} from './kcs-pending.util';
+
+jest.mock('./kcs-pending.util', () => ({
+  ...jest.requireActual<typeof import('./kcs-pending.util')>('./kcs-pending.util'),
+  listKcsPendingItems: jest.fn(),
+}));
+const listPending = listKcsPendingItems as jest.MockedFunction<typeof listKcsPendingItems>;
 
 describe('FloorAlertsService', () => {
   let prisma: {
@@ -136,14 +148,27 @@ describe('FloorAlertsService', () => {
     );
   });
 
-  /** Dựng `n` đợt cắt Phôi quá hạn của lệnh `piId`. */
-  const staleCut = (n: number, piId = 45n) =>
-    prisma.cutBundle.findMany.mockResolvedValue(
-      Array.from({ length: n }, () => ({ steelIssue: { productionInvoiceId: piId } })),
-    );
-  const staleBatch = (stage: string, piId: bigint) => ({
+  const pendingItem = (
+    stage: 'PHOI' | 'HAN' | 'SON',
+    piId: bigint | null,
+    blockedReason: KcsBlockedReason = null,
+    state: 'OPEN' | 'AWAITING_QC' = 'OPEN',
+  ): KcsPendingItem => ({
     stage,
-    productionOrder: { productionInvoiceItem: { productionInvoiceId: piId } },
+    productionInvoiceId: piId,
+    kind: stage === 'PHOI' ? 'CUT' : 'PIECE_BATCH',
+    state,
+    waitingSince: new Date('2026-10-13T00:00:00Z'),
+    blockedReason,
+  });
+  /** Dựng `n` đợt cắt Phôi chờ KCS quá hạn của lệnh `piId` (nguồn listKcsPendingItems đã mock). */
+  const staleCut = (n: number, piId = 45n) =>
+    listPending.mockResolvedValue(Array.from({ length: n }, () => pendingItem('PHOI', piId)));
+  const staleBatch = (stage: 'PHOI' | 'HAN' | 'SON', piId: bigint) => pendingItem(stage, piId);
+
+  beforeEach(() => {
+    listPending.mockReset();
+    listPending.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -470,7 +495,7 @@ describe('FloorAlertsService', () => {
       await expect(service.evaluate()).resolves.toBeUndefined();
 
       expect(notifications.emit).toHaveBeenCalledWith(
-        'FLOOR_BATCH_STALE',
+        'KCS_BATCH_STALE',
         expect.objectContaining({ entityId: 'PHOI:5' }),
       );
     });
@@ -652,7 +677,7 @@ describe('FloorAlertsService', () => {
 
       expect(notifications.emit).toHaveBeenCalledWith('CUT_MACHINE_IDLE', expect.anything());
       expect(notifications.emit).toHaveBeenCalledWith(
-        'FLOOR_BATCH_STALE',
+        'KCS_BATCH_STALE',
         expect.objectContaining({ entityId: 'PHOI:5' }),
       );
       expect(realtime.publishEntityChanged).not.toHaveBeenCalled();
@@ -896,64 +921,96 @@ describe('FloorAlertsService', () => {
     });
   });
 
-  describe('đợt chờ gửi KCS quá lâu (theo xưởng)', () => {
+  describe('đợt chờ KCS chấm quá lâu (KCS_BATCH_STALE, theo tổ x xưởng)', () => {
     const staleParams = (stage: string, count: number, ws: string, name: string) => ({
       stage,
       count,
-      hours: STALE_HOURS,
+      hours: KCS_STALE_HOURS,
       workshopId: ws,
       workshopName: name,
     });
+    /** Danh sách tin đang mở theo type (mặc định rỗng). */
+    const openByType = (byType: Record<string, Array<{ entityId: string }>>) =>
+      prisma.notification.findMany.mockImplementation((args: { where: { type: string } }) =>
+        Promise.resolve(byType[args.where.type] ?? []),
+      );
 
-    it('AC3: 2 xưởng + Sơn nhờ -> 3 tin riêng, entityId <tổ>:<xưởng>', async () => {
-      prisma.cutBundle.findMany.mockResolvedValue([
-        { steelIssue: { productionInvoiceId: 45n } },
-        ...Array.from({ length: 4 }, () => ({ steelIssue: { productionInvoiceId: 46n } })),
+    it('AC18: 2 xưởng + Sơn nhờ -> 3 tin KCS_BATCH_STALE riêng, entityId <tổ>:<xưởng>', async () => {
+      listPending.mockResolvedValue([
+        pendingItem('PHOI', 45n),
+        ...Array.from({ length: 4 }, () => pendingItem('PHOI', 46n)),
+        staleBatch('SON', 46n),
       ]);
-      prisma.productionBatch.findMany.mockResolvedValue([staleBatch('SON', 46n)]);
 
       await service.evaluate();
 
-      expect(notifications.emit).toHaveBeenCalledWith('FLOOR_BATCH_STALE', {
+      expect(notifications.emit).toHaveBeenCalledWith('KCS_BATCH_STALE', {
         entityId: 'PHOI:5',
-        dedupeKey: 'FLOOR_BATCH_STALE:PHOI:5',
+        dedupeKey: 'KCS_BATCH_STALE:PHOI:5',
         params: staleParams('PHOI', 1, '5', 'Phú An'),
       });
-      expect(notifications.emit).toHaveBeenCalledWith('FLOOR_BATCH_STALE', {
+      expect(notifications.emit).toHaveBeenCalledWith('KCS_BATCH_STALE', {
         entityId: 'PHOI:6',
-        dedupeKey: 'FLOOR_BATCH_STALE:PHOI:6',
+        dedupeKey: 'KCS_BATCH_STALE:PHOI:6',
         params: staleParams('PHOI', 4, '6', 'Phước An'),
       });
       // lô Sơn của lệnh Phước An nằm ở xưởng nơi sơn = Phú An
-      expect(notifications.emit).toHaveBeenCalledWith('FLOOR_BATCH_STALE', {
+      expect(notifications.emit).toHaveBeenCalledWith('KCS_BATCH_STALE', {
         entityId: 'SON:5',
-        dedupeKey: 'FLOOR_BATCH_STALE:SON:5',
+        dedupeKey: 'KCS_BATCH_STALE:SON:5',
         params: staleParams('SON', 1, '5', 'Phú An'),
       });
       expect(notifications.emit).toHaveBeenCalledTimes(3);
+      expect(notifications.emit).not.toHaveBeenCalledWith('FLOOR_BATCH_STALE', expect.anything());
     });
 
-    it('đợt không suy ra được xưởng -> nhóm none, params không có workshopId', async () => {
+    it('đợt không suy ra được xưởng -> nhóm none, params KHÔNG có khoá workshopId', async () => {
       staleCut(2, 999n);
 
       await service.evaluate();
 
-      expect(notifications.emit).toHaveBeenCalledWith('FLOOR_BATCH_STALE', {
+      expect(notifications.emit).toHaveBeenCalledWith('KCS_BATCH_STALE', {
         entityId: 'PHOI:none',
-        dedupeKey: 'FLOOR_BATCH_STALE:PHOI:none',
-        params: { stage: 'PHOI', count: 2, hours: STALE_HOURS },
+        dedupeKey: 'KCS_BATCH_STALE:PHOI:none',
+        params: { stage: 'PHOI', count: 2, hours: KCS_STALE_HOURS },
       });
     });
 
-    it('công đoạn phụ (stepBatch) tính vào Phôi theo lệnh của nó', async () => {
-      prisma.stepBatch.findMany.mockResolvedValue([{ productionInvoiceId: 45n }]);
+    it('đợt đã chốt chờ chấm (AWAITING_QC) cũng tính', async () => {
+      listPending.mockResolvedValue([pendingItem('HAN', 45n, null, 'AWAITING_QC')]);
 
       await service.evaluate();
 
       expect(notifications.emit).toHaveBeenCalledWith(
-        'FLOOR_BATCH_STALE',
-        expect.objectContaining({ entityId: 'PHOI:5' }),
+        'KCS_BATCH_STALE',
+        expect.objectContaining({ entityId: 'HAN:5' }),
       );
+    });
+
+    it('dòng bị chặn (lệnh dừng / chưa gắn SKU) không tính vào tin', async () => {
+      listPending.mockResolvedValue([
+        pendingItem('PHOI', 45n, 'LENH_DUNG'),
+        pendingItem('PHOI', 45n, 'CHUA_GAN_SKU'),
+        pendingItem('PHOI', 45n),
+      ]);
+
+      await service.evaluate();
+
+      expect(notifications.emit).toHaveBeenCalledTimes(1);
+      expect(notifications.emit).toHaveBeenCalledWith(
+        'KCS_BATCH_STALE',
+        expect.objectContaining({ params: staleParams('PHOI', 1, '5', 'Phú An') }),
+      );
+    });
+
+    it('mốc = bây giờ - KCS_STALE_HOURS, truyền xuống listKcsPendingItems', async () => {
+      const now = new Date('2026-10-13T12:00:00Z');
+
+      await service.evaluate(now);
+
+      expect(listPending).toHaveBeenCalledWith(prisma, {
+        staleBefore: new Date(now.getTime() - KCS_STALE_HOURS * 3_600_000),
+      });
     });
 
     it('AC4: tin đang mở, số đổi -> updateOpenContent (không emit lại, giữ đã đọc)', async () => {
@@ -966,8 +1023,8 @@ describe('FloorAlertsService', () => {
       await service.evaluate();
 
       expect(notifications.updateOpenContent).toHaveBeenCalledWith(
-        'FLOOR_BATCH_STALE',
-        'FLOOR_BATCH_STALE:PHOI:6',
+        'KCS_BATCH_STALE',
+        'KCS_BATCH_STALE:PHOI:6',
         staleParams('PHOI', 6, '6', 'Phước An'),
       );
       expect(notifications.emit).not.toHaveBeenCalled();
@@ -994,52 +1051,65 @@ describe('FloorAlertsService', () => {
       await service.evaluate();
 
       expect(notifications.emit).toHaveBeenCalledWith(
-        'FLOOR_BATCH_STALE',
+        'KCS_BATCH_STALE',
         expect.objectContaining({ entityId: 'PHOI:5' }),
       );
     });
 
-    it('AC4/AC5: hết đợt và tin kiểu cũ (entityId PHOI) -> resolve theo entityType + đúng type; nhóm còn thì giữ', async () => {
+    it('hết đợt -> đóng đúng tin KCS_BATCH_STALE của nhóm hết; nhóm còn thì giữ', async () => {
       staleCut(1, 45n);
-      prisma.notification.findMany.mockImplementation((args: { where: { type: unknown } }) =>
-        Promise.resolve(
-          args.where.type === 'FLOOR_BATCH_STALE'
-            ? [{ entityId: 'PHOI' }, { entityId: 'PHOI:6' }, { entityId: 'PHOI:5' }]
-            : [],
-        ),
-      );
+      openByType({ KCS_BATCH_STALE: [{ entityId: 'PHOI:6' }, { entityId: 'PHOI:5' }] });
 
       await service.evaluate();
 
       expect(notifications.resolve).toHaveBeenCalledWith({
         entityType: 'FLOOR_STAGE',
-        entityId: 'PHOI',
-        types: ['FLOOR_BATCH_STALE'],
-      });
-      expect(notifications.resolve).toHaveBeenCalledWith({
-        entityType: 'FLOOR_STAGE',
         entityId: 'PHOI:6',
-        types: ['FLOOR_BATCH_STALE'],
+        types: ['KCS_BATCH_STALE'],
       });
       expect(notifications.resolve).not.toHaveBeenCalledWith(
-        expect.objectContaining({ entityId: 'PHOI:5' }),
+        expect.objectContaining({ entityId: 'PHOI:5', types: ['KCS_BATCH_STALE'] }),
       );
     });
 
-    it('ngưỡng tính theo lần báo CÒN HIỆU LỰC đầu tiên (bỏ lần đã bị đảo), mốc = bây giờ - STALE_HOURS', async () => {
-      const now = new Date('2026-10-13T12:00:00Z');
-
-      await service.evaluate(now);
-
-      const where = (prisma.cutBundle.findMany.mock.calls as unknown[][])[0][0] as {
-        where: { status: string; floorReports: { some: Record<string, unknown> } };
-      };
-      expect(where.where.status).toBe('CUTTING');
-      expect(where.where.floorReports.some).toEqual({
-        createdAt: { lt: new Date(now.getTime() - STALE_HOURS * 3_600_000) },
-        reversalOfId: null,
-        reversedBy: { is: null },
+    it('2 xưởng: xưởng B hết, xưởng A giữ nguyên -> chỉ đóng tin B, không tạo tin mới', async () => {
+      staleCut(3, 45n); // chỉ còn xưởng A (5)
+      prisma.notification.findFirst.mockResolvedValue({
+        id: 'nA',
+        data: { count: 3, workshopName: 'Phú An' },
       });
+      openByType({ KCS_BATCH_STALE: [{ entityId: 'PHOI:5' }, { entityId: 'PHOI:6' }] });
+
+      await service.evaluate();
+
+      expect(notifications.emit).not.toHaveBeenCalled();
+      expect(notifications.updateOpenContent).not.toHaveBeenCalled();
+      expect(notifications.resolve).toHaveBeenCalledWith({
+        entityType: 'FLOOR_STAGE',
+        entityId: 'PHOI:6',
+        types: ['KCS_BATCH_STALE'],
+      });
+      expect(notifications.resolve).not.toHaveBeenCalledWith(
+        expect.objectContaining({ entityId: 'PHOI:5', types: ['KCS_BATCH_STALE'] }),
+      );
+    });
+
+    it('FLOOR_BATCH_STALE không phát nữa; tin cũ còn mở (kể cả entityId kiểu cũ) bị đóng hết', async () => {
+      staleCut(2, 45n);
+      openByType({
+        FLOOR_BATCH_STALE: [{ entityId: 'PHOI' }, { entityId: 'PHOI:5' }, { entityId: 'HAN:none' }],
+      });
+
+      await service.evaluate();
+
+      expect(notifications.emit).not.toHaveBeenCalledWith('FLOOR_BATCH_STALE', expect.anything());
+      for (const id of ['PHOI', 'PHOI:5', 'HAN:none']) {
+        expect(notifications.resolve).toHaveBeenCalledWith({
+          entityType: 'FLOOR_STAGE',
+          entityId: id,
+          types: ['FLOOR_BATCH_STALE'],
+        });
+      }
     });
   });
 
@@ -1056,7 +1126,7 @@ describe('FloorAlertsService', () => {
       await expect(service.evaluate()).resolves.toBeUndefined();
 
       expect(notifications.emit).toHaveBeenCalledWith(
-        'FLOOR_BATCH_STALE',
+        'KCS_BATCH_STALE',
         expect.objectContaining({ entityId: 'PHOI:5' }),
       );
     });
@@ -1090,6 +1160,8 @@ describe('FloorAlertsService', () => {
         service.requestEvaluate({ urgent: true });
         await jest.advanceTimersByTimeAsync(DEBOUNCE + MIN_EVALUATE_GAP_MS * 2);
         expect(runs()).toBe(0);
+        expect(listPending).not.toHaveBeenCalled();
+        expect(notifications.emit).not.toHaveBeenCalled();
       } finally {
         if (old === undefined) delete process.env.FLOOR_ALERTS;
         else process.env.FLOOR_ALERTS = old;

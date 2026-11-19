@@ -46,6 +46,28 @@ import { ListQcReviewsQueryDto } from './dto/list-qc-reviews-query.dto';
 import { QcReviewResponseDto, QcReviewSegmentResponseDto } from './dto/qc-review-response.dto';
 import { UpdateQcReviewPhotoDto } from './dto/update-qc-review-photo.dto';
 
+/** 409 khi 2 KCS cùng chấm 1 đợt (P1, 18/11/2026): người thua nhận câu lời thường, không ghi gì. */
+const QC_DUPLICATE_MESSAGE = 'Đợt này vừa được KCS khác chấm xong - tải lại trang.';
+
+/** Hạn của transaction chấm (P1): chấm lô mảnh có thể trừ tồn đoạn theo nhiều ô nên cho 20 giây. */
+const QC_TX_TIMEOUT_MS = 20_000;
+
+/** Đơn vị trong câu "KCS ghi thiếu": đoạn (Cắt / công đoạn phụ), mảnh (Hàn / Sơn / pat), cái (chân nhôm). */
+type ShortUnit = 'đoạn' | 'mảnh' | 'cái';
+
+/** Câu thiếu (P1): chỉ đưa vào tin khi shortQty > 0. */
+const buildShortText = (shortQty: number, unit: ShortUnit): string =>
+  `KCS ghi thiếu ${shortQty} ${unit} so với số báo (đã trừ, không tính lỗi, không cần làm bù).`;
+
+/** Tuỳ chọn của tin kết quả KCS (P1): `detail` / `todo` chỉ Cắt / công đoạn phụ; `note` chỉ khi chấm đạt mà có thiếu. */
+interface QcResultOptions {
+  detail?: string;
+  todo?: string;
+  note?: string;
+  /** Xưởng nơi làm (chỉ lô Sơn của lệnh Phước An: sơn ở Phú An) - người nhận lọc theo xưởng này thay vì mã lệnh. */
+  workshopId?: string;
+}
+
 const QC_REVIEW_INCLUDE = {
   defectReason: true,
   segments: { include: { segmentSpec: true } },
@@ -63,6 +85,22 @@ type QcReviewRow = Prisma.QcReviewGetPayload<{ include: typeof QC_REVIEW_INCLUDE
  * changelog "Bù đủ dồn về bảng tổng": mọi nhánh giờ chỉ Đạt/Không đạt, "Lỗi" là số lịch sử cộng
  * dồn, Bù đủ = 1 đợt/lô HOÀN TOÀN MỚI gửi duyệt lại.
  */
+/** P1 (AC29): lỗi / thiếu KCS ghi cho 1 cỡ đoạn, cộng theo cỡ. */
+interface SegmentAsked {
+  failed: number;
+  short: number;
+}
+
+/**
+ * P1 (AC29, nguyên văn): câu 400 khi lỗi + thiếu của 1 cỡ vượt số đã báo của CHÍNH đợt (đợt cắt / đợt công đoạn phụ).
+ * Có thiếu: "Cỡ 441mm: thiếu 5 + lỗi 118 vượt số đã báo trong đợt (120)"; không thiếu: "Cỡ 441mm: lỗi 121 vượt số đã báo trong đợt (120)".
+ */
+function segmentOverReportedMessage(mm: string, asked: SegmentAsked, reported: number): string {
+  const parts =
+    asked.short > 0 ? `thiếu ${asked.short} + lỗi ${asked.failed}` : `lỗi ${asked.failed}`;
+  return `Cỡ ${mm}mm: ${parts} vượt số đã báo trong đợt (${reported})`;
+}
+
 @Injectable()
 export class QcReviewsService {
   private readonly logger = new Logger(QcReviewsService.name);
@@ -126,18 +164,26 @@ export class QcReviewsService {
     piCode: string,
     failedQty: number,
     senderRole: string,
-    extra?: { detail: string; todo: string },
-    /** Xưởng nơi làm (chỉ lô Sơn của lệnh Phước An: sơn ở Phú An) - người nhận lọc theo xưởng này thay vì mã lệnh. */
-    workshopId?: string,
+    opts?: QcResultOptions,
   ): Promise<void> {
     try {
-      const ws = workshopId ? { workshopId } : {};
+      const ws = opts?.workshopId ? { workshopId: opts.workshopId } : {};
       if (failedQty > 0) {
+        // note chỉ dành cho QC_PASSED; todo chỉ có ở Cắt / công đoạn phụ (Hàn / Sơn / pat / chân nhôm dùng câu mặc định).
         await this.notifications.emit('QC_FAILED', {
-          params: { piCode, failedQty, senderRole, ...extra, ...ws },
+          params: {
+            piCode,
+            failedQty,
+            senderRole,
+            ...(opts?.detail ? { detail: opts.detail } : {}),
+            ...(opts?.todo ? { todo: opts.todo } : {}),
+            ...ws,
+          },
         });
       } else {
-        await this.notifications.emit('QC_PASSED', { params: { piCode, ...ws } });
+        await this.notifications.emit('QC_PASSED', {
+          params: { piCode, ...ws, ...(opts?.note ? { note: opts.note } : {}) },
+        });
       }
     } catch (error) {
       this.logger.error(
@@ -149,25 +195,76 @@ export class QcReviewsService {
   /**
    * 17/11/2026: nội dung tin QC_FAILED của đợt Phôi (cắt / công đoạn phụ), viết cho QLSX (người nhận thật; công nhân
    * không có hộp thông báo). Gom theo cỡ đoạn; bỏ dòng lỗi 0.
+   *
+   * P1 (18/11/2026): KCS tự chấm đợt mới nên câu việc không còn "kiểm rồi gửi KCS". Công đoạn phụ tách 2 ý theo số bỏ
+   * (`scrap`, nằm trong `qty`): "Bỏ a đoạn" = cắt lại ở máy cắt rồi làm lại các công đoạn trước; "Làm lại b đoạn" = làm
+   * lại chính các đoạn đó, không cần cắt. Đợt Cắt bỏ qua `scrap`.
    */
   private buildFailureText(
     step: string,
     materialName: string | null | undefined,
-    failedBySize: { mm: string; qty: number }[],
+    failedBySize: { mm: string; qty: number; scrap?: number }[],
   ): { detail: string; todo: string } {
-    const byMm = new Map<string, number>();
+    const byMm = new Map<string, { qty: number; scrap: number }>();
     for (const f of failedBySize) {
-      if (f.qty > 0) byMm.set(f.mm, (byMm.get(f.mm) ?? 0) + f.qty);
+      if (f.qty <= 0) continue;
+      const cur = byMm.get(f.mm) ?? { qty: 0, scrap: 0 };
+      cur.qty += f.qty;
+      cur.scrap += f.scrap ?? 0;
+      byMm.set(f.mm, cur);
     }
-    const parts = [...byMm].map(([mm, qty]) => `${qty} đoạn ${mm}mm`);
-    const list = parts.join(', ');
+    const list = [...byMm].map(([mm, v]) => `${v.qty} đoạn ${mm}mm`).join(', ');
     const label = processStepLabel(step);
     const detail = `${label}${materialName ? ` ${materialName}` : ''}: ${list} lỗi`;
-    const todo =
-      step === 'CAT'
-        ? `Báo công nhân cắt lại ${list} rồi quét mã máy cắt báo cắt bù; kiểm rồi gửi KCS`
-        : `Báo công nhân làm bù ${list}: nếu không còn đoạn đã cắt dư thì cắt thêm số đó ở máy cắt trước, rồi báo ${label} bù; kiểm rồi gửi KCS`;
-    return { detail, todo };
+    if (step === 'CAT') {
+      return {
+        detail,
+        todo: `Báo công nhân cắt lại ${list} rồi quét mã máy cắt báo cắt bù; KCS tự chấm đợt mới.`,
+      };
+    }
+    const scrapList = [...byMm]
+      .filter(([, v]) => v.scrap > 0)
+      .map(([mm, v]) => `${v.scrap} đoạn ${mm}mm`)
+      .join(', ');
+    const reworkList = [...byMm]
+      .filter(([, v]) => v.qty - v.scrap > 0)
+      .map(([mm, v]) => `${v.qty - v.scrap} đoạn ${mm}mm`)
+      .join(', ');
+    const todoParts: string[] = [];
+    if (scrapList) {
+      todoParts.push(
+        `Bỏ ${scrapList}: cắt lại số đoạn đó ở máy cắt, làm lại các công đoạn trước rồi báo ${label} bù.`,
+      );
+    }
+    if (reworkList) {
+      todoParts.push(
+        `Làm lại ${reworkList}: ${label} lại chính các đoạn đó rồi báo bù (không cần cắt).`,
+      );
+    }
+    return { detail, todo: todoParts.join(' ') };
+  }
+
+  /** Gắn câu thiếu (P1) vào tin: có lỗi thì vào `detail`, không lỗi thì vào `note` của QC_PASSED. Không thiếu: giữ nguyên. */
+  private withShortText(
+    failedQty: number,
+    shortQty: number,
+    unit: ShortUnit,
+    base?: { detail?: string; todo?: string },
+    extraNotes: string[] = [],
+  ): QcResultOptions {
+    if (shortQty <= 0) return { ...base };
+    const shortText = buildShortText(shortQty, unit);
+    const tail =
+      extraNotes.length > 0
+        ? ` ${extraNotes.map((n) => (n.endsWith('.') ? n : `${n}.`)).join(' ')}`
+        : '';
+    if (failedQty <= 0) return { note: `${shortText}${tail}` };
+    const detail = base?.detail ? `${base.detail}. ${shortText}` : `${failedQty} lỗi, ${shortText}`;
+    return {
+      ...base,
+      detail,
+      ...(base?.todo && tail ? { todo: `${base.todo}${tail}` } : {}),
+    };
   }
 
   /**
@@ -198,7 +295,7 @@ export class QcReviewsService {
     productionInvoiceId: bigint,
     failedQty: number,
     senderRole: string,
-    extra?: { detail: string; todo: string },
+    opts?: QcResultOptions,
   ): Promise<void> {
     let piCode: string;
     try {
@@ -213,7 +310,7 @@ export class QcReviewsService {
       );
       return;
     }
-    await this.notifyQcResult(piCode, failedQty, senderRole, extra);
+    await this.notifyQcResult(piCode, failedQty, senderRole, opts);
   }
 
   private mfgStageToSenderRole(stage: MfgStage): string {
@@ -286,6 +383,13 @@ export class QcReviewsService {
           `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không thuộc loại sắt của đợt xuất này`,
         );
       }
+      // P1 (18/11/2026): DTO hạ failedQty xuống ≥ 0 cho các route mới; route lô cũ giữ luật mỗi dòng ≥ 1 lỗi.
+      // shortQty / scrapQty (nếu client gửi) bị bỏ qua, lưu 0.
+      if (seg.failedQty < 1) {
+        throw new BadRequestException(
+          `Cỡ ${spec.cutLengthMm.toString()}mm: số đoạn lỗi phải từ 1 trở lên (bỏ dòng này nếu đạt hết).`,
+        );
+      }
       const doneQty = doneBySpec.get(spec.id.toString()) ?? 0;
       if (seg.failedQty > doneQty) {
         throw new BadRequestException(
@@ -311,9 +415,7 @@ export class QcReviewsService {
         data: { status: SteelIssueStatus.QC_PASSED },
       });
       if (count === 0) {
-        throw new ConflictException(
-          `Phiếu xuất sắt ${steelIssueId} đã bị 1 yêu cầu khác duyệt KCS trong lúc đang xử lý - không ghi đè`,
-        );
+        throw new ConflictException(QC_DUPLICATE_MESSAGE);
       }
 
       return tx.qcReview.create({
@@ -328,6 +430,8 @@ export class QcReviewsService {
             create: dto.segments.map((seg) => ({
               segmentSpecId: parseBigIntId(seg.segmentSpecId),
               failedQty: seg.failedQty,
+              shortQty: 0,
+              scrapQty: 0,
             })),
           },
         },
@@ -358,6 +462,10 @@ export class QcReviewsService {
    *
    * Dòng QcReview ghi CẢ steelIssueId lẫn cutBundleId: giữ nguyên CHECK qc_reviews_goods_xor_chk
    * và mọi truy vấn cũ theo lô (cấp bù, thống kê) vẫn chạy đúng.
+   *
+   * P1 (18/11/2026): mỗi cỡ ghi thêm `shortQty` (thiếu so với số báo, không tính lỗi); lỗi + thiếu ≥ 1 và ≤ số đoạn của
+   * cỡ trong đợt. `scrapQty` bị bỏ qua, lưu 0 (đoạn Cắt lỗi luôn phải cắt lại). Có thiếu thì SAU commit đọc
+   * `stepOveruseAfterCutShortage` để trả `notes[]` (công đoạn phụ đã dùng vượt số đoạn cắt thực có).
    */
   async reviewCutBundle(
     cutBundleId: string,
@@ -372,6 +480,9 @@ export class QcReviewsService {
     if (!bundle) {
       throw new NotFoundException(`Không tìm thấy đợt cắt ${cutBundleId}`);
     }
+    if (bundle.status === CutBundleStatus.QC_PASSED) {
+      throw new ConflictException(QC_DUPLICATE_MESSAGE);
+    }
     if (bundle.status !== CutBundleStatus.AWAITING_QC) {
       throw new ConflictException(
         `Đợt cắt ${cutBundleId} đang ở trạng thái ${bundle.status} - chỉ đợt chờ KCS mới duyệt được`,
@@ -384,19 +495,27 @@ export class QcReviewsService {
     const specById = new Map(specs.map((sp) => [sp.id.toString(), sp]));
 
     let totalFailed = 0;
+    let totalShort = 0;
     const failedBySize: { mm: string; qty: number }[] = [];
     for (const seg of dto.segments) {
       const spec = specById.get(parseBigIntId(seg.segmentSpecId).toString());
       if (!spec) {
         throw new NotFoundException(`Cỡ đoạn ${seg.segmentSpecId} không tồn tại`);
       }
+      const shortQty = seg.shortQty ?? 0;
       failedBySize.push({ mm: spec.cutLengthMm.toString(), qty: seg.failedQty });
       if (spec.materialId !== bundle.steelIssue.materialId) {
         throw new BadRequestException(
           `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không thuộc loại sắt của đợt cắt này`,
         );
       }
+      if (seg.failedQty + shortQty < 1) {
+        throw new BadRequestException(
+          `Cỡ ${spec.cutLengthMm.toString()}mm: ghi số lỗi hoặc số thiếu (ít nhất 1), hoặc bỏ dòng này nếu đạt hết.`,
+        );
+      }
       totalFailed += seg.failedQty;
+      totalShort += shortQty;
     }
 
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
@@ -408,9 +527,7 @@ export class QcReviewsService {
         data: { status: CutBundleStatus.QC_PASSED },
       });
       if (count === 0) {
-        throw new ConflictException(
-          `Đợt cắt ${cutBundleId} đã bị 1 yêu cầu khác duyệt KCS trong lúc đang xử lý - không ghi đè`,
-        );
+        throw new ConflictException(QC_DUPLICATE_MESSAGE);
       }
       // X1 16/11 (phần sót): đọc số đã cắt SAU khi đã giữ dòng đợt (updateMany trên khoá dòng tới hết transaction) - trước đây
       // đọc ngoài transaction. Hiện chưa có đường nào đổi số đoạn của đợt đã chờ KCS (báo cắt / hủy / hoàn tác đều đòi
@@ -423,13 +540,22 @@ export class QcReviewsService {
       const doneBySpec = new Map(
         cutInThisBundle.map((r) => [r.segmentSpecId.toString(), r._sum.qty ?? 0]),
       );
+      // P1: gộp theo cỡ (client gửi trùng cỡ thì cộng lại) rồi so lỗi + thiếu với số đoạn của cỡ trong đợt.
+      const askedBySpec = new Map<string, SegmentAsked>();
       for (const seg of dto.segments) {
-        const spec = specById.get(parseBigIntId(seg.segmentSpecId).toString())!;
-        const doneQty = doneBySpec.get(spec.id.toString()) ?? 0;
-        if (seg.failedQty > doneQty) {
+        const key = parseBigIntId(seg.segmentSpecId).toString();
+        const cur = askedBySpec.get(key) ?? { failed: 0, short: 0 };
+        askedBySpec.set(key, {
+          failed: cur.failed + seg.failedQty,
+          short: cur.short + (seg.shortQty ?? 0),
+        });
+      }
+      for (const [key, asked] of askedBySpec) {
+        const spec = specById.get(key)!;
+        const doneQty = doneBySpec.get(key) ?? 0;
+        if (asked.failed + asked.short > doneQty) {
           throw new BadRequestException(
-            `Chấm lỗi ${seg.failedQty} đoạn ${spec.cutLengthMm.toString()}mm vượt số đã cắt ` +
-              `(${doneQty}) trong chính đợt cắt này`,
+            segmentOverReportedMessage(spec.cutLengthMm.toString(), asked, doneQty),
           );
         }
       }
@@ -439,6 +565,7 @@ export class QcReviewsService {
           steelIssueId: bundle.steelIssueId,
           cutBundleId: bundle.id,
           failedQty: totalFailed,
+          shortQty: totalShort,
           defectReasonId,
           reason: dto.reason,
           photoUrl: dto.photoUrl,
@@ -447,6 +574,8 @@ export class QcReviewsService {
             create: dto.segments.map((seg) => ({
               segmentSpecId: parseBigIntId(seg.segmentSpecId),
               failedQty: seg.failedQty,
+              shortQty: seg.shortQty ?? 0,
+              scrapQty: 0,
             })),
           },
         },
@@ -460,6 +589,16 @@ export class QcReviewsService {
     await this.steelIssuesService.syncIssueStatusFromBundles(bundle.steelIssueId);
 
     await this.resolveAwaitingQc('CUT_BUNDLE', bundle.id, 'CUT_BUNDLE_TO_KCS');
+    // P1: có thiếu thì SAU commit mới thấy số đoạn cắt thực có mới; lỗi đọc chỉ ghi log, không làm hỏng lượt chấm.
+    const notes =
+      totalShort > 0
+        ? await this.buildCutShortNotes(
+            bundle.steelIssue.productionInvoiceId,
+            bundle.steelIssue.materialId,
+            bundle.productionOrderId ?? null,
+            dto.segments.filter((seg) => (seg.shortQty ?? 0) > 0),
+          )
+        : [];
     const invoice = await this.prisma.productionInvoice.findUnique({
       where: { id: bundle.steelIssue.productionInvoiceId },
       select: { code: true },
@@ -468,7 +607,15 @@ export class QcReviewsService {
       invoice?.code ?? `#${bundle.steelIssue.productionInvoiceId}`,
       totalFailed,
       BUSINESS_ROLES.PHOI_STAFF,
-      this.buildFailureText('CAT', materialLabel(bundle.steelIssue.material), failedBySize),
+      this.withShortText(
+        totalFailed,
+        totalShort,
+        'đoạn',
+        totalFailed > 0
+          ? this.buildFailureText('CAT', materialLabel(bundle.steelIssue.material), failedBySize)
+          : undefined,
+        notes,
+      ),
     );
 
     await this.segmentProductionService.recomputeAfterQc(
@@ -478,7 +625,49 @@ export class QcReviewsService {
     );
 
     this.publishRealtime(cutBundleId, 'QC_RECORDED', reviewedById);
-    return this.toResponseDto(created);
+    return this.toResponseDto(created, notes);
+  }
+
+  /**
+   * P1: câu cảnh báo sau khi chấm Cắt có thiếu - công đoạn phụ nào của cỡ nào đã báo nhiều hơn số đoạn cắt thực có.
+   * Chỉ đọc, best-effort (lỗi chỉ ghi log, trả []).
+   */
+  private async buildCutShortNotes(
+    productionInvoiceId: bigint,
+    materialId: bigint,
+    productionOrderId: bigint | null,
+    shortSegments: { segmentSpecId: string }[],
+  ): Promise<string[]> {
+    try {
+      const specIds = [...new Set(shortSegments.map((s) => parseBigIntId(s.segmentSpecId)))];
+      const over: {
+        step: string;
+        cutLengthMm: number;
+        overBy: number;
+        /** Số đoạn cắt thực có (chưa có trong chữ ký hiện tại của BE-2 - xem openQuestions). */
+        cutCap?: number;
+      }[] = await this.steelIssuesService.stepOveruseAfterCutShortage(
+        productionInvoiceId,
+        materialId,
+        productionOrderId,
+        specIds,
+      );
+      return over.map((o) => {
+        const label = processStepLabel(o.step);
+        // Chốt 19/11 (QA nghiệm thu AC34): ghi cả số đoạn cắt thực có (trong ngoặc) lẫn số đoạn vượt, để KCS không đọc nhầm
+        // "vượt 39 đoạn" khi chỉ vượt 2: "Uốn cỡ 355mm đã báo nhiều hơn số đoạn cắt thực có (39) 2 đoạn - …".
+        const have = o.cutCap != null ? ` (${o.cutCap})` : '';
+        return (
+          `${label} cỡ ${o.cutLengthMm}mm đã báo nhiều hơn số đoạn cắt thực có${have} ${o.overBy} đoạn - ` +
+          `${label} sẽ bị chặn tới khi cắt thêm hoặc KCS ${label} ghi thiếu`
+        );
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to build cut-shortage notes (PI ${productionInvoiceId}): ${(error as Error).message}`,
+      );
+      return [];
+    }
   }
 
   /**
@@ -496,6 +685,9 @@ export class QcReviewsService {
    * SteelIssue/CutBundle nào (scope PI + loại sắt), nên `QcReview` tạo ra CHỈ ghi `stepBundleId`
    * (LÀ 1 LEG THẬT trong XOR qc_reviews_goods_xor_chk, mirror pieceStepBundleId) - KHÔNG còn kèm
    * `steelIssueId` như bản đầu.
+   *
+   * P1 (18/11/2026): mỗi cỡ ghi lỗi / thiếu (lỗi + thiếu ≥ 1 và ≤ số đã báo của cỡ trong đợt). Cỡ có lỗi thì BẮT BUỘC
+   * chọn `scrapQty` (0 ≤ bỏ ≤ lỗi): bỏ = cắt lại, phần còn lại của lỗi = làm lại.
    */
   async reviewStepBundle(
     stepBundleId: string,
@@ -510,9 +702,12 @@ export class QcReviewsService {
     if (!bundle) {
       throw new NotFoundException(`Không tìm thấy đợt gửi KCS ${stepBundleId}`);
     }
+    if (bundle.status === StepBundleStatus.QC_PASSED) {
+      throw new ConflictException(QC_DUPLICATE_MESSAGE);
+    }
     if (bundle.status !== StepBundleStatus.AWAITING_QC) {
       throw new ConflictException(
-        `Đợt gửi KCS ${stepBundleId} đang ở trạng thái ${bundle.status} - chỉ đợt chờ KCS mới duyệt được`,
+        `Đợt gửi KCS ${stepBundleId} đang ở trạng thái ${String(bundle.status)} - chỉ đợt chờ KCS mới duyệt được`,
       );
     }
     await assertPiHasActiveFloor(this.prisma, bundle.productionInvoiceId, 'duyệt KCS');
@@ -532,26 +727,50 @@ export class QcReviewsService {
     );
 
     let totalFailed = 0;
-    const failedBySize: { mm: string; qty: number }[] = [];
+    let totalShort = 0;
+    const failedBySize: { mm: string; qty: number; scrap: number }[] = [];
+    const askedBySpec = new Map<string, SegmentAsked>();
     for (const seg of dto.segments) {
       const spec = specById.get(parseBigIntId(seg.segmentSpecId).toString());
       if (!spec) {
         throw new NotFoundException(`Cỡ đoạn ${seg.segmentSpecId} không tồn tại`);
       }
-      failedBySize.push({ mm: spec.cutLengthMm.toString(), qty: seg.failedQty });
+      const mm = spec.cutLengthMm.toString();
+      const shortQty = seg.shortQty ?? 0;
       if (spec.materialId !== bundle.materialId) {
+        throw new BadRequestException(`Cỡ đoạn ${mm}mm không thuộc loại sắt của đợt gửi KCS này`);
+      }
+      if (seg.failedQty + shortQty < 1) {
         throw new BadRequestException(
-          `Cỡ đoạn ${spec.cutLengthMm.toString()}mm không thuộc loại sắt của đợt gửi KCS này`,
+          `Cỡ ${mm}mm: ghi số lỗi hoặc số thiếu (ít nhất 1), hoặc bỏ dòng này nếu đạt hết.`,
         );
       }
-      const doneQty = doneBySpec.get(spec.id.toString()) ?? 0;
-      if (seg.failedQty > doneQty) {
+      if (seg.failedQty > 0 && seg.scrapQty == null) {
         throw new BadRequestException(
-          `Chấm lỗi ${seg.failedQty} đoạn ${spec.cutLengthMm.toString()}mm vượt số đã báo ` +
-            `(${doneQty}) trong chính đợt gửi KCS này`,
+          `Cỡ ${mm}mm: chọn số đoạn lỗi phải bỏ (cắt lại), 0 nếu chỉ làm lại. Màn chấm chưa có ô này thì tải lại trang.`,
         );
       }
+      const scrapQty = seg.failedQty > 0 ? (seg.scrapQty ?? 0) : 0;
+      if ((seg.scrapQty ?? 0) > seg.failedQty) {
+        throw new BadRequestException(
+          `Cỡ ${mm}mm: số bỏ (${seg.scrapQty}) lớn hơn số lỗi (${seg.failedQty}).`,
+        );
+      }
+      failedBySize.push({ mm, qty: seg.failedQty, scrap: scrapQty });
+      const key = spec.id.toString();
+      const cur = askedBySpec.get(key) ?? { failed: 0, short: 0 };
+      askedBySpec.set(key, { failed: cur.failed + seg.failedQty, short: cur.short + shortQty });
       totalFailed += seg.failedQty;
+      totalShort += shortQty;
+    }
+    for (const [key, asked] of askedBySpec) {
+      const spec = specById.get(key)!;
+      const doneQty = doneBySpec.get(key) ?? 0;
+      if (asked.failed + asked.short > doneQty) {
+        throw new BadRequestException(
+          segmentOverReportedMessage(spec.cutLengthMm.toString(), asked, doneQty),
+        );
+      }
     }
 
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
@@ -563,15 +782,14 @@ export class QcReviewsService {
         data: { status: StepBundleStatus.QC_PASSED },
       });
       if (count === 0) {
-        throw new ConflictException(
-          `Đợt gửi KCS ${stepBundleId} đã bị 1 yêu cầu khác duyệt trong lúc đang xử lý - không ghi đè`,
-        );
+        throw new ConflictException(QC_DUPLICATE_MESSAGE);
       }
 
       return tx.qcReview.create({
         data: {
           stepBundleId: bundle.id,
           failedQty: totalFailed,
+          shortQty: totalShort,
           defectReasonId,
           reason: dto.reason,
           photoUrl: dto.photoUrl,
@@ -580,6 +798,8 @@ export class QcReviewsService {
             create: dto.segments.map((seg) => ({
               segmentSpecId: parseBigIntId(seg.segmentSpecId),
               failedQty: seg.failedQty,
+              shortQty: seg.shortQty ?? 0,
+              scrapQty: seg.failedQty > 0 ? (seg.scrapQty ?? 0) : 0,
             })),
           },
         },
@@ -598,7 +818,14 @@ export class QcReviewsService {
       bundle.productionInvoiceId,
       totalFailed,
       BUSINESS_ROLES.PHOI_STAFF,
-      this.buildFailureText(bundle.step, materialLabel(bundle.material), failedBySize),
+      this.withShortText(
+        totalFailed,
+        totalShort,
+        'đoạn',
+        totalFailed > 0
+          ? this.buildFailureText(bundle.step, materialLabel(bundle.material), failedBySize)
+          : undefined,
+      ),
     );
 
     this.publishRealtime(stepBundleId, 'QC_RECORDED', reviewedById);
@@ -613,6 +840,11 @@ export class QcReviewsService {
    * reportedQty = phần ĐẠT), công nhân tự báo lại toàn bộ phần lỗi ở 1 lô HOÀN TOÀN MỚI sau (qua
    * ProductionBatchesService.create() bình thường - "Bù đủ" chỉ pre-fill số lượng ở FE, không có
    * API riêng).
+   *
+   * P1 (18/11/2026): KCS ghi thêm `shortQty` (thiếu so với số báo; đã trừ, không tính lỗi, không làm bù). Việc TRỪ ĐOẠN dời
+   * từ lúc gửi KCS sang đây, theo số báo − thiếu. Thứ tự trong transaction (MF3: khoá advisory trước, dòng sau): khoá
+   * lô → ghi reportedQty = báo − thiếu (so count) → trừ đoạn → ghi reportedQty = báo − lỗi − thiếu → mảnh vào kho
+   * (nếu công đoạn cuối) → tạo qc_review.
    */
   async reviewProductionBatch(
     productionBatchId: string,
@@ -620,6 +852,9 @@ export class QcReviewsService {
     reviewedById: string,
   ): Promise<QcReviewResponseDto> {
     const batch = await this.productionBatchesService.findOneRowOrThrow(productionBatchId);
+    if (batch.status === ProductionBatchStatus.QC_DONE) {
+      throw new ConflictException(QC_DUPLICATE_MESSAGE);
+    }
     if (batch.status !== ProductionBatchStatus.AWAITING_QC) {
       throw new ConflictException(
         `Đợt sản xuất ${productionBatchId} đang ở trạng thái ${batch.status} - chỉ AWAITING_QC mới duyệt KCS được`,
@@ -627,62 +862,103 @@ export class QcReviewsService {
     }
     await assertOrderPiHasActiveFloor(this.prisma, batch.productionOrderId, 'duyệt KCS');
 
-    if (dto.failedQty > batch.reportedQty) {
+    const shortQty = dto.shortQty ?? 0;
+    if (dto.failedQty + shortQty > batch.reportedQty) {
       throw new BadRequestException(
-        `Số không đạt (${dto.failedQty}) không được vượt số lượng đã báo (${batch.reportedQty})`,
+        shortQty > 0
+          ? `Thiếu (${shortQty}) + không đạt (${dto.failedQty}) vượt số đã báo (${batch.reportedQty})`
+          : `Số không đạt (${dto.failedQty}) không được vượt số lượng đã báo (${batch.reportedQty})`,
       );
     }
-    const passedQty = batch.reportedQty - dto.failedQty;
+    // Số đã tính vào kế hoạch (đạt) và số đoạn bị trừ (báo − thiếu; phần lỗi vẫn là đoạn đã dùng).
+    const passedQty = batch.reportedQty - dto.failedQty - shortQty;
+    const consumedQty = batch.reportedQty - shortQty;
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
 
-    const created = await this.prisma.$transaction(async (tx) => {
-      // Đính chính audit độc lập 09/09 (Nghiêm trọng #5) - cùng lý do/cùng fix review() ở trên.
-      // Đặc biệt quan trọng ở đây: reportedQty bị GHI ĐÈ (không cộng dồn) - 2 request duyệt trùng
-      // mà không chặn sẽ làm sản lượng đã chốt sai lệch thật (không chỉ lost-update audit trail).
-      const { count } = await tx.productionBatch.updateMany({
-        where: { id: batch.id, status: ProductionBatchStatus.AWAITING_QC },
-        data: { status: ProductionBatchStatus.QC_DONE, reportedQty: passedQty },
-      });
-      if (count === 0) {
-        throw new ConflictException(
-          `Đợt sản xuất ${productionBatchId} đã bị 1 yêu cầu khác duyệt KCS trong lúc đang xử lý - không ghi đè`,
-        );
-      }
-      // Đợt 7 (người B): KCS đạt ở công đoạn cuối của mảnh -> ghi mảnh vào kho của công đoạn đó.
-      await this.productionBatchesService.postPieceOutputIfFinal(
-        tx,
-        {
-          id: batch.id,
+    const created = await this.prisma.$transaction(
+      async (tx) => {
+        // Khoá trước (khoá chuyển đổi tồn đoạn khi công tắc bật, rồi production-batch-open): cùng thứ tự với
+        // recordProductionBatch / finishProductionBatch nên không vòng chờ. consumeSegmentsAtReviewInTx lấy lại 2 khoá này.
+        await this.productionBatchesService.lockBatchKeysInTx(tx, {
           productionOrderId: batch.productionOrderId,
           pieceId: batch.pieceId,
           stage: batch.stage,
-          qty: passedQty,
-        },
-        reviewedById,
-      );
-
-      return tx.qcReview.create({
-        data: {
-          productionBatchId: batch.id,
-          failedQty: dto.failedQty,
-          defectReasonId,
-          reason: dto.reason,
-          photoUrl: dto.photoUrl,
+        });
+        // Đính chính audit độc lập 09/09 (Nghiêm trọng #5) - cùng lý do/cùng fix review() ở trên.
+        // Đặc biệt quan trọng ở đây: reportedQty bị GHI ĐÈ (không cộng dồn) - 2 request duyệt trùng
+        // mà không chặn sẽ làm sản lượng đã chốt sai lệch thật (không chỉ lost-update audit trail).
+        // P1: bước này ghi báo − thiếu (số đoạn dùng thật) để consumeSegmentsAtReviewInTx đọc đúng; bước dưới hạ tiếp
+        // về báo − lỗi − thiếu.
+        const { count } = await tx.productionBatch.updateMany({
+          where: { id: batch.id, status: ProductionBatchStatus.AWAITING_QC },
+          data: { status: ProductionBatchStatus.QC_DONE, reportedQty: consumedQty },
+        });
+        if (count === 0) {
+          throw new ConflictException(QC_DUPLICATE_MESSAGE);
+        }
+        await this.productionBatchesService.consumeSegmentsAtReviewInTx(
+          tx,
+          batch.id,
+          consumedQty,
           reviewedById,
-        },
-        include: QC_REVIEW_INCLUDE,
-      });
-    });
+        );
+        if (dto.failedQty > 0) {
+          await tx.productionBatch.update({
+            where: { id: batch.id },
+            data: { reportedQty: passedQty },
+          });
+        }
+        // Đợt 7 (người B): KCS đạt ở công đoạn cuối của mảnh -> ghi mảnh vào kho của công đoạn đó.
+        await this.productionBatchesService.postPieceOutputIfFinal(
+          tx,
+          {
+            id: batch.id,
+            productionOrderId: batch.productionOrderId,
+            pieceId: batch.pieceId,
+            stage: batch.stage,
+            qty: passedQty,
+          },
+          reviewedById,
+        );
 
+        return tx.qcReview.create({
+          data: {
+            productionBatchId: batch.id,
+            failedQty: dto.failedQty,
+            shortQty,
+            defectReasonId,
+            reason: dto.reason,
+            photoUrl: dto.photoUrl,
+            reviewedById,
+          },
+          include: QC_REVIEW_INCLUDE,
+        });
+      },
+      { timeout: QC_TX_TIMEOUT_MS },
+    );
+
+    // Sau commit, theo thứ tự: đóng tin chờ KCS -> tin vượt đoạn (best-effort) -> tin kết quả -> nhắc kho -> realtime.
     await this.resolveAwaitingQc('PRODUCTION_BATCH', batch.id, 'BATCH_TO_KCS');
+    try {
+      await this.productionBatchesService.afterReviewCommitted(batch.id, reviewedById);
+    } catch (error) {
+      this.logger.error(
+        `Failed to notify segment overages (batch ${batch.id}): ${(error as Error).message}`,
+      );
+    }
+    // Hàn / Sơn / pat KHÔNG truyền todo (dùng câu mặc định); lô Sơn lấy xưởng nơi sơn; có thiếu mới thêm câu thiếu.
+    const sonWorkshopId =
+      batch.stage === MfgStage.SON
+        ? await this.paintWorkshopIdOfOrder(batch.productionOrderId)
+        : undefined;
     await this.notifyQcResult(
       batch.productionOrder?.productionInvoiceItem?.productionInvoice?.code ?? `#${batch.id}`,
       dto.failedQty,
       this.mfgStageToSenderRole(batch.stage),
-      undefined,
-      batch.stage === MfgStage.SON
-        ? await this.paintWorkshopIdOfOrder(batch.productionOrderId)
-        : undefined,
+      {
+        ...this.withShortText(dto.failedQty, shortQty, 'mảnh'),
+        ...(sonWorkshopId ? { workshopId: sonWorkshopId } : {}),
+      },
     );
     // Nhắc thủ kho Hàn chuyển mảnh sang Sơn (lệnh của xưởng không có kho Sơn). Best-effort, không làm hỏng lượt chấm.
     if (batch.stage === MfgStage.HAN) {
@@ -722,16 +998,22 @@ export class QcReviewsService {
   ): Promise<QcReviewResponseDto> {
     const bundle =
       await this.productionBatchesService.findOnePieceStepBundleRowOrThrow(pieceStepBundleId);
+    if (bundle.status === PieceStepBundleStatus.QC_PASSED) {
+      throw new ConflictException(QC_DUPLICATE_MESSAGE);
+    }
     if (bundle.status !== PieceStepBundleStatus.AWAITING_QC) {
       throw new ConflictException(
-        `Đợt gửi KCS ${pieceStepBundleId} đang ở trạng thái ${bundle.status} - chỉ AWAITING_QC mới duyệt được`,
+        `Đợt gửi KCS ${pieceStepBundleId} đang ở trạng thái ${String(bundle.status)} - chỉ AWAITING_QC mới duyệt được`,
       );
     }
     await assertOrderPiHasActiveFloor(this.prisma, bundle.productionOrderId, 'duyệt KCS công đoạn');
 
-    if (dto.failedQty > bundle.qty) {
+    const shortQty = dto.shortQty ?? 0;
+    if (dto.failedQty + shortQty > bundle.qty) {
       throw new BadRequestException(
-        `Số không đạt (${dto.failedQty}) không được vượt số lượng đã gửi (${bundle.qty})`,
+        shortQty > 0
+          ? `Thiếu (${shortQty}) + không đạt (${dto.failedQty}) vượt số đã báo (${bundle.qty})`
+          : `Số không đạt (${dto.failedQty}) không được vượt số lượng đã gửi (${bundle.qty})`,
       );
     }
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
@@ -746,15 +1028,15 @@ export class QcReviewsService {
         data: { status: PieceStepBundleStatus.QC_PASSED },
       });
       if (count === 0) {
-        throw new ConflictException(
-          `Đợt gửi KCS ${pieceStepBundleId} đã bị 1 yêu cầu khác duyệt trong lúc đang xử lý - không ghi đè`,
-        );
+        throw new ConflictException(QC_DUPLICATE_MESSAGE);
       }
 
+      // P1: tạo review (có shortQty) TRƯỚC, rồi mới tự sinh lô pat - hàm đó cộng lỗi + thiếu của mọi review của bundle.
       const review = await tx.qcReview.create({
         data: {
           pieceStepBundleId: bundle.id,
           failedQty: dto.failedQty,
+          shortQty,
           defectReasonId,
           reason: dto.reason,
           photoUrl: dto.photoUrl,
@@ -780,6 +1062,7 @@ export class QcReviewsService {
       bundle.productionOrder?.productionInvoiceItem?.productionInvoice?.code ?? `#${bundle.id}`,
       dto.failedQty,
       BUSINESS_ROLES.PHOI_STAFF,
+      this.withShortText(dto.failedQty, shortQty, 'mảnh'),
     );
     this.publishRealtime(pieceStepBundleId, 'QC_RECORDED', reviewedById, bundle.productionOrderId);
     return this.toResponseDto(created);
@@ -803,16 +1086,22 @@ export class QcReviewsService {
       await this.materialYieldRecipeProductionService.findOneBundleRowOrThrow(
         materialYieldStepBundleId,
       );
+    if (bundle.status === PieceStepBundleStatus.QC_PASSED) {
+      throw new ConflictException(QC_DUPLICATE_MESSAGE);
+    }
     if (bundle.status !== PieceStepBundleStatus.AWAITING_QC) {
       throw new ConflictException(
-        `Đợt gửi KCS ${materialYieldStepBundleId} đang ở trạng thái ${bundle.status} - chỉ AWAITING_QC mới duyệt được`,
+        `Đợt gửi KCS ${materialYieldStepBundleId} đang ở trạng thái ${String(bundle.status)} - chỉ AWAITING_QC mới duyệt được`,
       );
     }
     await assertPiHasActiveFloor(this.prisma, bundle.productionInvoiceId, 'duyệt KCS công đoạn');
 
-    if (dto.failedQty > bundle.qty) {
+    const shortQty = dto.shortQty ?? 0;
+    if (dto.failedQty + shortQty > bundle.qty) {
       throw new BadRequestException(
-        `Số không đạt (${dto.failedQty}) không được vượt số lượng đã gửi (${bundle.qty})`,
+        shortQty > 0
+          ? `Thiếu (${shortQty}) + không đạt (${dto.failedQty}) vượt số đã báo (${bundle.qty})`
+          : `Số không đạt (${dto.failedQty}) không được vượt số lượng đã gửi (${bundle.qty})`,
       );
     }
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
@@ -823,15 +1112,14 @@ export class QcReviewsService {
         data: { status: PieceStepBundleStatus.QC_PASSED },
       });
       if (count === 0) {
-        throw new ConflictException(
-          `Đợt gửi KCS ${materialYieldStepBundleId} đã bị 1 yêu cầu khác duyệt trong lúc đang xử lý - không ghi đè`,
-        );
+        throw new ConflictException(QC_DUPLICATE_MESSAGE);
       }
 
       const review = await tx.qcReview.create({
         data: {
           materialYieldStepBundleId: bundle.id,
           failedQty: dto.failedQty,
+          shortQty,
           defectReasonId,
           reason: dto.reason,
           photoUrl: dto.photoUrl,
@@ -843,7 +1131,7 @@ export class QcReviewsService {
       await this.materialYieldRecipeProductionService.finalizeRecipeOutputIfLastStepComplete(
         tx,
         bundle,
-        dto.failedQty,
+        dto.failedQty + shortQty,
         reviewedById,
       );
 
@@ -871,6 +1159,7 @@ export class QcReviewsService {
       bundle.productionInvoiceId,
       dto.failedQty,
       BUSINESS_ROLES.PHOI_STAFF,
+      this.withShortText(dto.failedQty, shortQty, 'cái'),
     );
     return this.toResponseDto(created);
   }
@@ -934,7 +1223,7 @@ export class QcReviewsService {
     return { data: result.data.map((r) => this.toResponseDto(r)), meta: result.meta };
   }
 
-  private toResponseDto(review: QcReviewRow): QcReviewResponseDto {
+  private toResponseDto(review: QcReviewRow, notes: string[] = []): QcReviewResponseDto {
     return new QcReviewResponseDto({
       id: review.id.toString(),
       steelIssueId: review.steelIssueId?.toString() ?? null,
@@ -944,6 +1233,7 @@ export class QcReviewsService {
       pieceStepBundleId: review.pieceStepBundleId?.toString() ?? null,
       materialYieldStepBundleId: review.materialYieldStepBundleId?.toString() ?? null,
       failedQty: review.failedQty,
+      shortQty: review.shortQty,
       defectReasonId: review.defectReasonId?.toString() ?? null,
       defectReasonLabel: review.defectReason?.label ?? null,
       reason: review.reason,
@@ -956,8 +1246,11 @@ export class QcReviewsService {
             segmentSpecId: s.segmentSpecId.toString(),
             cutLengthMm: s.segmentSpec.cutLengthMm.toNumber(),
             failedQty: s.failedQty,
+            shortQty: s.shortQty,
+            scrapQty: s.scrapQty,
           }),
       ),
+      notes,
     });
   }
 }

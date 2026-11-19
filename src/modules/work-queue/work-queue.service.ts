@@ -8,6 +8,7 @@ import { SalesOrdersService } from '../sales-orders/sales-orders.service';
 import { PaintTransferReminderService } from '../warehouse-transfers/paint-transfer-reminder.service';
 // Phần A – Đợt 4 (YC6): badge Vật tư cần về
 import { MaterialsDueService } from '../materials-due/materials-due.service';
+import { countKcsByStage, listKcsPendingItems } from '../floor/kcs-pending.util';
 import { WorkQueueResponseDto } from './dto/work-queue-response.dto';
 
 /**
@@ -27,8 +28,7 @@ import { WorkQueueResponseDto } from './dto/work-queue-response.dto';
  * 2. Mua hàng "NEW/QUOTING": QUOTING là tàn dư chết, thiếu SUBMITTED/REJECTED (vẫn sống qua
  *    bossApprove()) - dùng PENDING_APPROVAL_STATUSES (purchase-proposals.service.ts) thay vì liệt
  *    kê lại.
- * 3. KCS "cut bundle/batch AWAITING_QC": thiếu StepBundle + PieceStepBundle (2 bảng AWAITING_QC
- *    thật khác, phục vụ công đoạn phụ của Phôi cho Sắt/vật tư thành phẩm).
+ * 3. KCS: số đợt chờ chấm lấy từ kcs-pending.util (đang mở + đã chốt, 5 loại) - xem countKcs().
  * 4. Sales "dòng đơn DONG_GOI/HOAN_THANH": SalesOrderItem.status đứng yên LEN_KE_HOACH vĩnh viễn
  *    (xem doc comment SalesOrdersService.resolveStages()) - PHẢI gọi countReadyToShip() (dẫn xuất
  *    từ dữ liệu sản xuất thật), lọc thẳng cột status sẽ luôn ra 0.
@@ -291,24 +291,13 @@ export class WorkQueueService {
     });
   }
 
-  /** 5 bảng AWAITING_QC thật (xem lệch #3 ở doc comment lớp) - CutBundle/StepBundle/
-   *  PieceStepBundle/MaterialYieldStepBundle (chân nhôm) đều là "Cắt/công đoạn phụ" của Phôi (tab kcs-phoi), ProductionBatch tách theo
-   *  `stage` (PHOI/HAN/SON) cho đúng 3 tab riêng của màn KCS. */
+  /**
+   * Số đỏ menu KCS (P1, 18/11/2026): đợt công nhân đã báo mà KCS chưa chấm - đang mở (chưa bấm Chấm) + đã chốt (AWAITING_QC)
+   * của 5 loại (đợt cắt, nhóm công đoạn phụ, lô mảnh Phôi / Hàn / Sơn, pat, chân nhôm), bỏ dòng có blockedReason (lệnh dừng /
+   * chưa gắn SKU - dòng xám). Cùng nguồn kcs-pending với summary của QLSX và tin chờ lâu. KCS thấy hết xưởng, không lọc xưởng.
+   * tab kcs-phoi = Cắt / công đoạn phụ / pat / chân nhôm / lô mảnh Phôi; kcs-han / kcs-son = lô mảnh của tổ.
+   */
   private async countKcs(): Promise<{ phoi: number; han: number; son: number }> {
-    const [cutBundle, stepBundle, pieceStepBundle, yieldStepBundle, batchPhoi, batchHan, batchSon] =
-      await Promise.all([
-        this.prisma.cutBundle.count({ where: { status: 'AWAITING_QC' } }),
-        this.prisma.stepBundle.count({ where: { status: 'AWAITING_QC' } }),
-        this.prisma.pieceStepBundle.count({ where: { status: 'AWAITING_QC' } }),
-        this.prisma.materialYieldStepBundle.count({ where: { status: 'AWAITING_QC' } }),
-        this.prisma.productionBatch.count({ where: { stage: 'PHOI', status: 'AWAITING_QC' } }),
-        this.prisma.productionBatch.count({ where: { stage: 'HAN', status: 'AWAITING_QC' } }),
-        this.prisma.productionBatch.count({ where: { stage: 'SON', status: 'AWAITING_QC' } }),
-      ]);
-    return {
-      phoi: cutBundle + stepBundle + pieceStepBundle + yieldStepBundle + batchPhoi,
-      han: batchHan,
-      son: batchSon,
-    };
+    return countKcsByStage(await listKcsPendingItems(this.prisma));
   }
 }

@@ -3,8 +3,10 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { FLOOR_REPORT_REVERSED_REPLAY_MESSAGE } from '../../common/utils/floor-report.util';
 import { MfgRole, MfgStage, StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { MaterialYieldIssuesService } from '../material-yield-issues/material-yield-issues.service';
@@ -13,6 +15,10 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { ProductionBatchesService } from './production-batches.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { SegmentStockService } from '../segment-stock/segment-stock.service';
+import {
+  loadMaterialYieldNeed,
+  materialYieldNeedKey,
+} from '../material-yield-recipes/material-yield-need.util';
 
 describe('ProductionBatchesService', () => {
   let service: ProductionBatchesService;
@@ -49,12 +55,20 @@ describe('ProductionBatchesService', () => {
       findMany: jest.Mock;
       count: jest.Mock;
     };
-    qcReview: { findMany: jest.Mock };
+    qcReview: { findMany: jest.Mock; aggregate: jest.Mock };
+    piece: { findUnique: jest.Mock };
+    segmentOverage: {
+      findUnique: jest.Mock;
+      findFirst: jest.Mock;
+      findMany: jest.Mock;
+      create: jest.Mock;
+    };
     stockQuant: { findMany: jest.Mock };
     materialYieldRecipe: { findMany: jest.Mock };
     pieceMaterialItem: { findMany: jest.Mock };
     materialYieldStepBundle: { findMany: jest.Mock };
-    stockLedger: { findMany: jest.Mock };
+    materialYieldStepBatch: { groupBy: jest.Mock };
+    stockLedger: { findMany: jest.Mock; findFirst: jest.Mock };
     warehouseTransferPieceItem: { findMany: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock; findUnique: jest.Mock; findFirst: jest.Mock };
     $queryRaw: jest.Mock;
@@ -73,7 +87,7 @@ describe('ProductionBatchesService', () => {
     bomRevisionId: 5n,
     quantity: 10,
     productionInvoiceItemId: 20n,
-    mfgProduct: { name: 'SP-1' },
+    mfgProduct: { name: 'SP-1', factoryCode: 'SKU-1' },
     productionInvoiceItem: { productionInvoiceId: 500n, salesOrder: { orderCode: 'PO-31' } },
   };
   const piece = { id: 40n, code: 'MANH-TUA', name: 'Mảnh tựa' };
@@ -169,14 +183,30 @@ describe('ProductionBatchesService', () => {
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
       },
-      qcReview: { findMany: jest.fn().mockResolvedValue([]) },
+      qcReview: {
+        findMany: jest.fn().mockResolvedValue([]),
+        // P1: chặn báo vượt công đoạn pat đọc Σ lỗi + thiếu của các lần KCS chấm.
+        aggregate: jest.fn().mockResolvedValue({ _sum: { failedQty: null, shortQty: null } }),
+      },
+      piece: { findUnique: jest.fn().mockResolvedValue(piece) },
+      // Sổ báo vượt đoạn (trừ đoạn lúc KCS chấm) - mặc định chưa có dòng nào.
+      segmentOverage: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+        create: jest.fn(),
+      },
       stockQuant: { findMany: jest.fn().mockResolvedValue([]) },
       // Mặc định rỗng - vật tư thành phẩm không gắn mảnh (chân nhôm, MaterialYieldRecipe) chỉ được
       // test ở mục 'vật tư thành phẩm không gắn mảnh' bên dưới mới override.
       materialYieldRecipe: { findMany: jest.fn().mockResolvedValue([]) },
       pieceMaterialItem: { findMany: jest.fn().mockResolvedValue([]) },
       materialYieldStepBundle: { findMany: jest.fn().mockResolvedValue([]) },
-      stockLedger: { findMany: jest.fn().mockResolvedValue([]) },
+      materialYieldStepBatch: { groupBy: jest.fn().mockResolvedValue([]) },
+      stockLedger: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       warehouseTransferPieceItem: { findMany: jest.fn().mockResolvedValue([]) },
       warehouse: {
         findUniqueOrThrow: jest
@@ -248,19 +278,44 @@ describe('ProductionBatchesService', () => {
       expect(result.id).toBe('700');
     });
 
-    it('idempotency short-circuit - trả về lô cũ, không tạo mới, nhưng vẫn gọi lại postSegmentConsumeEntries (retry-safety)', async () => {
+    it('idempotency short-circuit - trả về lô cũ, không tạo mới, KHÔNG trừ đoạn (P1: trừ lúc KCS chấm)', async () => {
       prisma.productionBatch.findUnique.mockResolvedValue(batchRow);
-      prisma.pieceBom.findMany.mockResolvedValue([
-        { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
-      ]);
 
       const result = await service.create('1', dto, 'user-han', null, null, 'idem-key-1');
 
       expect(prisma.productionBatch.create).not.toHaveBeenCalled();
       expect(result.id).toBe('700');
-      // Xem describe('trừ tồn đoạn sắt (SEGMENT_CONSUME)') bên dưới cho assertion đầy đủ của
-      // postEntry - test này chỉ xác nhận retry-safety (vẫn gọi lại dù không tạo bản ghi mới).
-      expect(stockLedgerService.postEntry).toHaveBeenCalled();
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+
+    // MF3: khoá advisory production-batch-open là câu ĐẦU TIÊN của transaction, trước FOR UPDATE production_orders.
+    it('MF3: create() lấy khoá production-batch-open TRƯỚC câu FOR UPDATE production_orders (cùng thứ tự recordProductionBatch)', async () => {
+      prisma.productionBatch.create.mockResolvedValue(batchRow);
+
+      await service.create('1', dto, 'user-han', null, null);
+
+      const [first] = prisma.$executeRaw.mock.calls as [TemplateStringsArray, string][];
+      expect(first[1]).toBe('production-batch-open:1:40:HAN');
+      expect(prisma.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+        prisma.$queryRaw.mock.invocationCallOrder[0],
+      );
+    });
+
+    describe('chặn báo vượt (P1, cùng luật recordProductionBatch)', () => {
+      it('cần 20, đã báo 15 (chờ KCS): báo 6 -> 400 "tối đa 5", không tạo đợt; overPlanWarning luôn null khi qua', async () => {
+        prisma.productionBatch.aggregate.mockResolvedValue({ _sum: { reportedQty: 15 } });
+
+        const err = await service
+          .create('1', { ...dto, reportedQty: 6 }, 'u', null, null)
+          .catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(BadRequestException);
+        expect((err as Error).message).toContain('lần này báo được tối đa 5, bạn nhập 6');
+        expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+
+        prisma.productionBatch.create.mockResolvedValue(batchRow);
+        const ok = await service.create('1', { ...dto, reportedQty: 5 }, 'u', null, null);
+        expect(ok.overPlanWarning).toBeNull();
+      });
     });
 
     it('cho phép mfgRole khớp đúng stage (HAN)', async () => {
@@ -435,27 +490,38 @@ describe('ProductionBatchesService', () => {
     });
   });
 
+  // P1 (18/11/2026): trừ đoạn dời sang LÚC KCS CHẤM (consumeSegmentsAtReviewInTx). create() / chốt không còn trừ đoạn.
   // 13/11/2026: tồn đoạn theo lệnh (SEGMENT_STOCK_ENABLED) - trừ theo mã đoạn qua SegmentStockService, thiếu / vượt thì ghi sổ
   // báo vượt, KHÔNG chặn.
-  describe('trừ tồn đoạn theo lệnh (bật SEGMENT_STOCK_ENABLED)', () => {
-    const dto = { stage: MfgStage.HAN, pieceId: '40', reportedQty: 20 };
+  describe('consumeSegmentsAtReviewInTx - trừ tồn đoạn theo lệnh lúc KCS chấm (bật SEGMENT_STOCK_ENABLED)', () => {
     const env = process.env.SEGMENT_STOCK_ENABLED;
-    let overage: { findUnique: jest.Mock; create: jest.Mock; findMany: jest.Mock };
+    const tx = () => prisma as unknown as PrismaTx;
+    const consume = (qty = 20) => service.consumeSegmentsAtReviewInTx(tx(), 700n, qty, 'kcs-1');
+    // Đủ đoạn: lấy đúng số cần.
+    const takeAll = (_tx: unknown, i: { qty: number }) =>
+      Promise.resolve({
+        takenQty: i.qty,
+        fromHeldQty: i.qty,
+        fromSurplusQty: 0,
+        shortageQty: 0,
+        duplicate: false,
+      });
     beforeEach(() => {
       process.env.SEGMENT_STOCK_ENABLED = 'true';
-      overage = {
-        findUnique: jest.fn().mockResolvedValue(null),
-        create: jest.fn(),
-        findMany: jest.fn().mockResolvedValue([]),
-      };
-      Object.assign(prisma, {
-        segmentOverage: overage,
-        qcReview: { aggregate: jest.fn().mockResolvedValue({ _sum: { failedQty: 0 } }) },
-      });
-      prisma.productionBatch.create.mockResolvedValue(batchRow);
+      prisma.qcReview.aggregate.mockResolvedValue({ _sum: { failedQty: 0 } });
+      // Dòng lô đang chấm: người báo = công nhân Hàn (không phải KCS).
       prisma.productionBatch.findUniqueOrThrow.mockResolvedValue({
+        id: 700n,
+        pieceId: 40n,
+        stage: MfgStage.HAN,
+        reportedById: 'user-han',
         productionOrderId: 1n,
-        productionOrder: { quantity: 10, productionInvoiceItem: { productionInvoiceId: 500n } },
+        reworkOfId: null,
+        productionOrder: {
+          bomRevisionId: 5n,
+          quantity: 10,
+          productionInvoiceItem: { productionInvoiceId: 500n },
+        },
       });
       // Định mức mảnh: 2 dòng 460 mm (Dập + trơn) + 1 dòng cỡ khác; bộ công đoạn lưu lộn thứ tự vẫn ra cùng mã.
       prisma.pieceBom.findMany.mockResolvedValue([
@@ -470,19 +536,10 @@ describe('ProductionBatchesService', () => {
     });
 
     it('trừ từng MÃ đoạn qua consumeForOrder (không ghi sổ kho kiểu cũ); đủ đoạn, không vượt thì không ghi sổ báo vượt', async () => {
-      prisma.productionBatch.findMany.mockResolvedValue([{ id: 700n, reportedQty: 20 }]);
-      // Lệnh 10 bộ × 2 mảnh/bộ = 20 mảnh: đợt 20 không vượt.
-      segmentStock.consumeForOrder.mockImplementation((_tx: unknown, i: { qty: number }) =>
-        Promise.resolve({
-          takenQty: i.qty,
-          fromHeldQty: i.qty,
-          fromSurplusQty: 0,
-          shortageQty: 0,
-          duplicate: false,
-        }),
-      );
+      // Lệnh 10 bộ × 2 mảnh/bộ = 20 mảnh: lô 20 không vượt.
+      segmentStock.consumeForOrder.mockImplementation(takeAll);
 
-      await service.create('1', dto, 'user-han', null, null);
+      await consume();
 
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
       expect(segmentStock.consumeForOrder).toHaveBeenCalledTimes(3);
@@ -500,12 +557,49 @@ describe('ProductionBatchesService', () => {
         prisma,
         expect.objectContaining({ segmentSpecId: 60n, segmentSteps: '', qty: 20 }),
       );
-      expect(overage.create).not.toHaveBeenCalled();
+      expect(prisma.segmentOverage.create).not.toHaveBeenCalled();
     });
 
-    it('thiếu đoạn: KHÔNG chặn, ghi sổ báo vượt phần thiếu', async () => {
-      prisma.productionBatch.findMany.mockResolvedValue([{ id: 700n, reportedQty: 20 }]);
-      overage.findMany.mockResolvedValue([
+    it('trừ theo SỐ THỰC CÓ (báo - thiếu) người gọi truyền, không theo số báo của lô', async () => {
+      segmentStock.consumeForOrder.mockImplementation(takeAll);
+
+      await consume(16); // báo 20, KCS ghi thiếu 4
+
+      expect(segmentStock.consumeForOrder).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({ segmentSpecId: 60n, segmentSteps: '', qty: 16 }),
+      );
+      expect(segmentStock.consumeForOrder).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({ segmentSpecId: 60n, segmentSteps: 'DAP', qty: 32 }),
+      );
+    });
+
+    it('S7: thiếu đoạn KHÔNG chặn, ghi sổ báo vượt với NGƯỜI BÁO của lô (không phải KCS); tin SEGMENT_OVERAGE_REPORTED phát sau commit với KCS', async () => {
+      segmentStock.consumeForOrder.mockResolvedValue({
+        takenQty: 5,
+        fromHeldQty: 5,
+        fromSurplusQty: 0,
+        shortageQty: 15,
+        duplicate: false,
+      });
+
+      await consume();
+
+      expect(prisma.segmentOverage.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          productionBatchId: 700n,
+          takenQty: 5,
+          shortageQty: 15,
+          extraQty: 0,
+          extraKind: null,
+          reportedById: 'user-han',
+        }) as unknown,
+      });
+      // Chưa phát tin trong transaction.
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+
+      prisma.segmentOverage.findMany.mockResolvedValue([
         {
           stage: MfgStage.HAN,
           shortageQty: 15,
@@ -515,47 +609,42 @@ describe('ProductionBatchesService', () => {
           productionBatch: { piece: { code: 'M40' } },
         },
       ]);
-      segmentStock.consumeForOrder.mockResolvedValue({
-        takenQty: 5,
-        fromHeldQty: 5,
-        fromSurplusQty: 0,
-        shortageQty: 15,
-        duplicate: false,
-      });
-
-      await expect(service.create('1', dto, 'user-han', null, null)).resolves.toBeDefined();
-
-      expect(overage.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          productionBatchId: 700n,
-          takenQty: 5,
-          shortageQty: 15,
-          extraQty: 0,
-          extraKind: null,
-        }) as unknown,
-      });
-      // Sau commit: báo QLSX (1 thông báo / đợt).
+      await service.afterReviewCommitted(700n, 'kcs-1');
       expect(notificationsService.emit).toHaveBeenCalledWith(
         'SEGMENT_OVERAGE_REPORTED',
         expect.objectContaining({
           entityId: '700',
+          actorId: 'kcs-1',
           dedupeKey: 'SEGMENT_OVERAGE_REPORTED:700',
           params: expect.objectContaining({ piCode: 'PI-2026-500', shortageQty: 15 }) as unknown,
         }),
       );
     });
 
-    it('báo vượt số lượng tổng của lệnh: ghi số lấy thêm; đã có KCS lỗi trước thì là làm lại (REWORK)', async () => {
-      // Đã báo 15 trước, đợt này 20 -> tổng 35 / lệnh 20 mảnh -> vượt 15 mảnh.
-      prisma.productionBatch.findMany.mockResolvedValue([
-        { id: 650n, reportedQty: 15 },
-        { id: 700n, reportedQty: 20 },
+    it('afterReviewCommitted: công tắc tắt hoặc lô không có dòng chưa đóng thì không phát tin; lỗi emit chỉ ghi log', async () => {
+      await service.afterReviewCommitted(700n, 'kcs-1');
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+
+      prisma.segmentOverage.findMany.mockResolvedValue([
+        {
+          stage: MfgStage.SON,
+          shortageQty: 1,
+          extraQty: 2,
+          extraKind: 'REWORK',
+          productionInvoice: { code: 'PI-1' },
+          productionBatch: { piece: { code: 'M40' } },
+        },
       ]);
-      (
-        prisma as unknown as { qcReview: { aggregate: jest.Mock } }
-      ).qcReview.aggregate.mockResolvedValue({
-        _sum: { failedQty: 3 },
-      });
+      notificationsService.emit.mockRejectedValue(new Error('boom'));
+      await expect(service.afterReviewCommitted(700n, 'kcs-1')).resolves.toBeUndefined();
+    });
+
+    it('báo vượt số lượng tổng của lệnh: ghi số lấy thêm; đã có KCS lỗi trước thì là làm lại (REWORK)', async () => {
+      // Đã chấm (QC_DONE) trước 15, lô này 20 -> tổng 35 / lệnh 20 mảnh -> vượt 15 mảnh.
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { id: 650n, reportedQty: 15, status: 'QC_DONE' },
+      ]);
+      prisma.qcReview.aggregate.mockResolvedValue({ _sum: { failedQty: 3 } });
       segmentStock.consumeForOrder.mockImplementation((_tx: unknown, i: { qty: number }) =>
         Promise.resolve({
           takenQty: i.qty,
@@ -566,9 +655,9 @@ describe('ProductionBatchesService', () => {
         }),
       );
 
-      await service.create('1', dto, 'user-han', null, null);
+      await consume();
 
-      expect(overage.create).toHaveBeenCalledWith({
+      expect(prisma.segmentOverage.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           segmentSpecId: 60n,
           segmentSteps: 'DAP',
@@ -577,27 +666,18 @@ describe('ProductionBatchesService', () => {
           extraKind: 'REWORK',
         }) as unknown,
       });
-      expect(overage.create).toHaveBeenCalledTimes(3);
+      expect(prisma.segmentOverage.create).toHaveBeenCalledTimes(3);
     });
 
     it('rà soát 14/11 TĐ2: trừ (khoá ô) theo thứ tự mã đoạn cố định, không theo thứ tự định mức trả về', async () => {
-      prisma.productionBatch.findMany.mockResolvedValue([{ id: 700n, reportedQty: 20 }]);
       prisma.pieceBom.findMany.mockResolvedValue([
         { segmentSpecId: 61n, qtyPerPiece: 1, processSteps: ['CAT'] },
         { segmentSpecId: 60n, qtyPerPiece: 2, processSteps: ['CAT', 'DAP'] },
         { segmentSpecId: 60n, qtyPerPiece: 1, processSteps: ['CAT'] },
       ]);
-      segmentStock.consumeForOrder.mockImplementation((_tx: unknown, i: { qty: number }) =>
-        Promise.resolve({
-          takenQty: i.qty,
-          fromHeldQty: i.qty,
-          fromSurplusQty: 0,
-          shortageQty: 0,
-          duplicate: false,
-        }),
-      );
+      segmentStock.consumeForOrder.mockImplementation(takeAll);
 
-      await service.create('1', dto, 'user-han', null, null);
+      await consume();
 
       const order = (
         segmentStock.consumeForOrder.mock.calls as [
@@ -608,23 +688,20 @@ describe('ProductionBatchesService', () => {
       expect(order).toEqual(['60|', '60|DAP', '61|']);
     });
 
-    it('rà soát 14/11 TĐ3: cộng dồn mọi đợt đã gửi KCS (theo thứ tự gửi, không theo id) - đợt id lớn gửi trước vẫn được tính', async () => {
-      // Kế hoạch 20 mảnh. Đợt 900 (id lớn hơn) đã gửi trước 12, đợt 700 (đợt này) 20 -> tổng 32, vượt 12.
+    it('MF10 (phản biện 10): chỉ cộng các lô ĐÃ trừ đoạn (QC_DONE, hoặc đã có bút toán / sổ báo vượt) - lô khác đang chờ chấm chưa trừ gì thì KHÔNG cộng', async () => {
+      // Kế hoạch 20 mảnh. Lô 900 đã chấm (QC_DONE) 12; lô 901 chờ chấm 30, chưa trừ gì; lô 902 gửi trước khi cập nhật, đã có bút toán 5;
+      // lô 903 gửi trước khi cập nhật, chỉ có dòng sổ báo vượt 4. Lô này 20 -> trước đó 12 + 5 + 4 = 21 (đã vượt) + 20 -> vượt thêm 20.
       prisma.productionBatch.findMany.mockResolvedValue([
-        { id: 900n, reportedQty: 12 },
-        { id: 700n, reportedQty: 20 },
+        { id: 900n, reportedQty: 12, status: 'QC_DONE' },
+        { id: 901n, reportedQty: 30, status: 'AWAITING_QC' },
+        { id: 902n, reportedQty: 5, status: 'AWAITING_QC' },
+        { id: 903n, reportedQty: 4, status: 'AWAITING_QC' },
       ]);
-      segmentStock.consumeForOrder.mockImplementation((_tx: unknown, i: { qty: number }) =>
-        Promise.resolve({
-          takenQty: i.qty,
-          fromHeldQty: i.qty,
-          fromSurplusQty: 0,
-          shortageQty: 0,
-          duplicate: false,
-        }),
-      );
+      prisma.stockLedger.findMany.mockResolvedValue([{ refId: '902' }]);
+      prisma.segmentOverage.findMany.mockResolvedValue([{ productionBatchId: 903n }]);
+      segmentStock.consumeForOrder.mockImplementation(takeAll);
 
-      await service.create('1', dto, 'user-han', null, null);
+      await consume();
 
       expect(prisma.productionBatch.findMany).toHaveBeenCalledWith({
         where: {
@@ -632,27 +709,64 @@ describe('ProductionBatchesService', () => {
           pieceId: 40n,
           stage: MfgStage.HAN,
           status: { not: 'OPEN' },
+          id: { not: 700n },
         },
-        select: { id: true, reportedQty: true },
+        select: { id: true, reportedQty: true, status: true },
       });
-      expect(overage.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({ overPieces: 12, extraKind: 'OVER_REPORT' }) as unknown,
+      // Chỉ tra bút toán / sổ báo vượt của lô CHƯA QC_DONE.
+      expect(prisma.stockLedger.findMany).toHaveBeenCalledWith({
+        where: { refType: 'SEGMENT_CONSUME', refId: { in: ['901', '902', '903'] } },
+        select: { refId: true },
+      });
+      expect(prisma.segmentOverage.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ overPieces: 20, extraKind: 'OVER_REPORT' }) as unknown,
       });
     });
 
-    it('rà soát 14/11 TĐ5: phía trừ giữ khoá chuyển đổi dữ liệu cũ (dùng chung) rồi mới tới khoá đợt', async () => {
-      prisma.productionBatch.findMany.mockResolvedValue([{ id: 700n, reportedQty: 20 }]);
-      segmentStock.consumeForOrder.mockImplementation((_tx: unknown, i: { qty: number }) =>
-        Promise.resolve({
-          takenQty: i.qty,
-          fromHeldQty: i.qty,
-          fromSurplusQty: 0,
-          shortageQty: 0,
-          duplicate: false,
-        }),
-      );
+    it('MF10: kế hoạch 100, 2 lô 60 - lô chấm trước không vượt; lô chấm sau vượt đúng 20', async () => {
+      // Kế hoạch: lệnh 50 bộ × 2 mảnh = 100.
+      const planRow = (id: bigint) => ({
+        id,
+        pieceId: 40n,
+        stage: MfgStage.HAN,
+        reportedById: 'user-han',
+        productionOrderId: 1n,
+        reworkOfId: null,
+        productionOrder: {
+          bomRevisionId: 5n,
+          quantity: 50,
+          productionInvoiceItem: { productionInvoiceId: 500n },
+        },
+      });
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { segmentSpecId: 60n, qtyPerPiece: 1, processSteps: ['CAT'] },
+      ]);
+      segmentStock.consumeForOrder.mockImplementation(takeAll);
 
-      await service.create('1', dto, 'user-han', null, null);
+      // Lô 1 chấm trước: lô 2 còn AWAITING_QC chưa trừ gì -> không cộng.
+      prisma.productionBatch.findUniqueOrThrow.mockResolvedValue(planRow(700n));
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { id: 701n, reportedQty: 60, status: 'AWAITING_QC' },
+      ]);
+      await service.consumeSegmentsAtReviewInTx(tx(), 700n, 60, 'kcs-1');
+      expect(prisma.segmentOverage.create).not.toHaveBeenCalled();
+
+      // Lô 2 chấm sau: lô 1 đã QC_DONE 60 -> 120 / 100 = vượt 20.
+      prisma.productionBatch.findUniqueOrThrow.mockResolvedValue(planRow(701n));
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { id: 700n, reportedQty: 60, status: 'QC_DONE' },
+      ]);
+      await service.consumeSegmentsAtReviewInTx(tx(), 701n, 60, 'kcs-2');
+      expect(prisma.segmentOverage.create).toHaveBeenCalledTimes(1);
+      expect(prisma.segmentOverage.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ productionBatchId: 701n, overPieces: 20 }) as unknown,
+      });
+    });
+
+    it('rà soát 14/11 TĐ5: giữ khoá chuyển đổi dữ liệu cũ (dùng chung) rồi mới tới khoá đợt (lockBatchKeysInTx), lấy lại khi trừ không chờ', async () => {
+      segmentStock.consumeForOrder.mockImplementation(takeAll);
+
+      await consume();
 
       const locks = (prisma.$executeRaw.mock.calls as [TemplateStringsArray, string][]).map(
         ([sql, key]) => `${sql.join('?').includes('_shared') ? 'shared' : 'excl'}:${key}`,
@@ -660,27 +774,90 @@ describe('ProductionBatchesService', () => {
       expect(locks).toEqual([
         'shared:segment-legacy-conversion',
         'excl:production-batch-open:1:40:HAN',
+        'shared:segment-legacy-conversion',
+        'excl:production-batch-open:1:40:HAN',
       ]);
     });
 
-    it('gọi lại cùng đợt: mã đoạn đã có dòng sổ báo vượt thì bỏ qua, không trừ lần 2', async () => {
-      prisma.productionBatch.findMany.mockResolvedValue([{ id: 700n, reportedQty: 20 }]);
-      overage.findUnique.mockResolvedValue({ id: 1n });
+    it('gọi lại cùng lô: mã đoạn đã có dòng sổ báo vượt thì bỏ qua, không trừ lần 2', async () => {
+      prisma.productionBatch.findMany.mockResolvedValue([]);
+      prisma.segmentOverage.findUnique.mockResolvedValue({ id: 1n });
 
-      await service.create('1', dto, 'user-han', null, null);
+      await consume();
 
+      expect(segmentStock.consumeForOrder).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['đã có bút toán SEGMENT_CONSUME refId = id lô (khoá bất kỳ)', 'ledger'],
+      ['đã có dòng sổ báo vượt đoạn của lô', 'overage'],
+    ])('AC36: lô gửi KCS trước khi cập nhật (%s) - BỎ QUA, không trừ lần 2', async (_n, kind) => {
+      if (kind === 'ledger') prisma.stockLedger.findFirst.mockResolvedValue({ id: 5n });
+      else prisma.segmentOverage.findFirst.mockResolvedValue({ id: 6n });
+
+      await consume(16);
+
+      expect(prisma.stockLedger.findFirst).toHaveBeenCalledWith({
+        where: { refType: 'SEGMENT_CONSUME', refId: '700' },
+        select: { id: true },
+      });
+      expect(segmentStock.consumeForOrder).not.toHaveBeenCalled();
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+      expect(prisma.segmentOverage.create).not.toHaveBeenCalled();
+    });
+
+    it('thực có = 0 (toàn bộ là thiếu): vẫn lấy khoá nhưng không trừ gì', async () => {
+      await consume(0);
+
+      expect(prisma.$executeRaw).toHaveBeenCalled();
       expect(segmentStock.consumeForOrder).not.toHaveBeenCalled();
     });
   });
 
-  describe('create - trừ tồn đoạn sắt (SEGMENT_CONSUME)', () => {
-    const dto = { stage: MfgStage.HAN, pieceId: '40', reportedQty: 20 };
+  describe('consumeSegmentsAtReviewInTx - công tắc TẮT (cách trừ cũ, bút toán SEGMENT_CONSUME)', () => {
+    const env = process.env.SEGMENT_STOCK_ENABLED;
+    const tx = () => prisma as unknown as PrismaTx;
+    const lot = (over: Record<string, unknown> = {}) => ({
+      id: 700n,
+      pieceId: 40n,
+      stage: MfgStage.HAN,
+      reportedById: 'user-han',
+      productionOrderId: 1n,
+      productionOrder: { bomRevisionId: 5n },
+      ...over,
+    });
+    beforeEach(() => {
+      delete process.env.SEGMENT_STOCK_ENABLED;
+      prisma.productionBatch.findUniqueOrThrow.mockResolvedValue(lot());
+    });
+    afterEach(() => {
+      if (env === undefined) delete process.env.SEGMENT_STOCK_ENABLED;
+      else process.env.SEGMENT_STOCK_ENABLED = env;
+    });
 
-    it('không có PieceBom nào cho mảnh - không gọi postEntry, không query warehouse', async () => {
+    it('create() KHÔNG còn trừ đoạn và không phát SEGMENT_OVERAGE_REPORTED (dời sang lúc KCS chấm)', async () => {
       prisma.productionBatch.create.mockResolvedValue(batchRow);
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
+      ]);
+
+      await service.create(
+        '1',
+        { stage: MfgStage.HAN, pieceId: '40', reportedQty: 20 },
+        'u',
+        null,
+        null,
+      );
+
+      expect(prisma.pieceBom.findMany).not.toHaveBeenCalled();
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+    });
+
+    it('không có PieceBom nào cho mảnh - không gọi postEntry, không query kho đoạn', async () => {
       prisma.pieceBom.findMany.mockResolvedValue([]);
 
-      await service.create('1', dto, 'user-han', null, null);
+      await service.consumeSegmentsAtReviewInTx(tx(), 700n, 20, 'kcs-1');
 
       expect(prisma.pieceBom.findMany).toHaveBeenCalledWith({
         where: { bomRevisionId: order.bomRevisionId, pieceId: 40n },
@@ -689,13 +866,12 @@ describe('ProductionBatchesService', () => {
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
 
-    it('1 PieceBom - ghi đúng 1 dòng StockLedger, qty = qtyPerPiece × reportedQty', async () => {
-      prisma.productionBatch.create.mockResolvedValue(batchRow);
+    it('1 PieceBom - ghi đúng 1 dòng StockLedger, qty = qtyPerPiece × số thực có; người ghi = người báo của lô', async () => {
       prisma.pieceBom.findMany.mockResolvedValue([
         { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
       ]);
 
-      await service.create('1', dto, 'user-han', null, null);
+      await service.consumeSegmentsAtReviewInTx(tx(), 700n, 20, 'kcs-1');
 
       expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(1);
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
@@ -703,54 +879,45 @@ describe('ProductionBatchesService', () => {
           fromWarehouseId: steelWarehouse.id,
           toWarehouseId: productionWarehouse.id,
           segmentSpecId: 60n,
-          qty: 60, // 3 × reportedQty(20)
+          qty: 60, // 3 × thực có(20)
           refType: StockLedgerRefType.SEGMENT_CONSUME,
           refId: '700',
           createdById: 'user-han',
           idempotencyKey: 'production-batch-segment-consume:700:60',
         },
-        prisma, // tx - create() + postSegmentConsumeEntries giờ chạy trong cùng $transaction
+        prisma,
+      );
+    });
+
+    it('lô thiếu 4 (báo 20, thực có 16): trừ theo 16, không theo 20', async () => {
+      prisma.pieceBom.findMany.mockResolvedValue([
+        { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
+      ]);
+
+      await service.consumeSegmentsAtReviewInTx(tx(), 700n, 16, 'kcs-1');
+
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ segmentSpecId: 60n, qty: 48 }),
+        prisma,
       );
     });
 
     // 13/11/2026: 1 mảnh có 2 dòng định mức CÙNG cỡ đoạn khác công đoạn (vd 460 mm có Dập + 460 mm trơn) - trước đây dòng thứ
     // 2 đụng khoá chống trùng (đợt, cỡ đoạn) nên bị bỏ, trừ thiếu đoạn.
     it('2 dòng định mức cùng cỡ đoạn khác công đoạn: gộp lại, trừ đủ trong 1 bút toán', async () => {
-      prisma.productionBatch.create.mockResolvedValue(batchRow);
       prisma.pieceBom.findMany.mockResolvedValue([
-        {
-          id: 1n,
-          bomRevisionId: 5n,
-          pieceId: 40n,
-          segmentSpecId: 60n,
-          qtyPerPiece: 2,
-          processSteps: ['CAT', 'DAP'],
-        },
-        {
-          id: 2n,
-          bomRevisionId: 5n,
-          pieceId: 40n,
-          segmentSpecId: 60n,
-          qtyPerPiece: 1,
-          processSteps: ['CAT'],
-        },
-        {
-          id: 3n,
-          bomRevisionId: 5n,
-          pieceId: 40n,
-          segmentSpecId: 61n,
-          qtyPerPiece: 4,
-          processSteps: ['CAT'],
-        },
+        { id: 1n, segmentSpecId: 60n, qtyPerPiece: 2, processSteps: ['CAT', 'DAP'] },
+        { id: 2n, segmentSpecId: 60n, qtyPerPiece: 1, processSteps: ['CAT'] },
+        { id: 3n, segmentSpecId: 61n, qtyPerPiece: 4, processSteps: ['CAT'] },
       ]);
 
-      await service.create('1', dto, 'user-han', null, null);
+      await service.consumeSegmentsAtReviewInTx(tx(), 700n, 20, 'kcs-1');
 
       expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(2);
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({
           segmentSpecId: 60n,
-          qty: 60, // (2 + 1) × reportedQty(20)
+          qty: 60, // (2 + 1) × 20
           idempotencyKey: 'production-batch-segment-consume:700:60',
         }),
         prisma,
@@ -761,14 +928,13 @@ describe('ProductionBatchesService', () => {
       );
     });
 
-    it('Đợt 7: lệnh làm ở xưởng Phước An thì trừ đoạn sắt ở kho Phôi Phước An (theo xưởng của lệnh, không theo người báo)', async () => {
-      prisma.productionBatch.create.mockResolvedValue(batchRow);
+    it('Đợt 7: lệnh làm ở xưởng Phước An thì trừ đoạn sắt ở kho Phôi Phước An (tra mã kho bằng chính tx)', async () => {
       prisma.pieceBom.findMany.mockResolvedValue([
         { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
       ]);
       prisma.productionInvoiceItem.findFirst.mockResolvedValue({ workshopId: 2n });
 
-      await service.create('1', dto, 'user-han', null, 'phoi-son-han');
+      await service.consumeSegmentsAtReviewInTx(tx(), 700n, 20, 'kcs-1');
 
       const [findArg] = prisma.warehouse.findFirst.mock.calls[0] as [
         { where: { kind: string; workshopId: bigint } },
@@ -780,28 +946,13 @@ describe('ProductionBatchesService', () => {
       );
     });
 
-    it('2026-09-03: warehouseScope KHÔNG thuộc gia đình phoi-son-han (dữ liệu bất thường) thì fallback về kho gốc thay vì trừ nhầm kho khác', async () => {
-      prisma.productionBatch.create.mockResolvedValue(batchRow);
-      prisma.pieceBom.findMany.mockResolvedValue([
-        { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
-      ]);
-
-      await service.create('1', dto, 'user-han', null, 'vat-tu-tp');
-
-      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
-        expect.objectContaining({ fromWarehouseId: steelWarehouse.id }),
-        prisma,
-      );
-    });
-
     it('nhiều PieceBom (1 mảnh ghép từ nhiều cỡ đoạn) - ghi đủ N dòng StockLedger, mỗi dòng đúng segmentSpecId/qty riêng', async () => {
-      prisma.productionBatch.create.mockResolvedValue(batchRow);
       prisma.pieceBom.findMany.mockResolvedValue([
         { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
         { id: 2n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 61n, qtyPerPiece: 1 },
       ]);
 
-      await service.create('1', dto, 'user-han', null, null);
+      await service.consumeSegmentsAtReviewInTx(tx(), 700n, 20, 'kcs-1');
 
       expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(2);
       expect(stockLedgerService.postEntry).toHaveBeenNthCalledWith(
@@ -816,8 +967,7 @@ describe('ProductionBatchesService', () => {
       );
     });
 
-    it('postEntry lỗi giữa chừng (dòng 2/3) - lỗi propagate ra ngoài, không nuốt (transaction bao ngoài sẽ rollback cả productionBatch.create)', async () => {
-      prisma.productionBatch.create.mockResolvedValue(batchRow);
+    it('postEntry lỗi giữa chừng (dòng 2/2) - lỗi propagate ra ngoài, không nuốt (transaction chấm của KCS sẽ rollback cả lần chấm)', async () => {
       prisma.pieceBom.findMany.mockResolvedValue([
         { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
         { id: 2n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 61n, qtyPerPiece: 1 },
@@ -826,52 +976,38 @@ describe('ProductionBatchesService', () => {
         .mockResolvedValueOnce({})
         .mockRejectedValueOnce(new Error('mất kết nối DB giữa chừng'));
 
-      await expect(service.create('1', dto, 'user-han', null, null)).rejects.toThrow(
+      await expect(service.consumeSegmentsAtReviewInTx(tx(), 700n, 20, 'kcs-1')).rejects.toThrow(
         'mất kết nối DB giữa chừng',
       );
-      // create() + postSegmentConsumeEntries chạy trong CÙNG $transaction - lỗi ở dòng ledger thứ
-      // 2 phải làm cả gọi $transaction() reject (Prisma thật sẽ rollback productionBatch.create
-      // theo cùng cơ chế), không được để lộ ra thành công một phần.
-      expect(prisma.$transaction).toHaveBeenCalled();
     });
 
-    // Quyết định nghiệp vụ #6 (docs/quy-doi-doan-phoi.md): tồn đoạn được phép âm khi báo sản
-    // lượng vượt tồn thực tế. Không có test riêng cho "tồn không đủ" ở tầng unit vì service
-    // KHÔNG gọi StockQuant để kiểm tra số dư trước khi postEntry() - test '1 PieceBom' ở trên
-    // đã chứng minh điều này gián tiếp (không có nhánh throw/guard nào giữa lúc query PieceBom
-    // và lúc gọi postEntry). Số dư âm thật sự chỉ quan sát được ở StockQuant sau khi trigger DB
-    // materialize - thuộc phạm vi test tích hợp/E2E, không phải unit test service này.
+    // Quyết định nghiệp vụ #6 (docs/quy-doi-doan-phoi.md): tồn đoạn được phép âm khi báo sản lượng vượt tồn thực tế - service
+    // KHÔNG gọi StockQuant kiểm số dư trước khi postEntry().
 
-    // 2026-09-03: mảnh cần CẢ Hàn+Sơn (bomPieceRow mặc định needsHan=true+needsSon=true) trước
-    // đây bị trừ tồn đoạn sắt 2 LẦN - 1 lần khi Hàn báo (test '1 PieceBom' ở trên, stage=HAN), 1
-    // lần khi Sơn báo lại CÙNG mảnh đó (dto ở đây). Giờ chỉ trừ đúng 1 lần ở Hàn (bước lắp ráp
-    // thật) - Sơn báo không tiêu thêm đoạn nào.
-    it('mảnh cần CẢ Hàn+Sơn - Sơn báo KHÔNG trừ tồn đoạn lần 2 (đã trừ ở Hàn)', async () => {
-      const sonDto = { stage: MfgStage.SON, pieceId: '40', reportedQty: 20 };
-      prisma.productionBatch.create.mockResolvedValue({ ...batchRow, stage: MfgStage.SON });
+    // 2026-09-03: mảnh cần CẢ Hàn+Sơn chỉ trừ đoạn đúng 1 lần ở Hàn (bước lắp ráp thật) - Sơn không tiêu thêm đoạn nào.
+    it('mảnh cần CẢ Hàn+Sơn - lô Sơn chấm KHÔNG trừ tồn đoạn lần 2 (đã trừ ở Hàn)', async () => {
+      prisma.productionBatch.findUniqueOrThrow.mockResolvedValue(lot({ stage: MfgStage.SON }));
       prisma.pieceBom.findMany.mockResolvedValue([
         { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
       ]);
-      // bomPieceRow mặc định (beforeEach) đã needsHan=true+needsSon=true, không cần override.
 
-      await service.create('1', sonDto, 'user-son', null, null);
+      await service.consumeSegmentsAtReviewInTx(tx(), 700n, 20, 'kcs-2');
 
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
     });
 
-    it('mảnh CHỈ cần Sơn (needsHan=false) - Sơn báo VẪN trừ tồn đoạn (không có Hàn nào trừ trước)', async () => {
-      const sonDto = { stage: MfgStage.SON, pieceId: '40', reportedQty: 20 };
+    it('mảnh CHỈ cần Sơn (needsHan=false) - lô Sơn chấm VẪN trừ tồn đoạn (không có Hàn nào trừ trước)', async () => {
       prisma.bomPiece.findUnique.mockResolvedValue({
         ...bomPieceRow,
         needsHan: false,
         needsSon: true,
       });
-      prisma.productionBatch.create.mockResolvedValue({ ...batchRow, stage: MfgStage.SON });
+      prisma.productionBatch.findUniqueOrThrow.mockResolvedValue(lot({ stage: MfgStage.SON }));
       prisma.pieceBom.findMany.mockResolvedValue([
         { id: 1n, bomRevisionId: 5n, pieceId: 40n, segmentSpecId: 60n, qtyPerPiece: 3 },
       ]);
 
-      await service.create('1', sonDto, 'user-son', null, null);
+      await service.consumeSegmentsAtReviewInTx(tx(), 700n, 20, 'kcs-2');
 
       expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(1);
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
@@ -933,6 +1069,22 @@ describe('ProductionBatchesService', () => {
       expect(realtimeStub.publishEntityChanged).not.toHaveBeenCalled();
     });
 
+    it('P1: transaction giữ khoá FOR UPDATE của cả PI có maxWait 10s + timeout 20s (không dùng mặc định 5s)', async () => {
+      prisma.productionBatch.findFirst.mockResolvedValue(null);
+      prisma.productionBatch.create.mockResolvedValue({
+        ...batchRow,
+        status: 'OPEN',
+        reportedQty: 5,
+      });
+
+      await service.recordProductionBatch('1', recordDto, 'user-han', null);
+
+      expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+        maxWait: 10_000,
+        timeout: 20_000,
+      });
+    });
+
     it('2026-10-12: mỗi lần "Lưu đợt" ghi 1 dòng sổ PIECE (người báo, mảnh, số) kể cả khi cộng dồn vào đợt OPEN', async () => {
       prisma.productionBatch.findFirst.mockResolvedValue({
         ...batchRow,
@@ -981,27 +1133,93 @@ describe('ProductionBatchesService', () => {
       expect(prisma.floorReport.create).not.toHaveBeenCalled();
     });
 
-    it('2026-10-06: tổng đã báo vượt nhu cầu (2 × 10 = 20) - trả overPlanWarning nhưng KHÔNG chặn ghi nhận', async () => {
-      prisma.productionBatch.findFirst.mockResolvedValue(null);
-      prisma.productionBatch.create.mockResolvedValue({
-        ...batchRow,
-        status: 'OPEN',
-        reportedQty: 25,
+    describe('chặn báo vượt (P1, 18/11/2026)', () => {
+      const order240 = { ...order, quantity: 120 }; // qtyPerUnit 2 × 120 = 240 mảnh
+      const openRow = { ...batchRow, status: 'OPEN', reportedQty: 15 };
+
+      it('cần 240, đã báo 230, báo 15 -> 400 "tối đa 10", không ghi gì; có logger.warn', async () => {
+        prisma.productionOrder.findUnique.mockResolvedValue(order240);
+        prisma.productionBatch.aggregate.mockResolvedValue({ _sum: { reportedQty: 230 } });
+        const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+        const err = await service
+          .recordProductionBatch('1', { ...recordDto, qty: 15 }, 'user-han', null)
+          .catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(BadRequestException);
+        const message = (err as Error).message;
+        expect(message).toContain('cần 240 mảnh, đã báo 230');
+        expect(message).toContain('lần này báo được tối đa 10, bạn nhập 15');
+        expect(message).toContain('Mảnh tựa (SKU SKU-1, tổ Hàn)');
+        expect(message.endsWith('Số cần sai thì báo QLSX.')).toBe(true);
+        expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+        expect(prisma.productionBatch.update).not.toHaveBeenCalled();
+        expect(prisma.floorReport.create).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('Chặn báo vượt'));
+        warn.mockRestore();
       });
-      prisma.productionBatch.aggregate.mockResolvedValue({ _sum: { reportedQty: 25 } });
 
-      const res = await service.recordProductionBatch(
-        '1',
-        { ...recordDto, qty: 25 },
-        'user-han',
-        null,
-      );
+      it('KCS chấm lỗi 12 (đợt QC_DONE bị ghi đè = báo - lỗi, tổng đã báo 218): báo 22 được, overPlanWarning luôn null; báo 23 bị chặn', async () => {
+        prisma.productionOrder.findUnique.mockResolvedValue(order240);
+        prisma.productionBatch.findFirst.mockResolvedValue(null);
+        prisma.productionBatch.create.mockResolvedValue(openRow);
+        prisma.productionBatch.aggregate.mockResolvedValue({ _sum: { reportedQty: 218 } });
 
-      expect(prisma.productionBatch.create).toHaveBeenCalled();
-      expect(res.overPlanWarning).toContain('vượt nhu cầu 20');
+        const res = await service.recordProductionBatch(
+          '1',
+          { ...recordDto, qty: 22 },
+          'user-han',
+          null,
+        );
+        expect(res.overPlanWarning).toBeNull();
+        expect(prisma.productionBatch.create).toHaveBeenCalled();
+
+        await expect(
+          service.recordProductionBatch('1', { ...recordDto, qty: 23 }, 'user-han', null),
+        ).rejects.toThrow('tối đa 22');
+      });
+
+      it('đã đủ: báo thêm 1 -> "tối đa 0"; khoá advisory lấy TRƯỚC khi đọc tổng đã báo (đọc trong khoá)', async () => {
+        prisma.productionBatch.aggregate.mockResolvedValue({ _sum: { reportedQty: 20 } });
+
+        await expect(
+          service.recordProductionBatch('1', { ...recordDto, qty: 1 }, 'user-han', null),
+        ).rejects.toThrow('tối đa 0');
+
+        expect(prisma.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+          prisma.productionBatch.aggregate.mock.invocationCallOrder[0],
+        );
+      });
+
+      it('mảnh không có trong định mức (số cần 0) -> câu "không cần theo định mức"', async () => {
+        prisma.bomPiece.findUnique.mockResolvedValue({ ...bomPieceRow, qtyPerUnit: 0 });
+
+        await expect(
+          service.recordProductionBatch('1', recordDto, 'user-han', null),
+        ).rejects.toThrow('Lệnh không cần mảnh Mảnh tựa theo định mức');
+      });
+
+      it('vai của tổ: HAN / SON / PHOI báo đúng tổ mình thì qua phép kiểm vai', async () => {
+        prisma.productionBatch.findFirst.mockResolvedValue(null);
+        prisma.productionBatch.create.mockResolvedValue(openRow);
+        for (const [stage, role] of [
+          [MfgStage.HAN, MfgRole.HAN],
+          [MfgStage.SON, MfgRole.SON],
+          [MfgStage.PHOI, MfgRole.PHOI],
+        ] as const) {
+          prisma.bomPiece.findUnique.mockResolvedValue({
+            ...bomPieceRow,
+            needsHan: stage === MfgStage.HAN,
+            needsSon: stage === MfgStage.SON,
+          });
+          await expect(
+            service.recordProductionBatch('1', { ...recordDto, stage }, 'u', role),
+          ).resolves.toBeDefined();
+        }
+      });
     });
 
-    it('2026-10-06: tổng đã báo trong nhu cầu - overPlanWarning = null', async () => {
+    it('overPlanWarning luôn null (không còn cảnh báo vượt nhu cầu)', async () => {
       prisma.productionBatch.findFirst.mockResolvedValue(null);
       prisma.productionBatch.create.mockResolvedValue({
         ...batchRow,
@@ -1013,6 +1231,32 @@ describe('ProductionBatchesService', () => {
       const res = await service.recordProductionBatch('1', recordDto, 'user-han', null);
 
       expect(res.overPlanWarning).toBeNull();
+    });
+
+    it('gửi lại cùng khoá sau khi QLSX hủy hết (dòng sổ không còn gắn đợt) -> 409 câu hủy, không ghi dòng sổ mới', async () => {
+      prisma.floorReport.findUnique.mockResolvedValue({
+        id: 9n,
+        kind: 'PIECE',
+        productionBatchId: null,
+      });
+
+      await expect(
+        service.recordProductionBatch('1', recordDto, 'cn-han-2', null, 'key-h'),
+      ).rejects.toThrow(FLOOR_REPORT_REVERSED_REPLAY_MESSAGE);
+      expect(prisma.floorReport.create).not.toHaveBeenCalled();
+      expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+    });
+
+    it('khoá đã dùng cho loại báo khác -> 409 câu cũ', async () => {
+      prisma.floorReport.findUnique.mockResolvedValue({
+        id: 9n,
+        kind: 'CUT',
+        productionBatchId: null,
+      });
+
+      await expect(
+        service.recordProductionBatch('1', recordDto, 'cn-han-2', null, 'key-h'),
+      ).rejects.toThrow('Idempotency-Key đã dùng cho một lần báo khác');
     });
 
     it('recordProductionBatch - đã có dòng OPEN - CỘNG DỒN reportedQty vào đúng dòng đó, không tạo mới', async () => {
@@ -1056,27 +1300,73 @@ describe('ProductionBatchesService', () => {
       expect(prisma.productionBatch.create).not.toHaveBeenCalled();
     });
 
-    it('finishProductionBatch - batch không ở OPEN - ConflictException', async () => {
+    it('finishProductionBatch - batch không ở OPEN - 409 câu "vừa được chốt để chấm"', async () => {
       prisma.productionBatch.findUnique.mockResolvedValue({ ...batchRow, status: 'AWAITING_QC' });
 
-      await expect(service.finishProductionBatch('700', 'user-han', null, null)).rejects.toThrow(
-        ConflictException,
-      );
+      const err = await service
+        .finishProductionBatch('700', 'user-han', null, null)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as Error).message).toBe('Lô này vừa được chốt để chấm - tải lại trang.');
     });
 
-    it('finishProductionBatch - reportedQty = 0 - BadRequest', async () => {
+    it('finishProductionBatch - reportedQty = 0 - 400 câu "không còn số nào để chấm"', async () => {
       prisma.productionBatch.findUnique.mockResolvedValue({
         ...batchRow,
         status: 'OPEN',
         reportedQty: 0,
       });
 
-      await expect(service.finishProductionBatch('700', 'user-han', null, null)).rejects.toThrow(
-        BadRequestException,
-      );
+      const err = await service
+        .finishProductionBatch('700', 'user-han', null, null)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect((err as Error).message).toBe('Lô này không còn số nào để chấm - tải lại trang.');
     });
 
-    it('finishProductionBatch - OPEN + có PieceBom - chuyển AWAITING_QC VÀ trừ đúng 1 dòng StockLedger theo reportedQty CUỐI CÙNG', async () => {
+    it('opts.gateLabel: lệnh dừng -> 409 câu floor-gate với nhãn "chốt để chấm" (mặc định "gửi KCS")', async () => {
+      prisma.productionBatch.findUnique.mockResolvedValue({ ...batchRow, status: 'OPEN' });
+      prisma.productionOrder.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.finishProductionBatch('700', 'kcs-1', 'HAN', null, { gateLabel: 'chốt để chấm' }),
+      ).rejects.toThrow(
+        'PI 500 chưa có SKU nào được QLSX bấm "Bắt đầu" (hoặc đã "Kết thúc") - chưa/không thể chốt để chấm',
+      );
+      await expect(service.finishProductionBatch('700', 'user-han', null, null)).rejects.toThrow(
+        'chưa/không thể gửi KCS',
+      );
+      expect(prisma.productionBatch.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('opts.notifyKcs = false (KCS tự chấm): không phát BATCH_TO_KCS, vẫn phát realtime; vai của tổ (HAN / SON / PHOI) qua phép kiểm vai', async () => {
+      for (const [stage, role] of [
+        [MfgStage.HAN, 'HAN'],
+        [MfgStage.SON, 'SON'],
+        [MfgStage.PHOI, 'PHOI'],
+      ] as const) {
+        prisma.productionBatch.findUnique.mockResolvedValue({
+          ...batchRow,
+          stage,
+          status: 'OPEN',
+        });
+        prisma.productionBatch.findUniqueOrThrow.mockResolvedValue({
+          ...batchRow,
+          stage,
+          status: 'AWAITING_QC',
+        });
+
+        await service.finishProductionBatch('700', 'kcs-1', role, null, {
+          notifyKcs: false,
+          gateLabel: 'chốt để chấm',
+        });
+      }
+
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+      expect(realtimeStub.publishEntityChanged).toHaveBeenCalledTimes(3);
+    });
+
+    it('finishProductionBatch - KHÔNG trừ đoạn: chỉ đổi OPEN -> AWAITING_QC, không đọc định mức đoạn, không ghi sổ kho', async () => {
       prisma.productionBatch.findUnique.mockResolvedValue({
         ...batchRow,
         status: 'OPEN',
@@ -1094,13 +1384,34 @@ describe('ProductionBatchesService', () => {
       await service.finishProductionBatch('700', 'user-han', null, null);
 
       expect(prisma.productionBatch.updateMany).toHaveBeenCalledWith({
-        where: { id: 700n, status: 'OPEN' },
+        where: { id: 700n, status: 'OPEN', reportedQty: { gt: 0 } },
         data: { status: 'AWAITING_QC' },
       });
-      expect(stockLedgerService.postEntry).toHaveBeenCalledTimes(1);
-      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
-        expect.objectContaining({ segmentSpecId: 60n, qty: 24 }), // 3 × reportedQty(8) CUỐI CÙNG
-        prisma,
+      expect(prisma.pieceBom.findMany).not.toHaveBeenCalled();
+      expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+      expect(segmentStock.consumeForOrder).not.toHaveBeenCalled();
+      expect(prisma.segmentOverage.create).not.toHaveBeenCalled();
+    });
+
+    it('finishProductionBatch - AC52: QLSX vừa hủy hết số (lô mất / còn 0) đúng lúc chốt -> 409 "vừa bị QLSX hủy hết số", không phải "vừa được chốt"', async () => {
+      prisma.productionBatch.findUnique
+        .mockResolvedValueOnce({ ...batchRow, status: 'OPEN', reportedQty: 8 })
+        .mockResolvedValueOnce(null);
+      prisma.productionBatch.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      await expect(service.finishProductionBatch('700', 'user-han', null, null)).rejects.toThrow(
+        'Lô này vừa bị QLSX hủy hết số - không còn gì để chấm, tải lại trang.',
+      );
+    });
+
+    it('finishProductionBatch - lô vẫn còn số mà không chốt được (KCS khác vừa chốt) -> 409 "vừa được chốt"', async () => {
+      prisma.productionBatch.findUnique
+        .mockResolvedValueOnce({ ...batchRow, status: 'OPEN', reportedQty: 8 })
+        .mockResolvedValueOnce({ reportedQty: 8 });
+      prisma.productionBatch.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      await expect(service.finishProductionBatch('700', 'user-han', null, null)).rejects.toThrow(
+        'Lô này vừa được chốt để chấm - tải lại trang.',
       );
     });
 
@@ -1555,8 +1866,9 @@ describe('ProductionBatchesService', () => {
   // 2026-09-04: tiến độ theo công đoạn (Cắt/Uốn/...) cho vật tư thành phẩm - mirror
   // getStepProgress() bên Sắt (SteelIssuesService) nhưng đơn vị = SỐ MẢNH, không theo cỡ đoạn.
   describe('getBatchPlan/getBatchPlanBatch - failedQty (lỗi KCS cộng dồn, 18/11/2026)', () => {
-    const review = (orderId: bigint, pieceId: bigint, failedQty: number) => ({
+    const review = (orderId: bigint, pieceId: bigint, failedQty: number, shortQty = 0) => ({
       failedQty,
+      shortQty,
       productionBatch: { productionOrderId: orderId, pieceId },
     });
 
@@ -1570,6 +1882,18 @@ describe('ProductionBatchesService', () => {
 
       expect(result.items[0]).toMatchObject({ passedQty: 6, failedQty: 4 });
       expect(instanceToPlain(result.items[0]).failedQty).toBe(4);
+    });
+
+    it('P1: KCS ghi thiếu 2 (lô 10: lỗi 4 + thiếu 2 -> đạt 4) -> shortQty 2 ghi RIÊNG, failedQty vẫn chỉ là lỗi (4), không cộng thiếu', async () => {
+      prisma.productionBatch.findMany.mockResolvedValue([
+        { pieceId: 40n, status: 'QC_DONE', reportedQty: 4 },
+      ]);
+      prisma.qcReview.findMany.mockResolvedValue([review(1n, 40n, 4, 2)]);
+
+      const result = await service.getBatchPlan('1', MfgStage.HAN);
+
+      expect(result.items[0]).toMatchObject({ passedQty: 4, failedQty: 4, shortQty: 2 });
+      expect(instanceToPlain(result.items[0]).shortQty).toBe(2);
     });
 
     it('thêm đợt bù 4 đạt -> passedQty 10, failedQty vẫn 4', async () => {
@@ -1615,6 +1939,7 @@ describe('ProductionBatchesService', () => {
 
       expect(result['1'].items[0].failedQty).toBe(5);
       expect(result['2'].items[0].failedQty).toBe(3);
+      expect(result['1'].items[0].shortQty).toBe(0);
       expect(prisma.qcReview.findMany).toHaveBeenCalledTimes(1);
     });
   });
@@ -1669,6 +1994,7 @@ describe('ProductionBatchesService', () => {
           submittedQty: 0,
           passedQty: 0,
           failedQty: 0,
+          shortQty: 0,
         },
         {
           step: 'UON',
@@ -1677,6 +2003,7 @@ describe('ProductionBatchesService', () => {
           submittedQty: 0,
           passedQty: 0,
           failedQty: 0,
+          shortQty: 0,
         },
       ]);
     });
@@ -1709,6 +2036,7 @@ describe('ProductionBatchesService', () => {
         submittedQty: 10,
         passedQty: 6,
         failedQty: 0,
+        shortQty: 0,
       });
     });
 
@@ -1722,14 +2050,15 @@ describe('ProductionBatchesService', () => {
           qtyPerPiece: 1,
         },
       ]);
-      const stepReview = (step: string, failedQty: number) => ({
+      const stepReview = (step: string, failedQty: number, shortQty = 0) => ({
         failedQty,
+        shortQty,
         pieceStepBundle: { productionOrderId: 1n, pieceId: 40n, step },
       });
       // Cùng 1 hàm prisma cho 2 truy vấn: lỗi theo đợt mảnh (productionBatch) và lỗi theo công đoạn (pieceStepBundle).
       prisma.qcReview.findMany.mockImplementation((args: { where: Record<string, unknown> }) =>
         Promise.resolve(
-          'pieceStepBundle' in args.where ? [stepReview('CAT', 3), stepReview('UON', 2)] : [],
+          'pieceStepBundle' in args.where ? [stepReview('CAT', 3, 1), stepReview('UON', 2, 4)] : [],
         ),
       );
 
@@ -1737,6 +2066,9 @@ describe('ProductionBatchesService', () => {
 
       expect(result.items[0].stepProgress.map((s) => s.failedQty)).toEqual([3, 2]);
       expect(result.items[0].failedQty).toBe(5);
+      // P1: thiếu theo từng công đoạn + Σ mọi công đoạn ở mảnh; failedQty (N1) không đổi nghĩa.
+      expect(result.items[0].stepProgress.map((s) => s.shortQty)).toEqual([1, 4]);
+      expect(result.items[0].shortQty).toBe(5);
     });
 
     it('nhiều order CÙNG PI cùng bomRevisionId - doneQty theo bước KHÔNG lẫn giữa 2 order (getBatchPlanBatch)', async () => {
@@ -1793,25 +2125,113 @@ describe('ProductionBatchesService', () => {
       reportedById: 'user-phoi',
     };
 
-    it('happy path - bước ĐẦU TIÊN (CAT), tạo đúng dòng, KHÔNG cap theo plannedQty', async () => {
+    it('happy path - bước ĐẦU TIÊN (CAT), tạo đúng dòng (báo đúng số cần 2 × 10 = 20)', async () => {
       prisma.pieceMaterialYield.findMany.mockResolvedValue([yieldRow]);
       prisma.pieceStepBatch.create.mockResolvedValue(createdRow);
 
-      // plannedQty = 2×10 = 20, báo 999 vẫn phải qua được vì đây là bước đầu tiên (CAT), không cap.
-      const bigDto = { ...dto, qty: 999 };
-      const result = await service.recordPieceStepBatch('1', bigDto, 'user-phoi', 'PHOI');
+      const fullDto = { ...dto, qty: 20 };
+      const result = await service.recordPieceStepBatch('1', fullDto, 'user-phoi', 'PHOI');
 
       expect(result.id).toBe('900');
-      expect(result.qty).toBe(10); // trả nguyên createdRow, không phải bigDto.qty
+      expect(result.qty).toBe(10); // trả nguyên createdRow, không phải fullDto.qty
       expect(prisma.pieceStepBatch.create).toHaveBeenCalledWith({
         data: {
           productionOrderId: 1n,
           pieceId: 40n,
           step: 'CAT',
-          qty: 999,
+          qty: 20,
           reportedById: 'user-phoi',
           idempotencyKey: undefined,
         },
+      });
+    });
+
+    it('P1: transaction có maxWait + timeout 20s; sau commit phát realtime PROGRESS (topic production-batches) cho lệnh', async () => {
+      prisma.pieceMaterialYield.findMany.mockResolvedValue([yieldRow]);
+      prisma.pieceStepBatch.create.mockResolvedValue(createdRow);
+
+      await service.recordPieceStepBatch('1', { ...dto, qty: 20 }, 'user-phoi', 'PHOI');
+
+      expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+        maxWait: 10_000,
+        timeout: 20_000,
+      });
+      expect(realtimeStub.publishEntityChanged).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entity: 'PRODUCTION_BATCH',
+          entityId: 900n,
+          action: 'PROGRESS',
+          actorId: 'user-phoi',
+          parentId: 1n,
+        }),
+      );
+    });
+
+    describe('báo vượt theo (lệnh, mảnh, công đoạn) được phép - P1, quyết định 19/11 (Câu 6)', () => {
+      beforeEach(() => {
+        prisma.pieceMaterialYield.findMany.mockResolvedValue([yieldRow]);
+        prisma.pieceStepBatch.create.mockResolvedValue(createdRow);
+      });
+
+      it('cần 20, đã tính 15 (báo 20, KCS ghi lỗi 3 + thiếu 2): báo 6 vẫn tạo được + logger.log "Báo vượt pat"; báo 5 không log', async () => {
+        prisma.pieceStepBatch.aggregate.mockResolvedValue({ _sum: { qty: 20 } });
+        prisma.qcReview.aggregate.mockResolvedValue({ _sum: { failedQty: 3, shortQty: 2 } });
+        const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+
+        await expect(
+          service.recordPieceStepBatch('1', { ...dto, qty: 6 }, 'user-phoi', 'PHOI'),
+        ).resolves.toBeDefined();
+        expect(prisma.pieceStepBatch.create).toHaveBeenCalledTimes(1);
+        expect(log).toHaveBeenCalledWith(
+          expect.stringContaining(
+            'Báo vượt pat: lệnh 1, mảnh 40, CAT, cần 20, đã tính 15, nhập 6 (cho phép, quyết định 19/11)',
+          ),
+        );
+
+        log.mockClear();
+        await expect(
+          service.recordPieceStepBatch('1', { ...dto, qty: 5 }, 'user-phoi', 'PHOI'),
+        ).resolves.toBeDefined();
+        expect(log).not.toHaveBeenCalledWith(expect.stringContaining('Báo vượt pat'));
+        // Đọc theo ĐÚNG công đoạn, trong khoá piece-step-batch (khoá trước khi đọc).
+        expect(prisma.pieceStepBatch.aggregate).toHaveBeenCalledWith({
+          where: { productionOrderId: 1n, pieceId: 40n, step: 'CAT' },
+          _sum: { qty: true },
+        });
+        expect(prisma.qcReview.aggregate).toHaveBeenCalledWith({
+          where: { pieceStepBundle: { productionOrderId: 1n, pieceId: 40n, step: 'CAT' } },
+          _sum: { failedQty: true, shortQty: true },
+        });
+        expect(prisma.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+          prisma.pieceStepBatch.aggregate.mock.invocationCallOrder[0],
+        );
+        log.mockRestore();
+      });
+
+      it('đã đủ -> báo thêm 1 vẫn tạo được, có log, vẫn phát realtime', async () => {
+        prisma.pieceStepBatch.aggregate.mockResolvedValue({ _sum: { qty: 20 } });
+        const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+        realtimeStub.publishEntityChanged.mockClear();
+
+        await expect(
+          service.recordPieceStepBatch('1', { ...dto, qty: 1 }, 'user-phoi', 'PHOI'),
+        ).resolves.toBeDefined();
+        expect(prisma.pieceStepBatch.create).toHaveBeenCalledTimes(1);
+        expect(log).toHaveBeenCalledWith(expect.stringContaining('Báo vượt pat'));
+        expect(realtimeStub.publishEntityChanged).toHaveBeenCalled();
+        log.mockRestore();
+      });
+
+      it('số cần 0 (mảnh không có trong định mức của lệnh) vẫn tạo được + có log', async () => {
+        prisma.bomPiece.findUnique.mockResolvedValue(null);
+        const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+
+        await expect(
+          service.recordPieceStepBatch('1', dto, 'user-phoi', 'PHOI'),
+        ).resolves.toBeDefined();
+        expect(prisma.pieceStepBatch.create).toHaveBeenCalledTimes(1);
+        expect(log).toHaveBeenCalledWith(expect.stringContaining('cần 0'));
+        log.mockRestore();
       });
     });
 
@@ -1876,8 +2296,8 @@ describe('ProductionBatchesService', () => {
 
     // 2026-09-07: BỎ ràng buộc "bước sau vượt bước liền trước" (quyết định nghiệp vụ, xem doc
     // comment recordPieceStepBatch()) - 3 test dưới thay 3 test CŨ đã xoá (từng assert BadRequest
-    // cho đúng các case này), giờ khẳng định NGƯỢC LẠI: không còn chặn, không còn gọi
-    // pieceStepBatch.aggregate nào (code tra cứu donePrev đã bị xoá theo).
+    // cho đúng các case này), giờ khẳng định NGƯỢC LẠI: không còn chặn theo bước liền trước (P1 chỉ chặn theo số cần của CHÍNH
+    // công đoạn đó - aggregate chỉ đọc đúng step đang báo).
     it('báo bước SAU (UON) vượt xa số đã báo bước TRƯỚC (CAT) - KHÔNG còn chặn, tạo bình thường', async () => {
       prisma.pieceMaterialYield.findMany.mockResolvedValue([yieldRow]);
       prisma.pieceStepBatch.create.mockResolvedValue({ ...createdRow, step: 'UON', qty: 11 });
@@ -1890,7 +2310,10 @@ describe('ProductionBatchesService', () => {
           'PHOI',
         ),
       ).resolves.toBeDefined();
-      expect(prisma.pieceStepBatch.aggregate).not.toHaveBeenCalled();
+      expect(prisma.pieceStepBatch.aggregate).toHaveBeenCalledTimes(1);
+      expect(prisma.pieceStepBatch.aggregate).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ step: 'UON' }) as unknown }),
+      );
     });
 
     it("processSteps lưu LỘN XỘN thứ tự (['UON','CAT']) - vẫn không chặn báo UON dù CAT chưa báo gì", async () => {
@@ -1987,6 +2410,22 @@ describe('ProductionBatchesService', () => {
       piece,
     };
 
+    beforeEach(() => {
+      prisma.pieceStepBatch.updateMany.mockResolvedValue({ count: 2 });
+    });
+
+    it('P1: transaction gom có maxWait 10s + timeout 20s', async () => {
+      prisma.pieceStepBatch.findMany.mockResolvedValue(pendingRows);
+      prisma.pieceStepBundle.create.mockResolvedValue(createdBundle);
+
+      await service.submitPieceStep('1', dto, 'user-phoi', 'PHOI');
+
+      expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+        maxWait: 10_000,
+        timeout: 20_000,
+      });
+    });
+
     it('happy path - gom 2 dòng CHƯA gửi (qty 6+4), tạo bundle qty=10, gán lại pieceStepBundleId cho cả 2 dòng', async () => {
       prisma.pieceStepBatch.findMany.mockResolvedValue(pendingRows);
       prisma.pieceStepBundle.create.mockResolvedValue(createdBundle);
@@ -2010,19 +2449,62 @@ describe('ProductionBatchesService', () => {
           },
         }),
       );
+      // P1: updateMany thêm điều kiện "chưa gom" (pieceStepBundleId null) và so số dòng.
       expect(prisma.pieceStepBatch.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: [901n, 902n] } },
+        where: { id: { in: [901n, 902n] }, pieceStepBundleId: null },
         data: { pieceStepBundleId: 500n },
       });
     });
 
-    it('không có dòng nào CHƯA gửi (tổng qty = 0) - BadRequest, không tạo bundle', async () => {
+    it('P1: không còn lần báo nào chưa chấm (bên kia vừa chốt) - 400 câu CHUNG có mã mảnh + công đoạn (không phải "chưa có gì mới"), không tạo bundle', async () => {
       prisma.pieceStepBatch.findMany.mockResolvedValue([]);
 
-      await expect(service.submitPieceStep('1', dto, 'user-phoi', 'PHOI')).rejects.toThrow(
-        BadRequestException,
+      const err = await service
+        .submitPieceStep('1', dto, 'user-phoi', 'PHOI')
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect((err as Error).message).toBe(
+        'Pat MANH-TUA công đoạn Cắt: không còn lần báo nào chưa chấm (có thể vừa được chốt) - tải lại trang.',
       );
       expect(prisma.pieceStepBundle.create).not.toHaveBeenCalled();
+    });
+
+    it('P1: updateMany chỉ gom được ít dòng hơn đã đọc (1 dòng vừa bị bên khác gom) - 400 câu chung, không để bundle sót lại', async () => {
+      prisma.pieceStepBatch.findMany.mockResolvedValue(pendingRows);
+      prisma.pieceStepBundle.create.mockResolvedValue(createdBundle);
+      prisma.pieceStepBatch.updateMany.mockResolvedValue({ count: 1 });
+
+      await expect(service.submitPieceStep('1', dto, 'user-phoi', 'PHOI')).rejects.toThrow(
+        'không còn lần báo nào chưa chấm (có thể vừa được chốt) - tải lại trang.',
+      );
+    });
+
+    it('P1: opts.gateLabel dùng cho cổng lệnh dừng (ngoài VÀ trong khoá): 409 "chưa/không thể chốt để chấm"; mặc định "gửi KCS công đoạn"', async () => {
+      prisma.productionOrder.findFirst.mockResolvedValue(null);
+      await expect(
+        service.submitPieceStep('1', dto, 'kcs-1', 'PHOI', { gateLabel: 'chốt để chấm' }),
+      ).rejects.toThrow('chưa/không thể chốt để chấm');
+      await expect(service.submitPieceStep('1', dto, 'user-phoi', 'PHOI')).rejects.toThrow(
+        'chưa/không thể gửi KCS công đoạn',
+      );
+
+      // Race: pre-check thấy ACTIVE, FOR UPDATE trong khoá thấy PAUSED -> cùng nhãn mới.
+      prisma.productionOrder.findFirst.mockResolvedValue({ id: 9n });
+      prisma.$queryRaw.mockResolvedValue([{ floorStage: 'PAUSED' }]);
+      await expect(
+        service.submitPieceStep('1', dto, 'kcs-1', 'PHOI', { gateLabel: 'chốt để chấm' }),
+      ).rejects.toThrow('chưa/không thể chốt để chấm');
+      expect(prisma.pieceStepBundle.create).not.toHaveBeenCalled();
+    });
+
+    it('P1: không phát tin nào (pat không có tin *_TO_KCS)', async () => {
+      prisma.pieceStepBatch.findMany.mockResolvedValue(pendingRows);
+      prisma.pieceStepBundle.create.mockResolvedValue(createdBundle);
+
+      await service.submitPieceStep('1', dto, 'kcs-1', 'PHOI', { gateLabel: 'chốt để chấm' });
+
+      expect(notificationsService.emit).not.toHaveBeenCalled();
     });
 
     it('mfgRole khác PHOI (vd HAN) - ForbiddenException', async () => {
@@ -2112,7 +2594,7 @@ describe('ProductionBatchesService', () => {
   // & gửi KCS) lẫn recordPieceStepBatch() (báo từng công đoạn), CHỈ khi stage=PHOI và piece có
   // PieceMaterialYield - không đụng Hàn/Sơn/piece Sắt thường.
   describe('create/recordPieceStepBatch - chặn khi chưa nhận vật tư thành phẩm (2026-09-04)', () => {
-    const phoiDto = { stage: MfgStage.PHOI, pieceId: '40', reportedQty: 24 };
+    const phoiDto = { stage: MfgStage.PHOI, pieceId: '40', reportedQty: 20 }; // = số cần (2 × 10), qua phép chặn vượt
     const yieldRow = {
       materialId: 80n,
       pieceId: 40n,
@@ -2182,7 +2664,7 @@ describe('ProductionBatchesService', () => {
     });
 
     it('create() - stage=HAN/SON - không gọi sumReceived (ràng buộc chỉ áp dụng PHÔI)', async () => {
-      const hanDto = { stage: MfgStage.HAN, pieceId: '40', reportedQty: 24 };
+      const hanDto = { stage: MfgStage.HAN, pieceId: '40', reportedQty: 20 };
       prisma.bomPiece.findUnique.mockResolvedValue({ ...bomPieceRow, needsHan: true });
       prisma.pieceMaterialYield.findMany.mockResolvedValue([yieldRow]);
       prisma.productionBatch.create.mockResolvedValue({ ...batchRow, stage: MfgStage.HAN });
@@ -2225,7 +2707,7 @@ describe('ProductionBatchesService', () => {
         { processSteps: ['UON', 'DUC_LO'] },
       ]);
       prisma.pieceStepBundle.findMany.mockResolvedValue([
-        { qty: 10, qcReviews: [{ failedQty: 0 }] },
+        { qty: 10, qcReviews: [{ failedQty: 0, shortQty: 0 }] },
       ]);
       prisma.productionBatch.findMany.mockResolvedValue([]);
 
@@ -2311,7 +2793,7 @@ describe('ProductionBatchesService', () => {
     it('bước cuối, có bundle QC_PASSED lần đầu (chưa từng tạo ProductionBatch) - tạo QC_DONE, reportedQty = passed (trừ đúng failedQty)', async () => {
       prisma.pieceMaterialYield.findMany.mockResolvedValue([yieldRowTwoSteps]);
       prisma.pieceStepBundle.findMany.mockResolvedValue([
-        { qty: 10, qcReviews: [{ failedQty: 3 }] },
+        { qty: 10, qcReviews: [{ failedQty: 3, shortQty: 0 }] },
       ]);
       prisma.productionBatch.findMany.mockResolvedValue([]);
 
@@ -2356,8 +2838,8 @@ describe('ProductionBatchesService', () => {
     it('bước cuối, thêm 1 bundle Bù đủ mới (2 bundle QC_PASSED cộng dồn) - chỉ tạo phần CHÊNH LỆCH', async () => {
       prisma.pieceMaterialYield.findMany.mockResolvedValue([yieldRowTwoSteps]);
       prisma.pieceStepBundle.findMany.mockResolvedValue([
-        { qty: 10, qcReviews: [{ failedQty: 3 }] }, // đã đạt 7, đã sinh ProductionBatch rồi
-        { qty: 3, qcReviews: [{ failedQty: 0 }] }, // bù đủ mới đạt thêm 3
+        { qty: 10, qcReviews: [{ failedQty: 3, shortQty: 0 }] }, // đã đạt 7, đã sinh ProductionBatch rồi
+        { qty: 3, qcReviews: [{ failedQty: 0, shortQty: 0 }] }, // bù đủ mới đạt thêm 3
       ]);
       prisma.productionBatch.findMany.mockResolvedValue([{ reportedQty: 7 }]);
 
@@ -2380,6 +2862,63 @@ describe('ProductionBatchesService', () => {
           status: 'QC_DONE',
         },
       });
+    });
+
+    it('P1 AC37: bundle 50, KCS ghi thiếu 3 + lỗi 1 -> sinh lô QC_DONE 46 (trừ cả thiếu), không phải 49', async () => {
+      const postOutput = jest.spyOn(service, 'postPieceOutputIfFinal');
+      prisma.pieceMaterialYield.findMany.mockResolvedValue([yieldRowTwoSteps]);
+      prisma.pieceStepBundle.findMany.mockResolvedValue([
+        { qty: 50, qcReviews: [{ failedQty: 1, shortQty: 3 }] },
+      ]);
+      prisma.productionBatch.findMany.mockResolvedValue([]);
+
+      await service.autoFinalizePieceOutputIfLastStepComplete(
+        prisma as unknown as PrismaTx,
+        5n,
+        1n,
+        40n,
+        'DUC_LO',
+        'user-kcs',
+      );
+
+      expect(prisma.pieceStepBundle.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: { qty: true, qcReviews: { select: { failedQty: true, shortQty: true } } },
+        }),
+      );
+      expect(prisma.productionBatch.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ reportedQty: 46 }) as unknown,
+      });
+      expect(postOutput).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({ qty: 46 }),
+        'user-kcs',
+      );
+    });
+
+    it('P1: lấy khoá production-batch-open:{lệnh}:{mảnh}:PHOI NGAY SAU piece-auto-finalize (loại trừ với báo mảnh Phôi), trước khi đọc / ghi lô', async () => {
+      prisma.pieceMaterialYield.findMany.mockResolvedValue([yieldRowTwoSteps]);
+      prisma.pieceStepBundle.findMany.mockResolvedValue([
+        { qty: 10, qcReviews: [{ failedQty: 0, shortQty: 0 }] },
+      ]);
+      prisma.productionBatch.findMany.mockResolvedValue([]);
+
+      await service.autoFinalizePieceOutputIfLastStepComplete(
+        prisma as unknown as PrismaTx,
+        5n,
+        1n,
+        40n,
+        'DUC_LO',
+        'user-kcs',
+      );
+
+      const keys = (prisma.$executeRaw.mock.calls as [TemplateStringsArray, string][]).map(
+        ([, key]) => key,
+      );
+      expect(keys).toEqual(['piece-auto-finalize:1:40', 'production-batch-open:1:40:PHOI']);
+      expect(prisma.$executeRaw.mock.invocationCallOrder[1]).toBeLessThan(
+        prisma.productionBatch.findMany.mock.invocationCallOrder[0],
+      );
     });
   });
 
@@ -2473,6 +3012,25 @@ describe('ProductionBatchesService', () => {
       expect(result.materialYieldItems[0]).toMatchObject({ plannedQty: 40, passedQty: 20 });
     });
 
+    it('P1: loadMaterialYieldNeed ra CÙNG số cần với getMaterialYieldPlanBatch (Σ plannedQty mọi SKU của PI)', async () => {
+      prisma.materialYieldRecipe.findMany.mockResolvedValue([chanNhomRecipe]);
+      prisma.pieceMaterialItem.findMany.mockResolvedValue([chanNhomLine]);
+      prisma.productionOrder.findMany.mockResolvedValue([
+        { ...order, id: 1n, quantity: 10, productionInvoiceItem: { productionInvoiceId: 500n } },
+        { ...order, id: 2n, quantity: 30, productionInvoiceItem: { productionInvoiceId: 500n } },
+      ]);
+
+      const plan = await service.getBatchPlanBatch(['1', '2'], MfgStage.PHOI);
+      const planned = ['1', '2'].reduce(
+        (sum, id) => sum + (plan[id].materialYieldItems[0]?.plannedQty ?? 0),
+        0,
+      );
+      const need = await loadMaterialYieldNeed(prisma as unknown as PrismaTx, [500n]);
+
+      expect(planned).toBe(160); // (2 × 2) × (10 + 30)
+      expect(need.get(materialYieldNeedKey(500n, 7n, 'CAT'))?.required).toBe(planned);
+    });
+
     it('getBatchPlanBatch stage=PHOI: mỗi order nhận materialYieldItems riêng', async () => {
       prisma.productionOrder.findMany.mockResolvedValue([order]);
       prisma.materialYieldRecipe.findMany.mockResolvedValue([chanNhomRecipe]);
@@ -2563,6 +3121,48 @@ describe('ProductionBatchesService', () => {
       setup(true, false, PA);
       await run(MfgStage.HAN, 0);
       expect(stockLedgerService.postEntry).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('replayLegacySegmentConsume - kho Phôi tra bằng đúng tx (P1 [6])', () => {
+    it('gọi phoiWarehouseCodeOfOrder với tx của giao dịch chuyển đổi, không mượn kết nối ngoài giao dịch', async () => {
+      const tx = {
+        productionBatch: {
+          findUniqueOrThrow: jest.fn().mockResolvedValue({
+            id: 5n,
+            pieceId: 40n,
+            reportedQty: 3,
+            stage: MfgStage.HAN,
+            reportedById: 'u1',
+            productionOrder: {
+              id: 11n,
+              bomRevisionId: 5n,
+              productionInvoiceItem: { productionInvoiceId: 3n },
+            },
+          }),
+        },
+        pieceBom: { findMany: jest.fn().mockResolvedValue([{ qtyPerPiece: 1 }]) },
+        bomPiece: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ needsHan: true, needsSon: false, qtyPerUnit: 1 }),
+        },
+        warehouse: {
+          findUniqueOrThrow: jest.fn().mockRejectedValue(new Error('dừng sau tra kho')),
+        },
+      };
+      const spy = jest
+        .spyOn(
+          service as unknown as { phoiWarehouseCodeOfOrder: (...a: unknown[]) => Promise<string> },
+          'phoiWarehouseCodeOfOrder',
+        )
+        .mockResolvedValue('PHOI-X');
+
+      await expect(service.replayLegacySegmentConsume(tx as never, 5n, 'admin')).rejects.toThrow(
+        'dừng sau tra kho',
+      );
+
+      expect(spy).toHaveBeenCalledWith(11n, tx);
     });
   });
 });

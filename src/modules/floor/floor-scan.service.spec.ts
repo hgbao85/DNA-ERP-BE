@@ -665,8 +665,27 @@ describe('FloorScanService', () => {
             segmentSpecId: '63',
             cutLengthMm: 500,
             required: 20,
+            baseRequired: 20,
+            extraNeed: 0,
             done: 5,
-            byOrder: [{ productionOrderId: '41', required: 20, done: 5, ignored: 'x' }],
+            shortQty: 0,
+            reportedQty: 5,
+            maxNow: 15,
+            physicalLeft: null,
+            byOrder: [
+              {
+                productionOrderId: '41',
+                required: 20,
+                baseRequired: 20,
+                extraNeed: 0,
+                done: 5,
+                shortQty: 0,
+                reportedQty: 5,
+                maxNow: 15,
+                physicalLeft: null,
+                ignored: 'x',
+              },
+            ],
             ...extra,
           },
         ],
@@ -829,8 +848,16 @@ describe('FloorScanService', () => {
                   done: 5,
                   failed: 0,
                   reportedQty: 5,
+                  maxNow: 15,
                   byOrder: [
-                    { productionOrderId: '41', required: 20, done: 5, failed: 0, reportedQty: 5 },
+                    {
+                      productionOrderId: '41',
+                      required: 20,
+                      done: 5,
+                      failed: 0,
+                      reportedQty: 5,
+                      maxNow: 15,
+                    },
                   ],
                 },
               ],
@@ -862,13 +889,28 @@ describe('FloorScanService', () => {
       expect(steelIssues.getPhoiProgress).not.toHaveBeenCalled();
     });
 
-    describe('số được tính = đã báo - lỗi KCS (17/11/2026)', () => {
+    describe('số được tính = thô - lỗi - thiếu (P1, 18/11/2026)', () => {
       type SegmentOut = {
         required: number;
         done: number;
         byOrder: Record<string, unknown>[];
       };
-      const segOf = (required: number, done: number, failed?: number) => [
+      /**
+       * `done` ở đây là số của API tiến độ = thô - thiếu (vẫn gồm lỗi); `reportedQty` mặc định = done + thiếu (số thô).
+       * Các trường mới của tiến độ (BE-2) mặc định như dòng chưa thiếu / chưa cắt lại.
+       */
+      const segOf = (
+        required: number,
+        done: number,
+        failed?: number,
+        extra: {
+          shortQty?: number;
+          baseRequired?: number;
+          extraNeed?: number;
+          maxNow?: number;
+          physicalLeft?: number | null;
+        } = {},
+      ) => [
         {
           materialId: '7',
           materialCode: 'S7',
@@ -878,14 +920,26 @@ describe('FloorScanService', () => {
               segmentSpecId: '63',
               cutLengthMm: 471,
               required,
+              baseRequired: extra.baseRequired ?? required,
+              extraNeed: extra.extraNeed ?? 0,
               done,
               ...(failed === undefined ? {} : { failed }),
+              shortQty: extra.shortQty ?? 0,
+              reportedQty: done + (extra.shortQty ?? 0),
+              maxNow: extra.maxNow ?? 0,
+              physicalLeft: extra.physicalLeft ?? null,
               byOrder: [
                 {
                   productionOrderId: '41',
                   required,
+                  baseRequired: extra.baseRequired ?? required,
+                  extraNeed: extra.extraNeed ?? 0,
                   done,
                   ...(failed === undefined ? {} : { failed }),
+                  shortQty: extra.shortQty ?? 0,
+                  reportedQty: done + (extra.shortQty ?? 0),
+                  maxNow: extra.maxNow ?? 0,
+                  physicalLeft: extra.physicalLeft ?? null,
                 },
               ],
             },
@@ -910,9 +964,61 @@ describe('FloorScanService', () => {
         expect(sg.byOrder[0]).toEqual({
           productionOrderId: '41',
           required: 1180,
+          baseRequired: 1180,
+          extraNeed: 0,
           done: 1168,
           failed: 12,
+          shortQty: 0,
           reportedQty: 1180,
+          maxNow: 0,
+          physicalLeft: null,
+        });
+      });
+
+      it('P1 AC25: trả nguyên baseRequired / extraNeed / shortQty / maxNow / physicalLeft của tiến độ (cấp cỡ lẫn SKU), không tự tính lại', async () => {
+        prisma.workstation.findUnique.mockResolvedValue({
+          ...laser,
+          kind: 'STEP',
+          processStep: 'UON',
+        });
+        steelIssues.getStepProgress.mockResolvedValue(
+          segOf(1183, 1177, 8, {
+            baseRequired: 1180,
+            extraNeed: 3,
+            maxNow: 3,
+            physicalLeft: 3,
+          }),
+        );
+        const sg = await segmentOf();
+        expect(sg).toMatchObject({
+          required: 1183,
+          baseRequired: 1180,
+          extraNeed: 3,
+          done: 1169,
+          failed: 8,
+          shortQty: 0,
+          reportedQty: 1177,
+          maxNow: 3,
+          physicalLeft: 3,
+        });
+        expect(sg.byOrder[0]).toMatchObject({
+          baseRequired: 1180,
+          extraNeed: 3,
+          maxNow: 3,
+          physicalLeft: 3,
+        });
+      });
+
+      it('P1 AC27: KCS ghi thiếu 5 + lỗi 3 -> reportedQty là số THÔ 120 (không lấy done), done = đã tính 112', async () => {
+        // API tiến độ: done = thô - thiếu = 115; failed 3; reportedQty 120.
+        steelIssues.getPhoiProgress.mockResolvedValue(segOf(1180, 115, 3, { shortQty: 5 }));
+        const sg = await segmentOf();
+        expect(sg).toMatchObject({ done: 112, failed: 3, shortQty: 5, reportedQty: 120 });
+        expect(sg.byOrder[0]).toMatchObject({
+          done: 112,
+          failed: 3,
+          shortQty: 5,
+          reportedQty: 120,
         });
       });
 
@@ -962,9 +1068,9 @@ describe('FloorScanService', () => {
         '41': {
           orderId: '41',
           items: [
-            { pieceId: '73', required: 10 },
-            { pieceId: '74', required: 5 },
-            { pieceId: '75', required: 5 },
+            { pieceId: '73', required: 10, plannedQty: 10, passedQty: 2, awaitingQcQty: 1 },
+            { pieceId: '74', required: 5, plannedQty: 5, passedQty: 0, awaitingQcQty: 0 },
+            { pieceId: '75', required: 5, plannedQty: 5, passedQty: 5, awaitingQcQty: 3 },
           ],
         },
       });
@@ -986,9 +1092,10 @@ describe('FloorScanService', () => {
           piecePlans: {
             '41': {
               items: [
-                { pieceId: '73', required: 10, openQty: 6 },
-                { pieceId: '74', required: 5, openQty: 0 },
-                { pieceId: '75', required: 5, openQty: 0 },
+                // maxNow = max(0, cần - đạt - chờ KCS - đang mở): 10-2-1-6 = 1; 5-0-0-0 = 5; vượt thì 0, không âm
+                { pieceId: '73', required: 10, openQty: 6, maxNow: 1 },
+                { pieceId: '74', required: 5, openQty: 0, maxNow: 5 },
+                { pieceId: '75', required: 5, openQty: 0, maxNow: 0 },
               ],
             },
           },
@@ -1052,18 +1159,21 @@ describe('FloorScanService', () => {
       productionBatch: null,
       ...o,
     });
-    const cutBundle = (status: string) => ({
+    type Review = { failedQty: number; shortQty: number };
+    const cutBundle = (status: string, qcReviews: Review[] = []) => ({
       status,
+      qcReviews,
       steelIssue: { productionInvoice: { code: 'PI-45' } },
     });
-    const stepBatch = (stepBundle: { status: string } | null) => ({
+    const stepBatch = (stepBundle: { status: string; qcReviews?: Review[] } | null) => ({
       step: 'UON',
-      stepBundle,
+      stepBundle: stepBundle ? { qcReviews: [], ...stepBundle } : null,
       productionInvoice: { code: 'PI-46' },
     });
-    const prodBatch = (status: string) => ({
+    const prodBatch = (status: string, qcReviews: Review[] = []) => ({
       stage: 'HAN',
       status,
+      qcReviews,
       productionOrder: { productionInvoiceItem: { productionInvoice: { code: 'PI-47' } } },
     });
     const one = async (o: object) => {
@@ -1097,6 +1207,60 @@ describe('FloorScanService', () => {
       const r = await one(o);
       expect(r.state).toBe(state);
       expect(r.piCode).toBe(piCode);
+    });
+
+    it('P1 (19/11): batchKey = mã đợt KCS chấm (đợt cắt / nhóm công đoạn / lô mảnh), chưa gom thì null', async () => {
+      expect((await one({ cutBundleId: 38n, cutBundle: cutBundle('QC_PASSED') })).batchKey).toBe(
+        'CUT:38',
+      );
+      expect(
+        (await one({ stepBatch: { ...stepBatch({ status: 'QC_PASSED' }), stepBundleId: 15n } }))
+          .batchKey,
+      ).toBe('STEP:15');
+      expect((await one({ stepBatch: stepBatch(null) })).batchKey).toBeNull();
+      expect(
+        (await one({ productionBatchId: 93n, productionBatch: prodBatch('QC_DONE') })).batchKey,
+      ).toBe('BATCH:93');
+      expect((await one({})).batchKey).toBeNull();
+    });
+
+    describe('kcs { failedQty, shortQty } của đợt (P1 AC41)', () => {
+      it('đợt cắt đã chấm: số lỗi / thiếu của cả đợt (cộng các phiếu chấm)', async () => {
+        const r = await one({
+          cutBundle: cutBundle('QC_PASSED', [
+            { failedQty: 3, shortQty: 5 },
+            { failedQty: 1, shortQty: 0 },
+          ]),
+        });
+        expect(r.kcs).toEqual({ failedQty: 4, shortQty: 5 });
+      });
+
+      it('công đoạn phụ và lô mảnh đã chấm cũng có kcs', async () => {
+        const step = await one({
+          stepBatch: stepBatch({ status: 'QC_PASSED', qcReviews: [{ failedQty: 2, shortQty: 1 }] }),
+        });
+        expect(step.kcs).toEqual({ failedQty: 2, shortQty: 1 });
+        const piece = await one({
+          productionBatch: prodBatch('QC_DONE', [{ failedQty: 0, shortQty: 7 }]),
+        });
+        expect(piece.kcs).toEqual({ failedQty: 0, shortQty: 7 });
+      });
+
+      it('đợt đang mở hoặc đã chốt chờ chấm -> kcs null (kể cả khi có phiếu nháp)', async () => {
+        expect((await one({ cutBundle: cutBundle('CUTTING') })).kcs).toBeNull();
+        expect(
+          (await one({ cutBundle: cutBundle('AWAITING_QC', [{ failedQty: 1, shortQty: 1 }]) })).kcs,
+        ).toBeNull();
+        expect((await one({ stepBatch: stepBatch(null) })).kcs).toBeNull();
+        expect((await one({ stepBatch: stepBatch({ status: 'AWAITING_QC' }) })).kcs).toBeNull();
+        expect((await one({ productionBatch: prodBatch('OPEN') })).kcs).toBeNull();
+        expect((await one({ productionBatch: prodBatch('AWAITING_QC') })).kcs).toBeNull();
+      });
+
+      it('đợt đã chấm nhưng không có phiếu chấm (dữ liệu cũ) hoặc đợt đã bị xoá -> kcs null', async () => {
+        expect((await one({ cutBundle: cutBundle('QC_PASSED') })).kcs).toBeNull();
+        expect((await one({})).kcs).toBeNull();
+      });
     });
 
     it('mã PI ghi trên chính lần báo được ưu tiên hơn mã PI suy ra từ đợt', async () => {

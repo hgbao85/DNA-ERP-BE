@@ -250,6 +250,99 @@ describe('SegmentProductionService', () => {
     expect(r.specs[0].stepPassedQty).toEqual({ UON: 7, DAP: 36 });
   });
 
+  it('P1 AC38: KCS ghi thiếu / bỏ - cắt trừ thiếu Cắt và Σ bỏ ở mọi công đoạn phụ, công đoạn trừ thiếu của chính nó', async () => {
+    setData({
+      cutSegments: [{ segmentSpecId: 30n, qty: 120, cutBundle: { status: 'QC_PASSED' } }],
+      cutQc: [{ segmentSpecId: 30n, failedQty: 0, shortQty: 2, scrapQty: 0 }],
+      stepSegments: [
+        {
+          segmentSpecId: 30n,
+          qty: 20,
+          stepBatch: { step: 'DAP', stepBundle: { status: 'QC_PASSED' } },
+        },
+      ],
+      // Dập: lỗi 5 (bỏ 4, làm lại 1) và thiếu 3.
+      stepQc: [
+        {
+          segmentSpecId: 30n,
+          failedQty: 5,
+          shortQty: 3,
+          scrapQty: 4,
+          qcReview: { stepBundle: { step: 'DAP' } },
+        },
+      ],
+    });
+
+    const r = await service.recomputeForPi(900n, { reason: 'x', dryRun: true });
+
+    // Cắt: 120 - thiếu 2 - bỏ 4 (Dập, mọi công đoạn phụ) = 114. Dập: 20 - (lỗi 5 + thiếu 3) = 12 (phần bỏ đã nằm trong lỗi).
+    expect(r.specs[0].cutPassedQty).toBe(114);
+    expect(r.specs[0].stepPassedQty).toEqual({ DAP: 12 });
+  });
+
+  it('P1 AC38: phần bỏ ở công đoạn sau chỉ trừ công đoạn đứng trước khi có dòng định mức cần cả 2', async () => {
+    const both = [
+      {
+        bomRevisionId: 5n,
+        pieceId: 20n,
+        segmentSpecId: 30n,
+        qtyPerPiece: 5,
+        processSteps: ['DAP', 'UON'],
+      },
+    ];
+    const stepRows = [
+      {
+        segmentSpecId: 30n,
+        qty: 50,
+        stepBatch: { step: 'UON', stepBundle: { status: 'QC_PASSED' } },
+      },
+      {
+        segmentSpecId: 30n,
+        qty: 50,
+        stepBatch: { step: 'DAP', stepBundle: { status: 'QC_PASSED' } },
+      },
+    ];
+    const dapScrap = [
+      {
+        segmentSpecId: 30n,
+        failedQty: 4,
+        shortQty: 0,
+        scrapQty: 4,
+        qcReview: { stepBundle: { step: 'DAP' } },
+      },
+    ];
+    // Dòng cần cả Uốn lẫn Dập (Uốn đứng trước Dập): Uốn bị trừ 4 vì Dập bỏ 4.
+    setData({ pieceBoms: both, stepSegments: stepRows, stepQc: dapScrap });
+    const withBoth = await service.recomputeForPi(900n, { reason: 'x', dryRun: true });
+    expect(withBoth.specs[0].stepPassedQty).toEqual({ UON: 46, DAP: 46 });
+    expect(withBoth.specs[0].cutPassedQty).toBe(116);
+
+    // Uốn và Dập ở 2 dòng khác nhau: Uốn không phải làm bù, chỉ Cắt bị trừ.
+    setData({
+      pieceBoms: [
+        {
+          bomRevisionId: 5n,
+          pieceId: 20n,
+          segmentSpecId: 30n,
+          qtyPerPiece: 5,
+          processSteps: ['UON'],
+        },
+        {
+          bomRevisionId: 5n,
+          pieceId: 21n,
+          segmentSpecId: 30n,
+          qtyPerPiece: 5,
+          processSteps: ['DAP'],
+        },
+      ],
+      stepSegments: stepRows,
+      stepQc: dapScrap,
+    });
+    const separate = await service.recomputeForPi(900n, { reason: 'x', dryRun: true });
+    expect(separate.specs[0].stepPassedQty).toEqual({ UON: 50, DAP: 46 });
+    expect(separate.specs[0].cutPassedQty).toBe(116);
+  });
+
   it('recomputeAfterQc: công tắc tắt -> return ngay, không truy vấn gì', async () => {
     process.env.SEGMENT_STOCK_ENABLED = 'false';
     await service.recomputeAfterQc(900n, 'u1', 'QC_CUT_BUNDLE:1');

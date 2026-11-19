@@ -1,7 +1,8 @@
 import 'reflect-metadata';
-import { RequestMethod } from '@nestjs/common';
+import { ForbiddenException, RequestMethod } from '@nestjs/common';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { MfgRole, PermissionAction } from '../../generated/prisma/client';
+import { SEND_KCS_REMOVED_MESSAGE } from '../../common/constants/legacy-floor-report.constant';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { IS_PUBLIC_KEY } from '../../common/decorators/public.decorator';
@@ -27,8 +28,12 @@ import { FloorController } from './floor.controller';
 const QLSX = BUSINESS_ROLES.PRODUCTION_MANAGER;
 const FLOOR_MFG = [MfgRole.PHOI, MfgRole.HAN, MfgRole.SON];
 
+type PermissionModuleKey = (typeof PERMISSION_MODULES)[keyof typeof PERMISSION_MODULES];
+
 interface Rule {
   action: PermissionAction;
+  /** Module quyền; bỏ trống = FLOOR_REPORT (đa số route /floor/*). */
+  module?: PermissionModuleKey;
   /** Vai trò (tên Role) được gọi; bỏ trống = không giới hạn theo tên vai trò. */
   roles?: string[];
   /** mfgRole được gọi; bỏ trống = không giới hạn theo mfgRole. */
@@ -37,6 +42,12 @@ interface Rule {
 
 const { VIEW, CREATE, UPDATE, DELETE, APPROVE } = PermissionAction;
 const qlsx = (action: PermissionAction): Rule => ({ action, roles: [QLSX] });
+/** KCS chốt để chấm (P1): quyền chấm QC_REVIEW:CREATE + chỉ tài khoản KCS_STAFF. */
+const kcsClose: Rule = {
+  module: PERMISSION_MODULES.QC_REVIEW,
+  action: CREATE,
+  roles: [BUSINESS_ROLES.KCS_STAFF],
+};
 
 const MATRIX: Record<string, Rule> = {
   // công nhân: quét mã tại máy (chỉ tổ Phôi/Hàn/Sơn) - sắt chỉ Phôi nhận
@@ -82,11 +93,18 @@ const MATRIX: Record<string, Rule> = {
   'PATCH cut-allocation/:id': qlsx(UPDATE),
   'POST cut-allocation/:id/split': qlsx(CREATE),
   'DELETE cut-allocation/:id': qlsx(DELETE),
-  'GET review': qlsx(VIEW),
+  // KCS xem đợt đang mở để chấm (P1): QLSX + KCS_STAFF, không lọc xưởng với KCS
+  'GET review': { action: VIEW, roles: [QLSX, BUSINESS_ROLES.KCS_STAFF] },
   'POST review/cut-bundles/:id/send-kcs': qlsx(APPROVE),
   'POST review/production-batches/:id/send-kcs': qlsx(APPROVE),
   'POST review/step-groups/send-kcs': qlsx(APPROVE),
   'POST reports/:id/reverse': qlsx(UPDATE),
+  // KCS tự chốt để chấm (P1, 18/11/2026) - 5 loại đợt
+  'POST kcs/cut-bundles/:id/close': kcsClose,
+  'POST kcs/step-groups/close': kcsClose,
+  'POST kcs/production-batches/:id/close': kcsClose,
+  'POST kcs/piece-step-groups/close': kcsClose,
+  'POST kcs/material-yield-groups/close': kcsClose,
 };
 
 function routes(): Map<string, object> {
@@ -115,7 +133,7 @@ describe('FloorController - ma trận phân quyền', () => {
   it.each(Object.entries(MATRIX))('%s', (key, rule) => {
     const handler = ROUTES.get(key) as object;
     expect(Reflect.getMetadata(PERMISSIONS_KEY, handler)).toEqual([
-      { module: PERMISSION_MODULES.FLOOR_REPORT, action: rule.action },
+      { module: rule.module ?? PERMISSION_MODULES.FLOOR_REPORT, action: rule.action },
     ] satisfies RequiredPermission[]);
     expect(Reflect.getMetadata(ROLE_KEY, handler)).toEqual(rule.roles);
     expect(Reflect.getMetadata(MFG_ROLE_KEY, handler)).toEqual(rule.mfg);
@@ -152,6 +170,77 @@ describe('FloorController - ma trận phân quyền', () => {
         expect({ key, mfg: rule.mfg }).toEqual({ key, mfg: undefined });
       }
     }
+  });
+});
+
+describe('FloorController - KCS xem / chốt, QLSX bỏ gửi KCS (P1)', () => {
+  let review: Record<string, jest.Mock>;
+  let controller: FloorController;
+
+  beforeEach(() => {
+    review = {
+      listOpen: jest.fn().mockResolvedValue({ cutBundles: [] }),
+      closeCutBundle: jest.fn().mockResolvedValue({ id: '1' }),
+      closeStepGroup: jest.fn().mockResolvedValue({ id: '2' }),
+      closeProductionBatch: jest.fn().mockResolvedValue({ id: '3' }),
+      closePieceStepGroup: jest.fn().mockResolvedValue({ id: '4' }),
+      closeMaterialYieldGroup: jest.fn().mockResolvedValue({ id: '5' }),
+    };
+    controller = new FloorController(
+      {} as never,
+      {} as never,
+      review as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+  });
+
+  it('3 route send-kcs cũ: trả 403 đúng câu SEND_KCS_REMOVED_MESSAGE, không gọi service', () => {
+    for (const call of [
+      () => controller.sendCutBundle(),
+      () => controller.sendProductionBatch(),
+      () => controller.sendStepGroup(),
+    ]) {
+      expect(call).toThrow(ForbiddenException);
+      expect(call).toThrow(SEND_KCS_REMOVED_MESSAGE);
+    }
+    expect(Object.values(review).every((m) => m.mock.calls.length === 0)).toBe(true);
+  });
+
+  it('GET review: QLSX (kể cả vừa QLSX vừa KCS) lọc xưởng; KCS không có vai QLSX thì KHÔNG lọc xưởng', async () => {
+    await controller.listOpen({ stage: 'PHOI' }, 'u1', [QLSX]);
+    expect(review.listOpen).toHaveBeenLastCalledWith('PHOI', undefined, 'u1', true);
+    await controller.listOpen({ stage: 'HAN', productionInvoiceId: '9' }, 'u2', [
+      QLSX,
+      BUSINESS_ROLES.KCS_STAFF,
+    ]);
+    expect(review.listOpen).toHaveBeenLastCalledWith('HAN', '9', 'u2', true);
+    await controller.listOpen({ stage: 'SON' }, 'u3', [BUSINESS_ROLES.KCS_STAFF]);
+    expect(review.listOpen).toHaveBeenLastCalledWith('SON', undefined, 'u3', false);
+  });
+
+  it('5 route close chuyển đúng body + người chốt cho FloorReviewService', async () => {
+    await controller.closeCutBundle('11', 'k1');
+    expect(review.closeCutBundle).toHaveBeenCalledWith('11', 'k1');
+    const stepDto = {
+      productionInvoiceId: '1',
+      materialId: '2',
+      step: 'UON',
+      productionOrderId: null,
+      workerId: null,
+    } as never;
+    await controller.closeStepGroup(stepDto, 'k1');
+    expect(review.closeStepGroup).toHaveBeenCalledWith(stepDto, 'k1');
+    await controller.closeProductionBatch('12', 'k1');
+    expect(review.closeProductionBatch).toHaveBeenCalledWith('12', 'k1');
+    const pieceDto = { productionOrderId: '3', pieceId: '4', step: 'UON' } as never;
+    await controller.closePieceStepGroup(pieceDto, 'k1');
+    expect(review.closePieceStepGroup).toHaveBeenCalledWith(pieceDto, 'k1');
+    const yieldDto = { productionInvoiceId: '5', recipeId: '6', step: 'DAP' } as never;
+    await controller.closeMaterialYieldGroup(yieldDto, 'k1');
+    expect(review.closeMaterialYieldGroup).toHaveBeenCalledWith(yieldDto, 'k1');
   });
 });
 

@@ -24,7 +24,7 @@ import { RealtimeService } from '../../src/realtime/realtime.service';
 import { TEST_DATABASE_URL } from '../test-db.constants';
 
 /**
- * Tranh chấp đợt cắt (CutBundle) trên Postgres TEST THẬT: báo cắt / gửi KCS / hoàn tác chạy ĐÚNG
+ * Tranh chấp đợt cắt (CutBundle) trên Postgres TEST THẬT: báo cắt / gửi KCS chạy ĐÚNG
  * lúc QLSX gửi KCS hoặc hủy hết đợt.
  *
  * Cách dựng xen kẽ chắc chắn (không dựa may rủi): mở kết nối `pg` RIÊNG, BEGIN, chạy SQL thô mô
@@ -110,6 +110,9 @@ describe('Tranh chấp đợt cắt (integration, real Postgres)', () => {
         data: { mfgProductId, code: 'P1', groupNumber: 1, pieceNumber: 1, name: 'Mảnh test' },
       })
     ).id;
+    // P1 (18/11/2026): báo cắt bị chặn khi vượt SỐ CẦN (định mức) của (SKU, cỡ) - các kịch bản dưới báo / dựng vài chục đoạn
+    // trên cùng PI nên số cần phải đủ lớn: qtyPerPiece 1 x qtyPerUnit 1000 x SL 1 = 1000 đoạn mỗi cỡ mỗi SKU.
+    await prisma.bomPiece.create({ data: { bomRevisionId, pieceId, qtyPerUnit: 1000 } });
     spec1000 = (await prisma.segmentSpec.create({ data: { materialId, cutLengthMm: 1000 } })).id;
     spec1500 = (await prisma.segmentSpec.create({ data: { materialId, cutLengthMm: 1500 } })).id;
     for (const segmentSpecId of [spec1000, spec1500]) {
@@ -193,6 +196,7 @@ describe('Tranh chấp đợt cắt (integration, real Postgres)', () => {
     }
     if (has(invoiceId)) await prisma.productionInvoice.deleteMany({ where: { id: invoiceId } });
     if (has(bomRevisionId)) await prisma.pieceBom.deleteMany({ where: { bomRevisionId } });
+    if (has(bomRevisionId)) await prisma.bomPiece.deleteMany({ where: { bomRevisionId } });
     if (has(pieceId)) await prisma.piece.deleteMany({ where: { id: pieceId } });
     if (has(materialId)) await prisma.segmentSpec.deleteMany({ where: { materialId } });
     if (has(bomRevisionId)) await prisma.bomRevision.deleteMany({ where: { id: bomRevisionId } });
@@ -496,32 +500,6 @@ describe('Tranh chấp đợt cắt (integration, real Postgres)', () => {
     expect(after.completedAt?.toISOString()).toBe(t0.toISOString());
     const kcsCalls = notifications.emit.mock.calls.filter((c) => c[0] === 'CUT_BUNDLE_TO_KCS');
     expect(kcsCalls).toHaveLength(0);
-  }, 30000);
-
-  it('S5 hoàn tác đúng lúc gửi KCS: ConflictException, số đoạn của đợt không đổi', async () => {
-    const issueId = await makeIssue();
-    const b = await makeBundle(issueId, {
-      openedById: workerId,
-      segs: [{ specId: spec1000, qty: 10 }],
-      withReport: true,
-    });
-
-    const out = await raceWith([toKcsSql(b)], () =>
-      service.undoLastCutBatch(
-        b.toString(),
-        [{ segmentSpecId: spec1000.toString(), qty: 10 }],
-        workerId,
-      ),
-    );
-
-    expect(out.waited).toBe(true);
-    expect(out.ok).toBe(false);
-    expect(out.error).toBeInstanceOf(ConflictException);
-    expect(await segsOf(b)).toEqual({ [spec1000.toString()]: 10 });
-    const reversals = await prisma.floorReport.count({
-      where: { productionInvoiceId: invoiceId, cutBundleId: b, reversalOfId: { not: null } },
-    });
-    expect(reversals).toBe(0);
   }, 30000);
 
   it('S6 cùng người báo 2 lần cùng lúc khi chưa có đợt mở: đúng 1 đợt CUTTING chứa tổng, 2 dòng sổ', async () => {

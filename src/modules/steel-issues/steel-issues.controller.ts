@@ -250,15 +250,6 @@ export class SteelIssuesController {
     return this.steelIssuesService.assignStepBundleOrder(id, dto.productionOrderId, userId, true);
   }
 
-  /** Hoàn tác ĐÚNG lần "Lưu đợt cắt" gần nhất (2026-09-07) - xem doc comment service. */
-  // ĐÓNG 16/11/2026 (đợt 1, bỏ màn thống kê tổ): luôn từ chối, ném TRƯỚC khi gọi service. Service vẫn dùng cho đường QR.
-  @Post('cut-bundles/:id/undo-last-batch')
-  @RequirePermissions(UPDATE)
-  @RequireMfgRole(MfgRole.PHOI)
-  undoLastCutBatch() {
-    throw new ForbiddenException(LEGACY_CUT_REPORT_CLOSED_MESSAGE);
-  }
-
   // ─── Công đoạn phụ (Uốn/Dập/Đục lỗ/Tán/Tóp đầu/Xẻ) - scope PI + loại sắt (2026-09-07 lần 2) ──
   // KHÔNG còn gắn với 1 đợt cắt cụ thể (StepBundle) - Phôi làm song song, không tuần tự, xem
   // StepBundle doc comment (schema.prisma).

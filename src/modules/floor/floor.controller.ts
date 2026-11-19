@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Headers,
   Param,
@@ -13,6 +14,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { MfgRole, PermissionAction } from '../../generated/prisma/client';
+import { SEND_KCS_REMOVED_MESSAGE } from '../../common/constants/legacy-floor-report.constant';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -39,7 +41,12 @@ import {
 } from './dto/floor-queue.dto';
 import { CutMachineStatsQueryDto } from './dto/cut-machine-stats.dto';
 import { FloorStatsQueryDto, MyStatsQueryDto } from './dto/floor-stats.dto';
-import { FloorReviewQueryDto, ScanContextQueryDto, SendStepGroupDto } from './dto/floor-review.dto';
+import { FloorReviewQueryDto, ScanContextQueryDto } from './dto/floor-review.dto';
+import {
+  KcsCloseMaterialYieldGroupDto,
+  KcsClosePieceStepGroupDto,
+  KcsCloseStepGroupDto,
+} from './dto/kcs-close.dto';
 import {
   MyOutputQueryDto,
   ReverseFloorReportDto,
@@ -64,6 +71,9 @@ import { FloorStatsService } from './floor-stats.service';
 
 const perm = (action: PermissionAction) => ({ module: PERMISSION_MODULES.FLOOR_REPORT, action });
 const QLSX = BUSINESS_ROLES.PRODUCTION_MANAGER;
+const KCS = BUSINESS_ROLES.KCS_STAFF;
+/** Route KCS chốt để chấm (P1): quyền QC_REVIEW:CREATE (cùng quyền chấm), không qua perm() vì perm() cố định FLOOR_REPORT. */
+const kcsClose = { module: PERMISSION_MODULES.QC_REVIEW, action: PermissionAction.CREATE };
 
 function parseStage(raw: string): FloorWorkerStage {
   if (!(FLOOR_WORKER_STAGES as readonly string[]).includes(raw)) {
@@ -76,8 +86,10 @@ function parseStage(raw: string): FloorWorkerStage {
  * QR tại máy (2026-10-13, changelog-2026-10-08-ke-hoach-tem-qr-bo-sat-phoi.md mục 22).
  * - `floor/scan/*`, `floor/my-output`: công nhân (FLOOR_WORKER hoặc tài khoản thống kê của tổ) - FLOOR_REPORT
  *   VIEW/CREATE.
+ * - `floor/review`: QLSX xem đợt đang mở + KCS (KCS_STAFF) xem để chấm (P1, 18/11/2026: KCS tự chốt, không lọc xưởng).
+ * - `floor/kcs/.../close`: KCS chốt đợt công nhân vừa báo để chấm - QC_REVIEW:CREATE + @RequireRole(KCS_STAFF).
  * - còn lại: QLSX - thêm @RequireRole(PRODUCTION_MANAGER) như floor-start, để BOSS (VIEW+APPROVE mọi module)
- *   không tự gửi KCS / xếp hàng đợi được.
+ *   không tự xếp hàng đợi / hủy lần báo được. 3 route `send-kcs` cũ của QLSX giữ nguyên decorator, trả 403 (KCS tự chấm).
  */
 @ApiTags('Floor (QR tại máy)')
 @ApiBearerAuth()
@@ -429,34 +441,82 @@ export class FloorController {
     return this.cutAllocation.remove(userId, id);
   }
 
-  // ─── QLSX: kiểm + gửi KCS + đảo lần báo ─────────────────────────────────────
+  // ─── QLSX + KCS: xem đợt đang mở; KCS chốt để chấm; QLSX đảo lần báo ───────────
 
+  /**
+   * QLSX lọc theo xưởng như cũ. Tài khoản KCS_STAFF không có vai QLSX thì KHÔNG lọc xưởng (kể cả khi gắn xưởng: getScope
+   * áp cho mọi tài khoản có workshopId) - KCS chấm mọi xưởng.
+   */
   @Get('review')
   @RequirePermissions(perm(PermissionAction.VIEW))
-  @RequireRole(QLSX)
-  listOpen(@Query() query: FloorReviewQueryDto, @CurrentUser('id') userId: string) {
-    return this.review.listOpen(query.stage, query.productionInvoiceId, userId);
+  @RequireRole(QLSX, KCS)
+  listOpen(
+    @Query() query: FloorReviewQueryDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('roles') roles: string[],
+  ) {
+    const limitToWorkshop = (roles ?? []).includes(QLSX);
+    return this.review.listOpen(query.stage, query.productionInvoiceId, userId, limitToWorkshop);
   }
 
+  /** 3 route gửi KCS cũ: KCS tự chấm nên không còn bước gửi - giữ route để bản FE cũ nhận câu rõ ràng thay vì 404. */
   @Post('review/cut-bundles/:id/send-kcs')
   @RequirePermissions(perm(PermissionAction.APPROVE))
   @RequireRole(QLSX)
-  sendCutBundle(@Param('id') id: string, @CurrentUser('id') userId: string) {
-    return this.review.sendCutBundle(id, userId);
+  sendCutBundle(): never {
+    throw new ForbiddenException(SEND_KCS_REMOVED_MESSAGE);
   }
 
   @Post('review/production-batches/:id/send-kcs')
   @RequirePermissions(perm(PermissionAction.APPROVE))
   @RequireRole(QLSX)
-  sendProductionBatch(@Param('id') id: string, @CurrentUser('id') userId: string) {
-    return this.review.sendProductionBatch(id, userId);
+  sendProductionBatch(): never {
+    throw new ForbiddenException(SEND_KCS_REMOVED_MESSAGE);
   }
 
   @Post('review/step-groups/send-kcs')
   @RequirePermissions(perm(PermissionAction.APPROVE))
   @RequireRole(QLSX)
-  sendStepGroup(@Body() dto: SendStepGroupDto, @CurrentUser('id') userId: string) {
-    return this.review.sendStepGroup(dto, userId);
+  sendStepGroup(): never {
+    throw new ForbiddenException(SEND_KCS_REMOVED_MESSAGE);
+  }
+
+  @Post('kcs/cut-bundles/:id/close')
+  @RequirePermissions(kcsClose)
+  @RequireRole(KCS)
+  closeCutBundle(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.review.closeCutBundle(id, userId);
+  }
+
+  @Post('kcs/step-groups/close')
+  @RequirePermissions(kcsClose)
+  @RequireRole(KCS)
+  closeStepGroup(@Body() dto: KcsCloseStepGroupDto, @CurrentUser('id') userId: string) {
+    return this.review.closeStepGroup(dto, userId);
+  }
+
+  @Post('kcs/production-batches/:id/close')
+  @RequirePermissions(kcsClose)
+  @RequireRole(KCS)
+  closeProductionBatch(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.review.closeProductionBatch(id, userId);
+  }
+
+  @Post('kcs/piece-step-groups/close')
+  @RequirePermissions(kcsClose)
+  @RequireRole(KCS)
+  closePieceStepGroup(@Body() dto: KcsClosePieceStepGroupDto, @CurrentUser('id') userId: string) {
+    return this.review.closePieceStepGroup(dto, userId);
+  }
+
+  @Post('kcs/material-yield-groups/close')
+  @RequirePermissions(kcsClose)
+  @RequireRole(KCS)
+  closeMaterialYieldGroup(
+    @Body() dto: KcsCloseMaterialYieldGroupDto,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.review.closeMaterialYieldGroup(dto, userId);
   }
 
   @Post('reports/:id/reverse')

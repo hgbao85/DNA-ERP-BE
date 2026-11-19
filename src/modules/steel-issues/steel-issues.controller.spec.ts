@@ -15,7 +15,6 @@ describe('SteelIssuesController - route báo của màn cũ đã đóng', () => 
       receive: jest.fn(),
       recordCutBatch: jest.fn(),
       finishCutBundle: jest.fn(),
-      undoLastCutBatch: jest.fn(),
       recordStepBatch: jest.fn(),
       submitStepBundle: jest.fn(),
       assignCutBundleOrder: jest.fn().mockResolvedValue('ok'),
@@ -29,7 +28,6 @@ describe('SteelIssuesController - route báo của màn cũ đã đóng', () => 
     ['receive', () => controller.receive(), LEGACY_STEEL_RECEIVE_CLOSED_MESSAGE],
     ['recordCutBatch', () => controller.recordCutBatch(), LEGACY_CUT_REPORT_CLOSED_MESSAGE],
     ['finishCutBundle', () => controller.finishCutBundle(), LEGACY_CUT_REPORT_CLOSED_MESSAGE],
-    ['undoLastCutBatch', () => controller.undoLastCutBatch(), LEGACY_CUT_REPORT_CLOSED_MESSAGE],
     ['recordStepBatch', () => controller.recordStepBatch(), LEGACY_CUT_REPORT_CLOSED_MESSAGE],
     ['submitStepBundle', () => controller.submitStepBundle(), LEGACY_CUT_REPORT_CLOSED_MESSAGE],
   ];
@@ -38,6 +36,24 @@ describe('SteelIssuesController - route báo của màn cũ đã đóng', () => 
     expect(call).toThrow(ForbiddenException);
     expect(call).toThrow(msg);
     for (const fn of Object.values(service)) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('route POST cut-bundles/:id/undo-last-batch đã bị xoá (404): controller không còn hàm, service không còn undoLastCutBatch (P1, S14)', () => {
+    expect((controller as unknown as Record<string, unknown>).undoLastCutBatch).toBeUndefined();
+    expect(
+      (SteelIssuesService.prototype as unknown as Record<string, unknown>).undoLastCutBatch,
+    ).toBeUndefined();
+    const routes = Reflect.ownKeys(SteelIssuesController.prototype).filter(
+      (k) => k !== 'constructor',
+    );
+    const paths = routes.map(
+      (k) =>
+        Reflect.getMetadata(
+          'path',
+          (SteelIssuesController.prototype as never)[k] as object,
+        ) as unknown,
+    );
+    expect(paths).not.toContain('cut-bundles/:id/undo-last-batch');
   });
 
   it('route gán SKU vẫn gọi service', async () => {

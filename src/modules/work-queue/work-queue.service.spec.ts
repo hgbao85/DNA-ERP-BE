@@ -1,6 +1,24 @@
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
+import { listKcsPendingItems, type KcsPendingItem } from '../floor/kcs-pending.util';
 import { WorkQueueService } from './work-queue.service';
+
+// Số đỏ KCS đọc từ kcs-pending.util (P1): giả lập danh sách đợt, giữ nguyên hàm đếm thật.
+jest.mock('../floor/kcs-pending.util', () => ({
+  ...jest.requireActual<Record<string, unknown>>('../floor/kcs-pending.util'),
+  listKcsPendingItems: jest.fn(),
+}));
+const listKcsPendingMock = listKcsPendingItems as jest.Mock;
+
+const kcsItem = (over: Partial<KcsPendingItem>): KcsPendingItem => ({
+  stage: 'PHOI',
+  productionInvoiceId: 1n,
+  kind: 'CUT',
+  state: 'OPEN',
+  waitingSince: new Date('2026-11-18T01:00:00Z'),
+  blockedReason: null,
+  ...over,
+});
 
 /** WorkshopScopeService thật, chỉ giả lập bảng users: 'qlsx-pa' = Phước An (id 2), 'qlsx-phu' = Phú An (id 1, sơn cho Phước An). */
 const makeScope = () => {
@@ -43,6 +61,7 @@ describe('WorkQueueService', () => {
   let paintReminder: { countPendingOrders: jest.Mock; isPaintLegWeldWarehouse: jest.Mock };
 
   beforeEach(() => {
+    listKcsPendingMock.mockReset().mockResolvedValue([]);
     prisma = {
       planForm: { count: jest.fn().mockResolvedValue(0) },
       productionInvoiceItem: {
@@ -249,26 +268,67 @@ describe('WorkQueueService', () => {
     expect(prisma.steelIssue.count).not.toHaveBeenCalled();
   });
 
-  it('KCS (KCS_STAFF) - gộp CutBundle+StepBundle+PieceStepBundle+MaterialYieldStepBundle+ProductionBatch(PHOI) vào kcsPhoi, tách riêng kcsHan/kcsSon theo stage', async () => {
-    prisma.cutBundle.count.mockResolvedValue(1);
-    prisma.stepBundle.count.mockResolvedValue(1);
-    prisma.pieceStepBundle.count.mockResolvedValue(1);
-    prisma.materialYieldStepBundle.count.mockResolvedValue(3);
-    prisma.productionBatch.count.mockImplementation(({ where }: { where: { stage: string } }) => {
-      if (where.stage === 'PHOI') return Promise.resolve(2);
-      if (where.stage === 'HAN') return Promise.resolve(5);
-      if (where.stage === 'SON') return Promise.resolve(6);
-      throw new Error(`unexpected stage ${where.stage}`);
-    });
+  it('KCS (KCS_STAFF) - số đỏ = đợt đang mở + đã chốt của 5 loại theo tổ (AC10)', async () => {
+    listKcsPendingMock.mockResolvedValue([
+      kcsItem({ kind: 'CUT', state: 'OPEN' }),
+      kcsItem({ kind: 'CUT', state: 'AWAITING_QC' }),
+      kcsItem({ kind: 'STEP', state: 'OPEN' }),
+      kcsItem({ kind: 'STEP', state: 'AWAITING_QC' }),
+      kcsItem({ kind: 'PIECE_BATCH', state: 'OPEN' }),
+      kcsItem({ kind: 'PIECE_STEP', state: 'OPEN' }),
+      kcsItem({ kind: 'PIECE_STEP', state: 'AWAITING_QC' }),
+      kcsItem({ kind: 'MATERIAL_YIELD', state: 'OPEN' }),
+      kcsItem({ kind: 'MATERIAL_YIELD', state: 'AWAITING_QC' }),
+      kcsItem({ stage: 'HAN', kind: 'PIECE_BATCH', state: 'OPEN' }),
+      kcsItem({ stage: 'HAN', kind: 'PIECE_BATCH', state: 'AWAITING_QC' }),
+      kcsItem({ stage: 'SON', kind: 'PIECE_BATCH', state: 'AWAITING_QC' }),
+    ]);
 
     const result = await service.getWorkQueue({ roles: ['KCS_STAFF'], warehouseScope: null });
 
-    expect(result.counts.kcsPhoi).toBe(8); // 1+1+1+3+2
-    expect(prisma.materialYieldStepBundle.count).toHaveBeenCalledWith({
-      where: { status: 'AWAITING_QC' },
+    expect(result.counts.kcsPhoi).toBe(9);
+    expect(result.counts.kcsHan).toBe(2);
+    expect(result.counts.kcsSon).toBe(1);
+    // Không còn đếm thẳng các bảng AWAITING_QC.
+    expect(prisma.cutBundle.count).not.toHaveBeenCalled();
+    expect(prisma.productionBatch.count).not.toHaveBeenCalled();
+  });
+
+  it('KCS - dòng xám (lệnh dừng / chưa gắn SKU) không tính vào số đỏ (AC11)', async () => {
+    listKcsPendingMock.mockResolvedValue([
+      kcsItem({ kind: 'CUT', state: 'OPEN' }),
+      kcsItem({ kind: 'CUT', state: 'AWAITING_QC', blockedReason: 'LENH_DUNG' }),
+      kcsItem({ kind: 'STEP', state: 'OPEN', blockedReason: 'CHUA_GAN_SKU' }),
+      kcsItem({ stage: 'HAN', kind: 'PIECE_BATCH', blockedReason: 'LENH_DUNG' }),
+    ]);
+
+    const result = await service.getWorkQueue({ roles: ['KCS_STAFF'], warehouseScope: null });
+
+    expect(result.counts.kcsPhoi).toBe(1);
+    expect(result.counts.kcsHan).toBe(0);
+    expect(result.counts.kcsSon).toBe(0);
+  });
+
+  it('KCS - không lọc xưởng: đọc cả PI của mọi xưởng, kể cả khi KCS có gắn xưởng (AC12)', async () => {
+    listKcsPendingMock.mockResolvedValue([
+      kcsItem({ productionInvoiceId: 1n }),
+      kcsItem({ productionInvoiceId: 2n }),
+    ]);
+
+    const result = await service.getWorkQueue({
+      id: 'qlsx-pa',
+      roles: ['KCS_STAFF'],
+      warehouseScope: null,
     });
-    expect(result.counts.kcsHan).toBe(5);
-    expect(result.counts.kcsSon).toBe(6);
+
+    expect(result.counts.kcsPhoi).toBe(2);
+    // Chỉ truyền db, không truyền phạm vi xưởng.
+    expect(listKcsPendingMock).toHaveBeenCalledWith(prisma);
+  });
+
+  it('user không có vai KCS - không đọc kcs-pending', async () => {
+    await service.getWorkQueue({ roles: ['SALES_STAFF'], warehouseScope: null });
+    expect(listKcsPendingMock).not.toHaveBeenCalled();
   });
 
   it('Sales (SALES_STAFF) - uỷ quyền hẳn cho SalesOrdersService.countReadyToShip(), không tự lọc SalesOrderItem.status', async () => {

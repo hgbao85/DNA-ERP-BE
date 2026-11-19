@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Logger } from '@nestjs/common';
 import { PieceStepBundleStatus, StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { ClsService } from 'nestjs-cls';
@@ -19,8 +19,19 @@ describe('MaterialYieldRecipeProductionService', () => {
     $transaction: jest.Mock;
   };
   let tx: {
-    materialYieldStepBatch: { create: jest.Mock; findMany: jest.Mock; updateMany: jest.Mock };
+    materialYieldStepBatch: {
+      create: jest.Mock;
+      findMany: jest.Mock;
+      updateMany: jest.Mock;
+      groupBy: jest.Mock;
+    };
     materialYieldStepBundle: { create: jest.Mock };
+    materialYieldRecipe: { findMany: jest.Mock; findUnique: jest.Mock };
+    productionOrder: { findMany: jest.Mock };
+    pieceMaterialItem: { findMany: jest.Mock };
+    bomPiece: { findMany: jest.Mock };
+    qcReview: { findMany: jest.Mock };
+    productionInvoice: { findUnique: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
     $executeRaw: jest.Mock;
     $queryRaw: jest.Mock;
@@ -51,8 +62,45 @@ describe('MaterialYieldRecipeProductionService', () => {
 
   beforeEach(() => {
     tx = {
-      materialYieldStepBatch: { create: jest.fn(), findMany: jest.fn(), updateMany: jest.fn() },
+      materialYieldStepBatch: {
+        create: jest.fn(),
+        findMany: jest.fn(),
+        // Mặc định gom được đúng số dòng đã đọc (2 dòng ở các test gom); test race tự override.
+        updateMany: jest.fn().mockResolvedValue({ count: 2 }),
+        groupBy: jest.fn().mockResolvedValue([]),
+      },
       materialYieldStepBundle: { create: jest.fn() },
+      // Số cần của PI 5: 1 SKU 240 bộ × 1 mảnh/bộ × 2 chân/mảnh = 480 (cùng công thức getMaterialYieldPlanBatch).
+      materialYieldRecipe: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 9n, outputMaterialId: 139n, processSteps: ['CAT', 'UON'] }]),
+        findUnique: jest.fn().mockResolvedValue({ outputMaterial: { code: 'CHAN-NHOM-01' } }),
+      },
+      productionOrder: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            bomRevisionId: 5n,
+            quantity: 240,
+            productionInvoiceItem: { productionInvoiceId: 5n },
+          },
+        ]),
+      },
+      pieceMaterialItem: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            bomRevisionId: 5n,
+            pieceId: 40n,
+            materialId: 139n,
+            qtyPerPiece: { toNumber: () => 2 },
+          },
+        ]),
+      },
+      bomPiece: {
+        findMany: jest.fn().mockResolvedValue([{ bomRevisionId: 5n, pieceId: 40n, qtyPerUnit: 1 }]),
+      },
+      qcReview: { findMany: jest.fn().mockResolvedValue([]) },
+      productionInvoice: { findUnique: jest.fn().mockResolvedValue({ code: 'PI-001' }) },
       warehouse: { findUniqueOrThrow: jest.fn() },
       $executeRaw: jest.fn().mockResolvedValue(undefined),
       $queryRaw: jest.fn().mockResolvedValue([{ floorStage: 'ACTIVE' }]),
@@ -113,6 +161,96 @@ describe('MaterialYieldRecipeProductionService', () => {
       );
     });
 
+    it('P1 [1]: transaction báo có maxWait 10s + timeout 20s (không dùng mặc định 5s)', async () => {
+      tx.materialYieldStepBatch.create.mockResolvedValue({
+        id: 1n,
+        productionInvoiceId: 5n,
+        recipeId: 9n,
+        step: 'CAT',
+        qty: 5,
+        reportedAt: new Date(),
+        reportedById: 'u1',
+      });
+
+      await service.recordStepBatch('5', dto, 'u1', 'PHOI');
+
+      expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+        maxWait: 10_000,
+        timeout: 20_000,
+      });
+    });
+
+    describe('báo vượt số cần được phép (P1, quyết định 19/11, Câu 6)', () => {
+      const created = {
+        id: 1n,
+        productionInvoiceId: 5n,
+        recipeId: 9n,
+        step: 'CAT',
+        qty: 5,
+        reportedAt: new Date(),
+        reportedById: 'u1',
+      };
+      const stepSums = (qty: number) => [
+        { productionInvoiceId: 5n, recipeId: 9n, step: 'CAT', _sum: { qty } },
+      ];
+
+      it('cần 480, đã tính 475: báo 6 vẫn tạo được + logger.log "Báo vượt chân nhôm"; báo 5 không log; khoá trước khi đọc', async () => {
+        tx.materialYieldStepBatch.groupBy.mockResolvedValue(stepSums(480));
+        tx.qcReview.findMany.mockResolvedValue([
+          {
+            failedQty: 3,
+            shortQty: 2,
+            materialYieldStepBundle: { productionInvoiceId: 5n, recipeId: 9n, step: 'CAT' },
+          },
+        ]);
+        tx.materialYieldStepBatch.create.mockResolvedValue(created);
+        const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+
+        await expect(
+          service.recordStepBatch('5', { ...dto, qty: 6 }, 'u1', 'PHOI'),
+        ).resolves.toBeDefined();
+        expect(tx.materialYieldStepBatch.create).toHaveBeenCalledTimes(1);
+        expect(log).toHaveBeenCalledWith(
+          expect.stringContaining(
+            'Báo vượt chân nhôm: PI 5, công thức 9, CAT, cần 480, đã tính 475, nhập 6 (cho phép, quyết định 19/11)',
+          ),
+        );
+
+        log.mockClear();
+        await expect(
+          service.recordStepBatch('5', { ...dto, qty: 5 }, 'u1', 'PHOI'),
+        ).resolves.toBeDefined();
+        expect(log).not.toHaveBeenCalledWith(expect.stringContaining('Báo vượt chân nhôm'));
+        expect(tx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+          tx.materialYieldStepBatch.groupBy.mock.invocationCallOrder[0],
+        );
+        log.mockRestore();
+      });
+
+      it('đã đủ -> báo thêm 1 vẫn tạo được + có log', async () => {
+        tx.materialYieldStepBatch.groupBy.mockResolvedValue(stepSums(480));
+        tx.materialYieldStepBatch.create.mockResolvedValue(created);
+        const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+
+        await expect(
+          service.recordStepBatch('5', { ...dto, qty: 1 }, 'u1', 'PHOI'),
+        ).resolves.toBeDefined();
+        expect(log).toHaveBeenCalledWith(expect.stringContaining('Báo vượt chân nhôm'));
+        log.mockRestore();
+      });
+
+      it('số cần 0 (PI không có dòng định mức chân nhôm) vẫn tạo được + có log', async () => {
+        tx.pieceMaterialItem.findMany.mockResolvedValue([]);
+        tx.materialYieldStepBatch.create.mockResolvedValue(created);
+        const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+
+        await expect(service.recordStepBatch('5', dto, 'u1', 'PHOI')).resolves.toBeDefined();
+        expect(tx.materialYieldStepBatch.create).toHaveBeenCalledTimes(1);
+        expect(log).toHaveBeenCalledWith(expect.stringContaining('cần 0'));
+        log.mockRestore();
+      });
+    });
+
     it('từ chối khi chưa nhận nguyên liệu (sumReceived <= 0)', async () => {
       materialYieldRecipeIssuesService.sumReceived.mockResolvedValue(0);
       await expect(service.recordStepBatch('5', dto, 'u1', 'PHOI')).rejects.toThrow(
@@ -149,7 +287,25 @@ describe('MaterialYieldRecipeProductionService', () => {
   });
 
   describe('submitStep', () => {
+    beforeEach(() => {
+      // Mặc định các test dưới gom 1 dòng (test 'gộp' tự đặt 2).
+      tx.materialYieldStepBatch.updateMany.mockResolvedValue({ count: 1 });
+    });
+
+    it('P1 [1]: transaction gom có maxWait 10s + timeout 20s (không dùng mặc định 5s)', async () => {
+      tx.materialYieldStepBatch.findMany.mockResolvedValue([{ id: 1n, qty: 3 }]);
+      tx.materialYieldStepBundle.create.mockResolvedValue(bundleRow);
+
+      await service.submitStep('5', { recipeId: '9', step: 'UON' }, 'u1', 'PHOI');
+
+      expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+        maxWait: 10_000,
+        timeout: 20_000,
+      });
+    });
+
     it('gộp các batch chưa gửi thành 1 bundle', async () => {
+      tx.materialYieldStepBatch.updateMany.mockResolvedValue({ count: 2 });
       tx.materialYieldStepBatch.findMany.mockResolvedValue([
         { id: 1n, qty: 3 },
         { id: 2n, qty: 4 },
@@ -162,8 +318,9 @@ describe('MaterialYieldRecipeProductionService', () => {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
         expect.objectContaining({ data: expect.objectContaining({ qty: 7 }) }),
       );
+      // P1: updateMany thêm điều kiện "chưa gom" và so số dòng.
       expect(tx.materialYieldStepBatch.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: [1n, 2n] } },
+        where: { id: { in: [1n, 2n] }, materialYieldStepBundleId: null },
         data: { materialYieldStepBundleId: 77n },
       });
       expect(result.outputMaterialCode).toBe('CHAN-NHOM-01');
@@ -205,11 +362,75 @@ describe('MaterialYieldRecipeProductionService', () => {
       ).resolves.toBeDefined();
     });
 
-    it('từ chối khi không có batch nào chưa gửi', async () => {
+    it('P1: không còn lần báo nào chưa chấm (KCS vừa chốt) - 400 câu CHUNG có mã vật tư + công đoạn, không phải "chưa có gì mới"', async () => {
       tx.materialYieldStepBatch.findMany.mockResolvedValue([]);
+
+      const err = await service
+        .submitStep('5', { recipeId: '9', step: 'UON' }, 'u1', 'PHOI')
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect((err as Error).message).toBe(
+        'CHAN-NHOM-01 công đoạn Uốn: không còn lần báo nào chưa chấm (có thể vừa được chốt) - tải lại trang.',
+      );
+      expect(tx.materialYieldStepBundle.create).not.toHaveBeenCalled();
+    });
+
+    it('P1: updateMany gom được ít dòng hơn đã đọc (vừa bị bên khác gom) - 400 câu chung, rollback', async () => {
+      tx.materialYieldStepBatch.findMany.mockResolvedValue([
+        { id: 1n, qty: 3 },
+        { id: 2n, qty: 4 },
+      ]);
+      tx.materialYieldStepBundle.create.mockResolvedValue(bundleRow);
+      tx.materialYieldStepBatch.updateMany.mockResolvedValue({ count: 1 });
+
       await expect(
         service.submitStep('5', { recipeId: '9', step: 'UON' }, 'u1', 'PHOI'),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toThrow('không còn lần báo nào chưa chấm (có thể vừa được chốt) - tải lại trang.');
+      expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    });
+
+    it('P1: opts { notifyKcs: false, gateLabel } (KCS tự chốt) - KHÔNG phát MATERIAL_YIELD_STEP_BUNDLE_TO_KCS, vai PHOI qua phép kiểm vai', async () => {
+      tx.materialYieldStepBatch.findMany.mockResolvedValue([{ id: 1n, qty: 3 }]);
+      tx.materialYieldStepBundle.create.mockResolvedValue(bundleRow);
+
+      const result = await service.submitStep(
+        '5',
+        { recipeId: '9', step: 'UON' },
+        'kcs-1',
+        'PHOI',
+        { notifyKcs: false, gateLabel: 'chốt để chấm' },
+      );
+
+      expect(result.id).toBe('77');
+      expect(notifications.emit).not.toHaveBeenCalled();
+    });
+
+    it('P1: opts.gateLabel cho cổng lệnh dừng (ngoài VÀ trong khoá); mặc định "gửi KCS công đoạn"', async () => {
+      prisma.productionOrder.findFirst.mockResolvedValue(null);
+      await expect(
+        service.submitStep('5', { recipeId: '9', step: 'UON' }, 'kcs-1', 'PHOI', {
+          gateLabel: 'chốt để chấm',
+        }),
+      ).rejects.toThrow(ConflictException);
+      await expect(
+        service.submitStep('5', { recipeId: '9', step: 'UON' }, 'kcs-1', 'PHOI', {
+          gateLabel: 'chốt để chấm',
+        }),
+      ).rejects.toThrow('chưa/không thể chốt để chấm');
+      await expect(
+        service.submitStep('5', { recipeId: '9', step: 'UON' }, 'u1', 'PHOI'),
+      ).rejects.toThrow('chưa/không thể gửi KCS công đoạn');
+
+      // Race: pre-check ACTIVE, FOR UPDATE trong khoá thấy PAUSED.
+      prisma.productionOrder.findFirst.mockResolvedValue({ id: 1n });
+      tx.$queryRaw.mockResolvedValue([{ floorStage: 'PAUSED' }]);
+      await expect(
+        service.submitStep('5', { recipeId: '9', step: 'UON' }, 'kcs-1', 'PHOI', {
+          gateLabel: 'chốt để chấm',
+        }),
+      ).rejects.toThrow('chưa/không thể chốt để chấm');
+      expect(tx.materialYieldStepBundle.create).not.toHaveBeenCalled();
     });
   });
 
@@ -261,6 +482,21 @@ describe('MaterialYieldRecipeProductionService', () => {
   });
 
   describe('finalizeRecipeOutputIfLastStepComplete', () => {
+    it('P1: tham số thứ 3 = lỗi + thiếu: bundle 50, lỗi 1 + thiếu 3 -> bút toán vào kho 46 (không phải 49)', async () => {
+      tx.warehouse.findUniqueOrThrow.mockResolvedValue({ id: 1n, code: 'PRODUCTION' });
+      await service.finalizeRecipeOutputIfLastStepComplete(
+        tx as unknown as PrismaTx,
+        { ...bundleRow, qty: 50 } as never,
+        1 + 3,
+        'kcs1',
+      );
+
+      expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ qty: 46 }),
+        tx,
+      );
+    });
+
     it('credit StockLedger khi step vừa duyệt là công đoạn CUỐI và có qty đạt', async () => {
       tx.warehouse.findUniqueOrThrow.mockResolvedValue({ id: 1n, code: 'PRODUCTION' });
       await service.finalizeRecipeOutputIfLastStepComplete(

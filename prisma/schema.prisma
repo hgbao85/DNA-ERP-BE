@@ -3939,7 +3939,8 @@ model FloorQueueEntry {
 /// failedQty là TỔNG dẫn xuất từ `segments[]` cho nhánh Phôi (từ 2026-08-24, xem QcReviewSegment) -
 /// giữ lại để KHÔNG đổi shape cho nhánh Hàn/Sơn (vẫn duyệt cả lô, không bóc theo cỡ đoạn -
 /// production_batch chưa có "cỡ" gì để bóc). failedQty BẤT BIẾN mọi nhánh (số KCS chấm lần đầu,
-/// không sửa lại sau) - CHỐT CUỐI (productionBatchId, 2026-09-08 lần 2, xem changelog "Bù đủ dồn
+/// không sửa lại sau) và CHỈ LÀ LỖI (P1, 18/11/2026: số thiếu ghi riêng ở shortQty, không bao giờ cộng vào
+/// failedQty vì kế hoạch mảnh của N1 dựa vào cột này) - CHỐT CUỐI (productionBatchId, 2026-09-08 lần 2, xem changelog "Bù đủ dồn
 /// về bảng tổng") đã bỏ hẳn "Sửa được/Phế" (scrapQty) + cơ chế "Bù đủ -> KCS duyệt lại"
 /// (resolvedQty/phoiReportedAt/phoiReportedQty) - đồng bộ với mọi nhánh khác đã quy về cùng 1
 /// pattern: "Lỗi" là số lịch sử cộng dồn, Bù đủ = 1 ProductionBatch HOÀN TOÀN MỚI gửi duyệt lại
@@ -3975,6 +3976,10 @@ model QcReview {
   /// pat vẫn là 1 Piece thật).
   materialYieldStepBundleId BigInt?
   failedQty                 Int
+  /// P1 (18/11/2026): số KCS ghi THIẾU so với số công nhân báo (đếm thiếu, đã trừ, không tính lỗi, không cần làm bù).
+  /// Khác failedQty (lỗi). CHECK DB qc_reviews_short_qty_chk (shortQty >= 0). Nhánh Cắt / công đoạn phụ ghi theo cỡ ở
+  /// QcReviewSegment.shortQty; cột này là tổng của cả đợt (nhánh theo cỡ) hoặc số của cả lô (mảnh / pat / chân nhôm).
+  shortQty                  Int      @default(0)
   defectReasonId            BigInt?
   reason                    String?
   photoUrl                  String?
@@ -4008,7 +4013,8 @@ model QcReview {
 /// tách ra vô nghĩa). "Không đạt" nghĩa là đoạn hỏng thật, Phôi phải BÙ bằng sắt tự kiếm ngoài
 /// thực tế - KHÔNG đụng cây sắt kho đã cấp, KHÔNG qua recordCutBatch (khác vòng 1 đã gỡ).
 ///
-/// failedQty BẤT BIẾN - là số KCS chấm lần đầu, không bao giờ sửa. Bỏ hẳn resolvedQty/
+/// failedQty BẤT BIẾN - là số KCS chấm lần đầu, không bao giờ sửa (P1, 18/11/2026: vẫn CHỈ là lỗi; thiếu / bỏ ghi
+/// riêng ở shortQty / scrapQty). Bỏ hẳn resolvedQty/
 /// phoiReportedAt/phoiReportedQty (2026-09-07 lần 2, xem changelog "Bù đủ dồn về bảng tổng") -
 /// KHÔNG còn cơ chế "Phôi tự báo đã sửa, KCS duyệt lại ĐÚNG DÒNG NÀY" nữa. "Lỗi" hiển thị ở bảng
 /// tổng (getPhoiProgress/getStepProgress) giờ là Σ failedQty CỘNG DỒN LỊCH SỬ (không tự giảm) -
@@ -4020,6 +4026,11 @@ model QcReviewSegment {
   segmentSpecId BigInt
   /// Số đoạn KCS chấm KHÔNG ĐẠT cho cỡ này. BẤT BIẾN - không sửa sau khi tạo.
   failedQty     Int
+  /// P1 (18/11/2026): số đoạn KCS ghi THIẾU so với số báo của cỡ này (không tính lỗi, không làm bù).
+  shortQty      Int    @default(0)
+  /// P1 (18/11/2026): trong failedQty, số đoạn phải BỎ và cắt lại (chỉ công đoạn phụ; Cắt luôn 0). Phần lỗi còn lại = làm lại.
+  /// CHECK DB qc_review_segments_short_scrap_chk (shortQty >= 0, scrapQty >= 0, scrapQty <= failedQty).
+  scrapQty      Int    @default(0)
 
   qcReview    QcReview    @relation(fields: [qcReviewId], references: [id])
   segmentSpec SegmentSpec @relation(fields: [segmentSpecId], references: [id])

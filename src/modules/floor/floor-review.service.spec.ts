@@ -1,13 +1,8 @@
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  NotFoundException,
-} from '@nestjs/common';
-import { MFG_FLOOR_WAREHOUSE_SCOPE } from '../../common/constants/role-permissions.constant';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { PrismaServiceType } from '../../prisma/prisma.service';
+import { MaterialYieldRecipeProductionService } from '../material-yield-recipes/material-yield-recipe-production.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { FloorReviewService } from './floor-review.service';
@@ -86,6 +81,7 @@ describe('FloorReviewService.reverse', () => {
           .fn()
           .mockResolvedValue({ workshopId: null, workshopName: null, visibleWorkshopIds: null }),
       } as unknown as WorkshopScopeService,
+      {} as MaterialYieldRecipeProductionService,
     );
   });
 
@@ -129,9 +125,45 @@ describe('FloorReviewService.reverse', () => {
     expect(tx.cutBundle.delete).not.toHaveBeenCalled();
   });
 
-  it('CUT: đợt đã gửi KCS -> 409, không ghi gì', async () => {
+  it('P1 [1]: đảo CUT / STEP / PIECE đều mở transaction với maxWait 10s + timeout 20s (không dùng mặc định 5s)', async () => {
+    const options = { maxWait: 10_000, timeout: 20_000 };
+
+    await service.reverse('11', 'đếm lại', 'qlsx-1');
+    expect(prisma.$transaction).toHaveBeenLastCalledWith(expect.any(Function), options);
+
+    prisma.floorReport.findUnique.mockResolvedValue({
+      ...cutReport,
+      kind: 'STEP',
+      cutBundleId: null,
+      stepBatchId: 77n,
+    });
+    tx.$queryRaw.mockResolvedValue([{ stepBundleId: null }]);
+    await service.reverse('11', 'báo nhầm', 'qlsx-1');
+    expect(prisma.$transaction).toHaveBeenLastCalledWith(expect.any(Function), options);
+
+    prisma.floorReport.findUnique.mockResolvedValue({
+      ...cutReport,
+      kind: 'PIECE',
+      cutBundleId: null,
+      productionBatchId: 106n,
+      lines: [{ segmentSpecId: null, pieceId: 73n, qty: 4 }],
+    });
+    const batch = { id: 106n, productionOrderId: 41n, pieceId: 73n, stage: 'HAN' };
+    prisma.productionBatch.findUnique.mockResolvedValue(batch);
+    tx.productionBatch.findUniqueOrThrow.mockResolvedValue({
+      ...batch,
+      status: 'OPEN',
+      reportedQty: 4,
+    });
+    await service.reverse('11', 'báo nhầm SKU', 'qlsx-1');
+    expect(prisma.$transaction).toHaveBeenLastCalledWith(expect.any(Function), options);
+  });
+
+  it('CUT: đợt KCS đã chốt để chấm -> 409 câu mới (AC15), không ghi gì', async () => {
     tx.$queryRaw.mockResolvedValue([{ status: 'AWAITING_QC' }]);
-    await expect(service.reverse('11', 'muộn quá', 'qlsx-1')).rejects.toThrow(ConflictException);
+    await expect(service.reverse('11', 'muộn quá', 'qlsx-1')).rejects.toThrow(
+      'KCS đã bắt đầu chấm đợt này - không hủy được nữa. Số sai thì báo KCS ghi “số thực có” khi chấm.',
+    );
     expect(tx.floorReport.create).not.toHaveBeenCalled();
   });
 
@@ -261,7 +293,9 @@ describe('FloorReviewService.reverse', () => {
     prisma.floorReport.findUnique.mockResolvedValue(stepReport);
     tx.$queryRaw.mockResolvedValue([{ stepBundleId: 5n }]);
 
-    await expect(service.reverse('11', 'x', 'q')).rejects.toThrow(/đã gửi KCS/);
+    await expect(service.reverse('11', 'x', 'q')).rejects.toThrow(
+      /KCS đã bắt đầu chấm đợt này - không hủy được nữa/,
+    );
 
     expect(tx.floorReport.create).not.toHaveBeenCalled();
     expect(tx.stepBatchSegment.deleteMany).not.toHaveBeenCalled();
@@ -325,7 +359,9 @@ describe('FloorReviewService.reverse', () => {
       reportedQty: 4,
     });
 
-    await expect(service.reverse('11', 'x', 'q')).rejects.toThrow(/đã gửi KCS/);
+    await expect(service.reverse('11', 'x', 'q')).rejects.toThrow(
+      /KCS đã bắt đầu chấm đợt này - không hủy được nữa/,
+    );
 
     expect(tx.floorReport.create).not.toHaveBeenCalled();
     expect(tx.productionBatch.update).not.toHaveBeenCalled();
@@ -342,145 +378,192 @@ describe('FloorReviewService.reverse', () => {
   });
 });
 
-describe('FloorReviewService - gửi KCS', () => {
+describe('FloorReviewService - KCS chốt để chấm (5 route close)', () => {
+  const GATE = 'chốt để chấm';
+  const CUT_GONE = 'Đợt cắt này vừa bị QLSX hủy hết số - không còn gì để chấm, tải lại trang.';
+  const BATCH_GONE = 'Lô này vừa bị QLSX hủy hết số - không còn gì để chấm, tải lại trang.';
   let prisma: {
     productionBatch: { findUnique: jest.Mock };
-    cutBundle: { findUnique: jest.Mock };
-    floorReport: { findUnique: jest.Mock };
+    productionOrder: { findMany: jest.Mock };
     user: { findUnique: jest.Mock };
-    productionInvoiceItem: { findMany: jest.Mock };
-    warehouse: { findUnique: jest.Mock };
-    workshop: { findFirst: jest.Mock; findMany: jest.Mock };
   };
   let steelIssues: { finishCutBundle: jest.Mock; submitStepBundle: jest.Mock };
-  let productionBatches: { finishProductionBatch: jest.Mock };
+  let productionBatches: { finishProductionBatch: jest.Mock; submitPieceStep: jest.Mock };
+  let yieldProduction: { submitStep: jest.Mock };
   let service: FloorReviewService;
 
   beforeEach(() => {
     prisma = {
       productionBatch: { findUnique: jest.fn() },
-      cutBundle: {
-        findUnique: jest.fn().mockResolvedValue({ steelIssue: { productionInvoiceId: 45n } }),
-      },
-      floorReport: { findUnique: jest.fn() },
-      // Mặc định: QLSX không gắn xưởng (thấy/thao tác mọi xưởng như cũ).
-      user: { findUnique: jest.fn().mockResolvedValue({ workshopId: null, workshop: null }) },
-      // PI 45 thuộc xưởng 2.
-      productionInvoiceItem: {
-        findMany: jest.fn().mockResolvedValue([{ productionInvoiceId: 45n, workshopId: 2n }]),
-      },
-      warehouse: { findUnique: jest.fn().mockResolvedValue(null) },
-      workshop: {
-        findFirst: jest.fn().mockResolvedValue(null),
-        findMany: jest.fn().mockResolvedValue([]),
+      productionOrder: { findMany: jest.fn().mockResolvedValue([{ id: 41n }]) },
+      // KCS gắn xưởng khác cũng chốt được: hàm close không hề hỏi phạm vi xưởng.
+      user: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ workshopId: 1n, workshop: { name: 'Xưởng 1', paintsFor: [] } }),
       },
     };
     steelIssues = {
       finishCutBundle: jest.fn().mockResolvedValue({ id: '52' }),
       submitStepBundle: jest.fn().mockResolvedValue({ id: '8' }),
     };
-    productionBatches = { finishProductionBatch: jest.fn().mockResolvedValue({ id: '106' }) };
+    productionBatches = {
+      finishProductionBatch: jest.fn().mockResolvedValue({ id: '106' }),
+      submitPieceStep: jest.fn().mockResolvedValue({ id: '21' }),
+    };
+    yieldProduction = { submitStep: jest.fn().mockResolvedValue({ id: '31' }) };
     service = new FloorReviewService(
       prisma as unknown as PrismaServiceType,
       steelIssues as unknown as SteelIssuesService,
       productionBatches as unknown as ProductionBatchesService,
       new WorkshopScopeService(prisma as unknown as PrismaServiceType),
+      yieldProduction as unknown as MaterialYieldRecipeProductionService,
     );
   });
 
-  const scopedTo = (workshopId: bigint) =>
-    prisma.user.findUnique.mockResolvedValue({
-      workshopId,
-      workshop: { name: `Xưởng ${workshopId}`, paintsFor: [] },
-    });
+  const stepDto = (over: Record<string, unknown> = {}) =>
+    ({
+      productionInvoiceId: '45',
+      materialId: '7',
+      step: 'UON',
+      productionOrderId: '41',
+      workerId: null,
+      ...over,
+    }) as Parameters<FloorReviewService['closeStepGroup']>[0];
 
-  it('X4 16/11: QLSX xưởng khác không gửi KCS được đợt cắt / nhóm công đoạn / lô mảnh, không hủy được lần báo', async () => {
-    scopedTo(1n);
-    await expect(service.sendCutBundle('52', 'qlsx-1')).rejects.toThrow(ForbiddenException);
-    await expect(
-      service.sendStepGroup(
-        { productionInvoiceId: '45', materialId: '7', step: 'UON', productionOrderId: '41' },
-        'qlsx-1',
-      ),
-    ).rejects.toThrow(ForbiddenException);
-    prisma.productionBatch.findUnique.mockResolvedValue({
-      stage: 'HAN',
-      productionOrder: { productionInvoiceItem: { productionInvoiceId: 45n } },
+  it('đợt cắt: gọi finishCutBundle không phát tin KCS, nhãn cổng "chốt để chấm", không hỏi xưởng', async () => {
+    await expect(service.closeCutBundle('52', 'kcs-1')).resolves.toEqual({ id: '52' });
+    expect(steelIssues.finishCutBundle).toHaveBeenCalledWith('52', {
+      notifyKcs: false,
+      gateLabel: GATE,
     });
-    await expect(service.sendProductionBatch('106', 'qlsx-1')).rejects.toThrow(ForbiddenException);
-    prisma.floorReport.findUnique.mockResolvedValue({
-      id: 11n,
-      kind: 'CUT',
-      reversalOfId: null,
-      reversedBy: null,
-      cutBundleId: 53n,
-      productionInvoiceId: 45n,
-      lines: [],
-    });
-    await expect(service.reverse('11', 'x', 'qlsx-1')).rejects.toThrow(ForbiddenException);
-    expect(steelIssues.finishCutBundle).not.toHaveBeenCalled();
-    expect(steelIssues.submitStepBundle).not.toHaveBeenCalled();
-    expect(productionBatches.finishProductionBatch).not.toHaveBeenCalled();
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
   });
 
-  it('X4 16/11: QLSX đúng xưởng của PI gửi KCS bình thường', async () => {
-    scopedTo(2n);
-    await expect(service.sendCutBundle('52', 'qlsx-1')).resolves.toEqual({ id: '52' });
+  it('đợt cắt vừa bị QLSX hủy hết (404 từ hàm cũ) -> 409 câu "vừa bị QLSX hủy hết số"', async () => {
+    steelIssues.finishCutBundle.mockRejectedValue(
+      new NotFoundException('Không tìm thấy đợt cắt 52'),
+    );
+    const err = await service.closeCutBundle('52', 'kcs-1').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    expect((err as ConflictException).message).toBe(CUT_GONE);
   });
 
-  it('đợt cắt: chuyển thẳng cho finishCutBundle (luật "Gửi KCS" vẫn nằm ở một nơi)', async () => {
-    await expect(service.sendCutBundle('52', 'qlsx-1')).resolves.toEqual({ id: '52' });
-    expect(steelIssues.finishCutBundle).toHaveBeenCalledWith('52');
+  it('đợt cắt: lỗi khác (409 vừa chốt, 409 lệnh dừng) ném lại nguyên văn, không bị đổi câu', async () => {
+    const stopped = new ConflictException(
+      'PI 45 chưa có SKU nào được QLSX bấm "Bắt đầu" (hoặc đã "Kết thúc") - chưa/không thể chốt để chấm',
+    );
+    steelIssues.finishCutBundle.mockRejectedValue(stopped);
+    await expect(service.closeCutBundle('52', 'kcs-1')).rejects.toBe(stopped);
   });
 
-  it('lô mảnh: tổ của chính đợt làm "vai" người gửi, kho trừ tồn là kho xưởng', async () => {
-    prisma.productionBatch.findUnique.mockResolvedValue({
-      stage: 'HAN',
-      productionOrder: { productionInvoiceItem: { productionInvoiceId: 45n } },
-    });
-
-    await service.sendProductionBatch('106', 'qlsx-1');
-
+  it('lô mảnh: lấy tổ của chính lô làm vai (HAN), warehouseScope null, notifyKcs false + nhãn cổng', async () => {
+    prisma.productionBatch.findUnique.mockResolvedValue({ stage: 'HAN' });
+    await expect(service.closeProductionBatch('106', 'kcs-1')).resolves.toEqual({ id: '106' });
     expect(prisma.productionBatch.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 106n } }),
     );
     expect(productionBatches.finishProductionBatch).toHaveBeenCalledWith(
       '106',
-      'qlsx-1',
+      'kcs-1',
       'HAN',
-      MFG_FLOOR_WAREHOUSE_SCOPE,
+      null,
+      { notifyKcs: false, gateLabel: GATE },
     );
   });
 
-  it('lô mảnh không tồn tại -> 404, không gửi', async () => {
+  it.each(['PHOI', 'SON'])(
+    'lô mảnh tổ %s: truyền đúng vai của tổ, không truyền "KCS"',
+    async (stage) => {
+      prisma.productionBatch.findUnique.mockResolvedValue({ stage });
+      await service.closeProductionBatch('106', 'kcs-1');
+      expect((productionBatches.finishProductionBatch.mock.calls as unknown[][])[0][2]).toBe(stage);
+    },
+  );
+
+  it('lô mảnh không còn (QLSX hủy hết, đã xoá) -> 409 câu "vừa bị QLSX hủy hết số", không chốt', async () => {
     prisma.productionBatch.findUnique.mockResolvedValue(null);
-    await expect(service.sendProductionBatch('106', 'qlsx-1')).rejects.toThrow(NotFoundException);
+    const err = await service.closeProductionBatch('106', 'kcs-1').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    expect((err as ConflictException).message).toBe(BATCH_GONE);
     expect(productionBatches.finishProductionBatch).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ['không chỉ định công nhân -> gom hết như màn Phôi cũ', undefined, undefined],
-    ['đợt cũ chưa biết người (null)', null, { id: null }],
-    ['một công nhân cụ thể', 'w-1', { id: 'w-1' }],
-  ])('nhóm công đoạn phụ: %s', async (_label, workerId, expected) => {
-    await service.sendStepGroup(
-      {
-        productionInvoiceId: '45',
-        materialId: '7',
-        step: 'UON',
-        productionOrderId: '41',
-        workerId,
-      },
-      'qlsx-1',
-    );
+  it('lô mảnh bị xoá giữa chừng (404 từ hàm cũ) -> 409 cùng câu', async () => {
+    prisma.productionBatch.findUnique.mockResolvedValue({ stage: 'SON' });
+    productionBatches.finishProductionBatch.mockRejectedValue(new NotFoundException('x'));
+    await expect(service.closeProductionBatch('106', 'kcs-1')).rejects.toThrow(BATCH_GONE);
+  });
 
-    expect(steelIssues.submitStepBundle).toHaveBeenCalledWith(
+  it('nhóm công đoạn: truyền công nhân của nhóm (id / null) + SKU + nhãn cổng', async () => {
+    await service.closeStepGroup(stepDto({ workerId: 'w-1' }), 'kcs-1');
+    expect(steelIssues.submitStepBundle).toHaveBeenLastCalledWith(
       '45',
       '7',
       'UON',
-      'qlsx-1',
+      'kcs-1',
       '41',
-      expected,
+      { id: 'w-1' },
+      { gateLabel: GATE },
+    );
+    await service.closeStepGroup(stepDto({ workerId: null }), 'kcs-1');
+    expect((steelIssues.submitStepBundle.mock.calls as unknown[][])[1][5]).toEqual({ id: null });
+  });
+
+  it('nhóm công đoạn không gửi workerId -> coi là null, KHÔNG gom hết mọi công nhân', async () => {
+    await service.closeStepGroup(stepDto({ workerId: undefined }), 'kcs-1');
+    expect((steelIssues.submitStepBundle.mock.calls as unknown[][])[0][5]).toEqual({ id: null });
+  });
+
+  it('nhóm chưa gắn SKU (productionOrderId null): PI 1 SKU gộp vào SKU duy nhất', async () => {
+    prisma.productionOrder.findMany.mockResolvedValue([{ id: 41n }]);
+    await service.closeStepGroup(stepDto({ productionOrderId: null }), 'kcs-1');
+    expect((steelIssues.submitStepBundle.mock.calls as unknown[][])[0][4]).toBe('41');
+  });
+
+  it('nhóm chưa gắn SKU ở PI nhiều SKU -> 409 "báo IT", không chốt', async () => {
+    prisma.productionOrder.findMany.mockResolvedValue([{ id: 41n }, { id: 42n }]);
+    await expect(
+      service.closeStepGroup(stepDto({ productionOrderId: null }), 'kcs-1'),
+    ).rejects.toThrow('Dữ liệu cũ chưa gắn SKU - chưa chấm được, báo IT.');
+    expect(steelIssues.submitStepBundle).not.toHaveBeenCalled();
+  });
+
+  it('nhóm công đoạn: 400 "không còn lần báo nào chưa chấm" của hàm cũ ném lại nguyên văn', async () => {
+    const gone = new BadRequestException('Nhóm Uốn này không còn lần báo nào chưa chấm');
+    steelIssues.submitStepBundle.mockRejectedValue(gone);
+    await expect(service.closeStepGroup(stepDto(), 'kcs-1')).rejects.toBe(gone);
+  });
+
+  it('pat: submitPieceStep với vai PHOI + nhãn cổng, body chỉ có mảnh + công đoạn', async () => {
+    await expect(
+      service.closePieceStepGroup(
+        { productionOrderId: '41', pieceId: '9', step: 'DUC_LO' },
+        'kcs-1',
+      ),
+    ).resolves.toEqual({ id: '21' });
+    expect(productionBatches.submitPieceStep).toHaveBeenCalledWith(
+      '41',
+      { pieceId: '9', step: 'DUC_LO' },
+      'kcs-1',
+      'PHOI',
+      { gateLabel: GATE },
+    );
+  });
+
+  it('chân nhôm: submitStep với vai PHOI, notifyKcs false + nhãn cổng', async () => {
+    await expect(
+      service.closeMaterialYieldGroup(
+        { productionInvoiceId: '45', recipeId: '3', step: 'DAP' },
+        'kcs-1',
+      ),
+    ).resolves.toEqual({ id: '31' });
+    expect(yieldProduction.submitStep).toHaveBeenCalledWith(
+      '45',
+      { recipeId: '3', step: 'DAP' },
+      'kcs-1',
+      'PHOI',
+      { notifyKcs: false, gateLabel: GATE },
     );
   });
 });

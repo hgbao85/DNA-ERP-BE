@@ -34,6 +34,10 @@ export interface FloorReportContext {
   workstationId?: bigint;
 }
 
+/** Gửi lại cùng Idempotency-Key sau khi QLSX đã hủy hết lần báo đó (P1, 18/11/2026): 409, không ghi dòng sổ mới. */
+export const FLOOR_REPORT_REVERSED_REPLAY_MESSAGE =
+  'Lần báo này đã ghi nhận trước đó và đã bị QLSX hủy - xem lý do ở "Sản lượng của tôi", cần thì báo lại';
+
 /** Ghi 1 lần báo - gọi TRONG cùng transaction với thay đổi số lượng, để không bao giờ có "đã cộng số
  *  mà không có dòng sổ" (hoặc ngược lại). Trùng idempotencyKey -> Prisma ném P2002, transaction rollback
  *  luôn phần cộng số -> bên gọi bắt bằng isIdempotencyConflict() rồi trả kết quả lần trước. */

@@ -27,6 +27,9 @@ export class ProductionBatchPlanItemResponseDto {
    *  lịch sử, bất biến (passedQty đã trừ lỗi, đợt bù là đợt mới nên không làm giảm số này). Mảnh Phôi có khai công đoạn
    *  (processSteps) cộng thêm lỗi KCS của MỌI công đoạn (stepProgress[].failedQty). Mặc định 0. */
   @Expose() @ApiProperty() failedQty: number = 0;
+  /** P1 (18/11/2026): Σ thiếu (QcReview.shortQty) của lô QC_DONE + Σ thiếu của mọi công đoạn của pat. KCS ghi thiếu =
+   *  đã trừ, không tính lỗi, không làm bù. Mặc định 0. */
+  @Expose() @ApiProperty() shortQty: number = 0;
   /** Σ ProductionBatch.reportedQty (status=OPEN) - đã "Lưu đợt" nhưng CHƯA gửi KCS (2026-10-16, để 3 màn QLSX
    *  hiện cùng số: Đã báo = openQty + awaitingQcQty + passedQty). Mặc định 0. */
   @Expose() @ApiProperty() openQty: number = 0;
