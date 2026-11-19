@@ -236,6 +236,18 @@ describe('RolesService', () => {
       expect(prisma.rolePermission.createMany).toHaveBeenCalled();
     });
 
+    it('BM2: không đổi tên vai trò hệ thống (BOSS), không đổi tên vai trò khác thành tên hệ thống', async () => {
+      prisma.role.findUnique.mockResolvedValue({ ...withIds, name: 'BOSS' });
+      await expect(service.update('role-1', { name: 'BOSS_CU' }, MANAGER)).rejects.toThrow(
+        'đổi tên vai trò hệ thống BOSS',
+      );
+      prisma.role.findUnique.mockResolvedValue({ ...withIds, name: 'HR' });
+      await expect(service.update('role-1', { name: 'BOSS' }, MANAGER)).rejects.toThrow(
+        'tên vai trò hệ thống',
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
     it('tạo vai trò mới với quyền mình không có -> 403', async () => {
       prisma.permission.findMany.mockResolvedValue([{ module: 'STOCK', action: 'UPDATE' }]);
       await expect(

@@ -488,12 +488,15 @@ export class SalesOrdersService {
     }
 
     const choiceChanged = dto.wireMaterialId !== undefined || dto.cushionMaterialId !== undefined;
+    // LS2 19/11: undefined = giữ nguyên; null/'' = bỏ chọn (ghi NULL); còn lại = id mới.
+    const nextChoice = (sent: string | null | undefined, current: bigint | null) =>
+      sent === undefined ? (current?.toString() ?? undefined) : sent || undefined;
     if (choiceChanged) {
       await this.assertOptionChoices([
         {
           mfgProductId: item.mfgProductId.toString(),
-          wireMaterialId: dto.wireMaterialId ?? item.wireMaterialId?.toString(),
-          cushionMaterialId: dto.cushionMaterialId ?? item.cushionMaterialId?.toString(),
+          wireMaterialId: nextChoice(dto.wireMaterialId, item.wireMaterialId),
+          cushionMaterialId: nextChoice(dto.cushionMaterialId, item.cushionMaterialId),
         },
       ]);
       // Sếp đã duyệt lệnh sản xuất của dòng này thì lệnh đã chốt dây/nệm - đổi ở đây không còn tác
@@ -509,10 +512,10 @@ export class SalesOrdersService {
       }
     }
 
-    const wireMaterialId = dto.wireMaterialId ? parseBigIntId(dto.wireMaterialId) : undefined;
-    const cushionMaterialId = dto.cushionMaterialId
-      ? parseBigIntId(dto.cushionMaterialId)
-      : undefined;
+    const toWrite = (sent: string | null | undefined) =>
+      sent === undefined ? undefined : sent ? parseBigIntId(sent) : null;
+    const wireMaterialId = toWrite(dto.wireMaterialId);
+    const cushionMaterialId = toWrite(dto.cushionMaterialId);
     const updated = await tx.salesOrderItem.update({
       where: { id: item.id },
       data: {

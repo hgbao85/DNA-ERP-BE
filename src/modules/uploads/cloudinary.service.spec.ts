@@ -2,6 +2,7 @@ import { InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { v2 as cloudinary } from 'cloudinary';
 import { AppConfig } from '../../config/configuration';
+import { PrismaServiceType } from '../../prisma/prisma.service';
 import { CloudinaryService } from './cloudinary.service';
 
 jest.mock('cloudinary', () => ({
@@ -17,6 +18,7 @@ jest.mock('cloudinary', () => ({
 describe('CloudinaryService', () => {
   let service: CloudinaryService;
   let configService: { get: jest.Mock };
+  let prisma: { $queryRaw: jest.Mock; $queryRawUnsafe: jest.Mock };
   const mockedCloudinary = cloudinary as unknown as {
     config: jest.Mock;
     uploader: { upload_stream: jest.Mock; destroy: jest.Mock };
@@ -31,7 +33,15 @@ describe('CloudinaryService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     configService = { get: jest.fn((key: string) => configuredValues[key]) };
-    service = new CloudinaryService(configService as unknown as ConfigService<AppConfig, true>);
+    // Mặc định: 1 cột url, không bản ghi nào trỏ tới -> được xoá.
+    prisma = {
+      $queryRaw: jest.fn().mockResolvedValue([{ t: 'materials', c: 'imageUrl', k: 'text' }]),
+      $queryRawUnsafe: jest.fn().mockResolvedValue([]),
+    };
+    service = new CloudinaryService(
+      configService as unknown as ConfigService<AppConfig, true>,
+      prisma as unknown as PrismaServiceType,
+    );
   });
 
   describe('constructor', () => {
@@ -117,7 +127,7 @@ describe('CloudinaryService', () => {
       mockedCloudinary.uploader.destroy.mockResolvedValue({ result: 'ok' });
 
       await service.deleteByUrl(
-        'https://res.cloudinary.com/demo/image/upload/v1690000000/dna-erp/abc123.jpg',
+        'https://res.cloudinary.com/demo-cloud/image/upload/v1690000000/dna-erp/abc123.jpg',
       );
 
       expect(mockedCloudinary.uploader.destroy).toHaveBeenCalledWith('dna-erp/abc123', {
@@ -132,7 +142,7 @@ describe('CloudinaryService', () => {
       mockedCloudinary.uploader.destroy.mockResolvedValue({ result: 'ok' });
 
       await service.deleteByUrl(
-        'https://res.cloudinary.com/demo/raw/upload/v1690000000/dna-erp/approvals/ky.pdf',
+        'https://res.cloudinary.com/demo-cloud/raw/upload/v1690000000/dna-erp/approvals/ky.pdf',
         'raw',
       );
 
@@ -151,8 +161,50 @@ describe('CloudinaryService', () => {
       mockedCloudinary.uploader.destroy.mockRejectedValue(new Error('Cloudinary is down'));
 
       await expect(
-        service.deleteByUrl('https://res.cloudinary.com/demo/image/upload/dna-erp/abc123.jpg'),
+        service.deleteByUrl(
+          'https://res.cloudinary.com/demo-cloud/image/upload/dna-erp/abc123.jpg',
+        ),
       ).resolves.toBeUndefined();
+    });
+
+    it('BM1: URL của tài khoản Cloudinary khác -> không xoá', async () => {
+      await service.deleteByUrl(
+        'https://res.cloudinary.com/other-cloud/image/upload/v1/dna-erp/abc.jpg',
+      );
+      expect(mockedCloudinary.uploader.destroy).not.toHaveBeenCalled();
+    });
+
+    it('BM1: file ngoài thư mục dna-erp/ -> không xoá', async () => {
+      await service.deleteByUrl(
+        'https://res.cloudinary.com/demo-cloud/image/upload/v1/khac/abc.jpg',
+      );
+      expect(mockedCloudinary.uploader.destroy).not.toHaveBeenCalled();
+    });
+
+    it('BM1: còn bản ghi khác trỏ tới URL (vd ảnh phiếu Sếp ký) -> không xoá', async () => {
+      prisma.$queryRaw.mockResolvedValue([
+        { t: 'materials', c: 'imageUrl', k: 'text' },
+        { t: 'issue_slips', c: 'signedSlipUrls', k: 'ARRAY' },
+      ]);
+      prisma.$queryRawUnsafe.mockImplementation((sql: string) =>
+        Promise.resolve(sql.includes('ANY("signedSlipUrls")') ? [{ '?column?': 1 }] : []),
+      );
+      await service.deleteByUrl(
+        'https://res.cloudinary.com/demo-cloud/image/upload/v1/dna-erp/ky.jpg',
+      );
+      expect(mockedCloudinary.uploader.destroy).not.toHaveBeenCalled();
+      expect(prisma.$queryRawUnsafe).toHaveBeenCalledWith(
+        'SELECT 1 FROM "issue_slips" WHERE $1 = ANY("signedSlipUrls") LIMIT 1',
+        'https://res.cloudinary.com/demo-cloud/image/upload/v1/dna-erp/ky.jpg',
+      );
+    });
+
+    it('BM1: không kiểm được bản ghi (DB lỗi) -> không xoá', async () => {
+      prisma.$queryRaw.mockRejectedValue(new Error('db down'));
+      await service.deleteByUrl(
+        'https://res.cloudinary.com/demo-cloud/image/upload/v1/dna-erp/abc.jpg',
+      );
+      expect(mockedCloudinary.uploader.destroy).not.toHaveBeenCalled();
     });
   });
 });

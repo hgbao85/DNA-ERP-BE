@@ -193,6 +193,15 @@ export class UsersService {
         },
       });
 
+      // BM3 19/11: khoá tài khoản thì thu hồi mọi refresh token (như updateWorker / resetPassword) - trước đây mở khoá
+      // lại là mọi máy còn token cũ (≤ 7 ngày) vào thẳng không cần đăng nhập.
+      if (dto.isActive === false && current.isActive) {
+        await tx.refreshToken.updateMany({
+          where: { userId: id, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+      }
+
       if (dto.roleIds) {
         await tx.userRole.deleteMany({ where: { userId: id } });
         if (dto.roleIds.length) {
@@ -215,6 +224,21 @@ export class UsersService {
   ): Promise<UserResponseDto> {
     const current = await this.findOneOrThrow(id);
     this.assertTargetNotAdmin(actor, current, 'sửa tài khoản quản trị viên');
+    // BM2 19/11: đổi mfgRole kéo theo gán vai trò nghiệp vụ đi kèm (QLSX, KCS…) - trước đây không qua "chỉ cấp quyền mình
+    // đang có" và không chặn tự sửa, nên ai có USER:UPDATE tự gán mình vai trò QLSX được.
+    if (id === actor.id && !isAdminActor(actor)) {
+      throw new ForbiddenException('Bạn không thể tự sửa thuộc tính sản xuất của tài khoản mình');
+    }
+    if (!isAdminActor(actor) && dto.mfgRole !== undefined && dto.mfgRole !== current.mfgRole) {
+      const targetName = dto.mfgRole ? MFG_ROLE_TO_BUSINESS_ROLE[dto.mfgRole] : undefined;
+      if (targetName && !current.roles.some((r) => r.role.name === targetName)) {
+        const target = await this.prisma.role.findFirst({
+          where: { name: targetName },
+          select: { id: true },
+        });
+        if (target) await this.assertCanAssignRoles(actor, [target.id], 'gán vai trò sản xuất này');
+      }
+    }
 
     // Floor roles (Phôi/Hàn/Sơn/KCS) chỉ tồn tại trong gia đình kho phoi-son-han - trước
     // 2026-09-03 ép cứng về đúng 1 literal 'phoi-son-han' bất kể caller gửi gì, khiến không công
