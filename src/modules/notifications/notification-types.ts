@@ -995,6 +995,25 @@ const notificationTypeDefinitions = {
     recipients: () => ({ roles: [DEFAULT_ROLES.ADMIN] }),
   } satisfies NotificationTypeDef<PiNotificationParams>,
 
+  /** CS3 rà soát 18/11: Sếp duyệt xong (đã có lệnh SX) nhưng bước duyệt phương án cắt TÍNH TRƯỚC lỗi (vd transaction quá giờ khi
+   *  chờ khoá lúc đang nhận hàng) - phương án còn DRAFT: không giữ chỗ sắt, không dòng mua sắt, Phôi bị chặn xuất sắt. Trước
+   *  đây chỉ log. Báo Admin bấm "Tạo lại" (retryProductionOrder duyệt lại đúng phương án đó); tự đóng khi duyệt lại được. */
+  PRESOLVED_CUTTING_APPROVE_FAILED: {
+    category: 'ALERT',
+    severity: 'WARNING',
+    entityType: 'PRODUCTION_INVOICE',
+    title: (p: PiNotificationParams) => `${p.piCode}: phương án cắt chưa duyệt được`,
+    message: () =>
+      `Sếp đã duyệt lệnh nhưng phương án cắt sắt chưa duyệt xong - chưa giữ chỗ / chưa tạo dòng mua sắt, Phôi chưa xuất sắt được. ` +
+      `Vào Lệnh sản xuất, bấm "Tạo lại" ở dòng lệnh này.`,
+    link: () => ({
+      module: 'admin',
+      page: 'business-data',
+      params: { tab: 'production-invoices' },
+    }),
+    recipients: () => ({ roles: [DEFAULT_ROLES.ADMIN] }),
+  } satisfies NotificationTypeDef<PiNotificationParams>,
+
   // ─── 7.4 Đề xuất mua hàng (Phase 3a, 2026-09-26) ───────────────────────────────────────────
 
   /** 1 trong 3 nguồn (cắt sắt/PieceMaterialYield/tiêu hao) vừa tìm-hoặc-tạo xong `PurchaseProposal`

@@ -26,6 +26,7 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { CreateMaterialYieldRecipeIssueDto } from './dto/create-material-yield-recipe-issue.dto';
 import { ListMaterialYieldRecipeIssuesQueryDto } from './dto/list-material-yield-recipe-issues-query.dto';
@@ -62,10 +63,10 @@ const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
  * outputMaterial (vd chân nhôm) không gắn 1 SKU/piece cụ thể nào (xem doc comment model
  * MaterialYieldRecipeIssue, schema.prisma).
  *
- * Giản lược có chủ đích so với MaterialYieldIssuesService (phạm vi "trong ngày", 2026-10-01): CHƯA
- * nối StockReservationsService (giữ chỗ cho đề xuất mua tự động/drainPoolBestEffort) - giữ nguyên
- * bước kiểm tồn kho FOR UPDATE (điểm sửa đúng của audit 28/08 #4) nhưng availableQty = onHand thô,
- * không trừ giữ chỗ của các nguồn khác. Bổ sung sau nếu phát sinh xung đột thực tế.
+ * HS1 rà soát 18/11: nối StockReservationsService như MaterialYieldIssuesService - kiểm tồn KHẢ DỤNG (trừ giữ chỗ của PI
+ * khác) và trả giữ chỗ của chính PI (drainPoolBestEffort) sau khi xuất. Trước đây (giản lược 01/10) so tồn thô và không trả
+ * giữ chỗ: nguồn mua công thức (MaterialYieldRecipePurchaseService) giữ chỗ thật từ 02/10, nên hàng đã xuất vẫn đứng tên
+ * giữ chỗ của PI -> PI khác thấy thiếu, mua dư; "Tạo lại" mua lại đúng phần đã xuất; xuất cho PI này lấy được hàng giữ cho PI khác.
  */
 @Injectable()
 export class MaterialYieldRecipeIssuesService {
@@ -74,6 +75,7 @@ export class MaterialYieldRecipeIssuesService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly stockLedgerService: StockLedgerService,
+    private readonly stockReservationsService: StockReservationsService,
     private readonly materialYieldRecipesService: MaterialYieldRecipesService,
     private readonly notifications: NotificationsService,
     private readonly cls: ClsService<AppClsStore>,
@@ -173,15 +175,26 @@ export class MaterialYieldRecipeIssuesService {
           );
         }
 
+        // HS3 rà soát 18/11: đúng ô bút toán ghi (chiều dài 0, quy cách rỗng) - cùng K1 16/11.
         const [stockRow] = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
         SELECT "qty" FROM "stock_quant"
         WHERE "warehouseId" = ${materialWarehouseId} AND "materialId" = ${inputMaterial.id}
+          AND "stockLengthMm" = 0 AND "spec" = ''
         FOR UPDATE
       `;
         const onHand = stockRow?.qty.toNumber() ?? 0;
-        if (dto.issuedQty > onHand) {
+        // HS1: chỉ trừ giữ chỗ của PI KHÁC (phần giữ cho chính PI này được dùng) - cùng MaterialYieldIssuesService.
+        const availableQty = await this.stockReservationsService.getAvailableQty(
+          tx,
+          materialWarehouseId,
+          inputMaterial.id,
+          onHand,
+          undefined,
+          piId,
+        );
+        if (dto.issuedQty > availableQty) {
           throw new ConflictException(
-            `Tồn kho (${onHand}) không đủ xuất ${dto.issuedQty} cho vật tư ${inputMaterial.name} - kiểm tra lại tồn kho thực tế trước khi xuất`,
+            `Tồn kho khả dụng (${availableQty}) không đủ xuất ${dto.issuedQty} cho vật tư ${inputMaterial.name} - kiểm tra lại tồn kho thực tế trước khi xuất`,
           );
         }
 
@@ -196,6 +209,13 @@ export class MaterialYieldRecipeIssuesService {
           include: ISSUE_INCLUDE,
         });
         await this.postLedgerEntry(issue, issuedById, tx);
+        // HS1: "trả nợ" giữ chỗ của chính PI mà nguồn mua công thức đã tạo - hàng rời kho thì giữ chỗ phải giảm theo.
+        await this.stockReservationsService.drainPoolBestEffort(tx, {
+          productionInvoiceId: piId,
+          materialId: inputMaterial.id,
+          qty: dto.issuedQty,
+          warehouseId: materialWarehouseId,
+        });
         this.logger.log(
           `recipe issue ${issue.id} (pi ${piId}, recipe ${recipeBigId}, qty ${dto.issuedQty}) ghi ledger, chờ commit`,
         );

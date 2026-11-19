@@ -262,8 +262,11 @@ export class MaterialYieldIssuesService {
       const [stockRow] = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
         SELECT "qty" FROM "stock_quant"
         WHERE "warehouseId" = ${materialWarehouseId} AND "materialId" = ${materialBigId}
+          AND "stockLengthMm" = 0 AND "spec" = ''
         FOR UPDATE
       `;
+      // HS3 rà soát 18/11: đọc đúng ô bút toán ghi (chiều dài 0, quy cách rỗng) - cùng K1 16/11 (vật tư có thêm ô chiều dài
+      // khác, vd 6000 = 50 và ô 0 = 0: trước đây kiểm thấy 50 rồi cho xuất, ô 0 âm).
       const onHand = stockRow?.qty.toNumber() ?? 0;
       // Chỉ trừ giữ chỗ của PI KHÁC (2026-10-27, thay cho ownPiRemaining cộng-lại cũ chỉ phủ
       // PRODUCTION_INVOICE và loại cả đề xuất mua của PI khác) - cùng lý do MaterialIssuesService.

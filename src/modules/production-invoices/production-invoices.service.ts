@@ -2644,9 +2644,24 @@ export class ProductionInvoicesService {
   ): Promise<void> {
     try {
       await this.cuttingProposalsService.approve(proposalId.toString(), actorUserId);
+      await this.resolvePiNotifications('PRODUCTION_INVOICE', piId, [
+        'PRESOLVED_CUTTING_APPROVE_FAILED',
+      ]);
     } catch (error) {
       this.logger.error(
         `Duyệt phương án cắt ${proposalId} (tính trước) cho ${context} thất bại: ${(error as Error).message}`,
+      );
+      // CS3 rà soát 18/11: trước đây chỉ log - lệnh đã duyệt / đã có lệnh SX nhưng phương án còn DRAFT (không giữ chỗ, không
+      // dòng mua sắt), Phôi bị chặn xuất sắt mà không ai biết. Báo Admin bấm "Tạo lại" (retryProductionOrder duyệt lại đúng
+      // phương án này). Best-effort như mọi thông báo ở đây.
+      const pi = await this.prisma.productionInvoice
+        .findUnique({ where: { id: piId }, select: { code: true } })
+        .catch(() => null);
+      await this.notifyPi(
+        'PRESOLVED_CUTTING_APPROVE_FAILED',
+        piId,
+        { piCode: pi?.code ?? `#${piId}`, count: 1, errorMessage: (error as Error).message },
+        `PRESOLVED_CUTTING_APPROVE_FAILED:${piId}`,
       );
     }
     await this.computeNonSteelPurchaseProposals(piId, context);
@@ -2690,6 +2705,10 @@ export class ProductionInvoicesService {
       }
       if (preSolved?.status === CuttingProposalStatus.DRAFT) {
         await this.cuttingProposalsService.approve(preSolved.id.toString(), actorUserId);
+        // CS3 rà soát 18/11: duyệt lại được rồi - đóng cảnh báo "phương án cắt chưa duyệt".
+        await this.resolvePiNotifications('PRODUCTION_INVOICE', pi.id, [
+          'PRESOLVED_CUTTING_APPROVE_FAILED',
+        ]);
       }
       // 10/11/2026: bước tạo dòng mua ngoài sắt sau khi Sếp duyệt có thể đã lỗi (vd transaction quá giờ) hoặc chưa từng chạy
       // (máy chủ khởi động lại khi phương án cắt đường cũ đang tính) - chạy lại 3 nguồn cho mọi trạng thái phương án, kể cả

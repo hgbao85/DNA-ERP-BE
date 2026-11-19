@@ -70,6 +70,7 @@ interface PoolRow {
   warehouseId: bigint;
   quantity: Prisma.Decimal;
   consumedQty: Prisma.Decimal;
+  stockLengthMm: number;
 }
 
 /**
@@ -340,6 +341,7 @@ export class StockReservationsService {
         warehouseId: true,
         quantity: true,
         consumedQty: true,
+        stockLengthMm: true,
       },
     });
     if (rows.length <= 1) return rows;
@@ -420,10 +422,25 @@ export class StockReservationsService {
       input.spec?.trim(),
       input.warehouseId,
     );
-    // Kho nhận chưa có dòng nào của lệnh (approve() chưa giữ chỗ gì ở kho này - buyQty = 100% nhu cầu, phương án bị huỷ, hoặc
-    // lệnh vừa đổi xưởng) - tạo 1 dòng "thuộc về cả PI" ở kho này (khoá có đuôi kho). Dòng cùng khoá đã nhả (PI xong rồi vẫn
-    // nhận tiếp) thì mở lại thay vì tạo trùng khoá.
-    if (pool.length === 0) {
+    // MUA1 rà soát 18/11: hàng nhận về LUÔN cộng vào dòng "thuộc về cả PI" (PRODUCTION_INVOICE), KHÔNG cộng vào dòng của
+    // phương án cắt (CUTTING_PROPOSAL). Trước đây cộng vào dòng ưu tiên đầu - thường là dòng phương án; KHSX "Tính lại" rồi
+    // duyệt phương án mới thì releaseByRef nhả CẢ phần hàng vừa nhận -> phần đó vừa tính là tồn khả dụng vừa nằm trong "đã
+    // ký" (receivedQty) -> mua thiếu sắt (vd thiếu 50 cây) hoặc báo "nhu cầu giảm" sai. Dòng PI không bị nhả khi thay phương
+    // án; drainPool rút theo tổng pool nên dòng nào nhận credit không đổi số xuất được.
+    const piRow = pool.find((r) => r.refType === StockReservationRefType.PRODUCTION_INVOICE);
+    if (piRow) {
+      await tx.$queryRaw`SELECT "id" FROM "stock_reservations" WHERE "id" = ${piRow.id} FOR UPDATE`;
+      await tx.stockReservation.update({
+        where: { id: piRow.id },
+        data: { quantity: { increment: input.qty } },
+      });
+      return;
+    }
+    // Kho nhận chưa có dòng PI nào của lệnh (approve() chỉ giữ chỗ bằng dòng phương án, buyQty = 100% nhu cầu, phương án bị
+    // huỷ, hoặc lệnh vừa đổi xưởng) - tạo 1 dòng "thuộc về cả PI" ở kho này (khoá có đuôi kho), cùng ngăn chiều dài với hàng
+    // vừa về (hoặc với dòng phương án đã chốt lúc duyệt). Dòng cùng khoá đã nhả (PI xong rồi vẫn nhận tiếp) thì mở lại thay
+    // vì tạo trùng khoá.
+    {
       const idempotencyKey = reservationKey(
         StockReservationRefType.PRODUCTION_INVOICE,
         input.productionInvoiceId.toString(),
@@ -452,21 +469,11 @@ export class StockReservationsService {
           refType: StockReservationRefType.PRODUCTION_INVOICE,
           refId: input.productionInvoiceId.toString(),
           idempotencyKey,
-          stockLengthMm: input.stockLengthMm ?? 0,
+          stockLengthMm: input.stockLengthMm ?? pool[0]?.stockLengthMm ?? 0,
           spec: input.spec?.trim() ?? '',
         },
       });
-      return;
     }
-    // Credit vào dòng ưu tiên CAO NHẤT (hạn gần nhất, xem loadPool) - KHÔNG quan trọng dòng nào
-    // cụ thể nhận credit vì drainPool() sau này rút theo TỔNG của pool ở kho đó, không theo từng dòng
-    // riêng; chọn 1 quy tắc xác định (thay vì tuỳ tiện) chỉ để dễ audit/debug khi cần soi dữ liệu.
-    const target = pool[0];
-    await tx.$queryRaw`SELECT "id" FROM "stock_reservations" WHERE "id" = ${target.id} FOR UPDATE`;
-    await tx.stockReservation.update({
-      where: { id: target.id },
-      data: { quantity: { increment: input.qty } },
-    });
   }
 
   /**

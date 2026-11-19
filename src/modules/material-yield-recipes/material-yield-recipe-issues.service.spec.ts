@@ -1,9 +1,10 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
+import { StockReservationsService } from '../stock/stock-reservations.service';
 import { MaterialYieldRecipeIssuesService } from './material-yield-recipe-issues.service';
 import { MaterialYieldRecipesService } from './material-yield-recipes.service';
 
@@ -56,6 +57,7 @@ describe('MaterialYieldRecipeIssuesService - thông báo', () => {
     service = new MaterialYieldRecipeIssuesService(
       prisma as unknown as PrismaServiceType,
       {} as unknown as StockLedgerService,
+      {} as unknown as StockReservationsService,
       {} as unknown as MaterialYieldRecipesService,
       notifications as unknown as NotificationsService,
       {
@@ -112,6 +114,7 @@ describe('MaterialYieldRecipeIssuesService - trần định mức (XK3)', () => 
     materialYieldRecipeIssue: { aggregate: jest.Mock; create: jest.Mock };
   };
   let service: MaterialYieldRecipeIssuesService;
+  let reservations: { getAvailableQty: jest.Mock; drainPoolBestEffort: jest.Mock };
 
   beforeEach(() => {
     tx = {
@@ -126,9 +129,14 @@ describe('MaterialYieldRecipeIssuesService - trần định mức (XK3)', () => 
         create: jest.fn(),
       },
     };
+    reservations = {
+      getAvailableQty: jest.fn().mockResolvedValue(100),
+      drainPoolBestEffort: jest.fn().mockResolvedValue(undefined),
+    };
     service = new MaterialYieldRecipeIssuesService(
       {} as unknown as PrismaServiceType,
       {} as unknown as StockLedgerService,
+      reservations as unknown as StockReservationsService,
       {} as unknown as MaterialYieldRecipesService,
       {} as unknown as NotificationsService,
       {} as unknown as ClsService<AppClsStore>,
@@ -144,6 +152,28 @@ describe('MaterialYieldRecipeIssuesService - trần định mức (XK3)', () => 
       _sum: { issuedQty: true },
     });
     expect(tx.materialYieldRecipeIssue.create).not.toHaveBeenCalled();
+  });
+
+  it('HS3 18/11: khoá đúng ô tồn chiều dài 0 + quy cách rỗng', async () => {
+    tx.materialYieldRecipeIssue.aggregate.mockResolvedValue({
+      _sum: { issuedQty: { toNumber: () => 0 } },
+    });
+    reservations.getAvailableQty.mockResolvedValue(0);
+    await service.createInTx(tx as never, prepared, 'u1').catch(() => undefined);
+    const stockQuery = (tx.$queryRaw.mock.calls[1] as [TemplateStringsArray])[0].join('?');
+    expect(stockQuery).toContain('"stockLengthMm" = 0 AND "spec" = \'\'');
+  });
+
+  it('HS1 18/11: tồn 100 nhưng PI khác giữ hết (khả dụng 3) -> 409, không ghi; trừ giữ chỗ của PI khác, không trừ của chính PI', async () => {
+    tx.materialYieldRecipeIssue.aggregate.mockResolvedValue({
+      _sum: { issuedQty: { toNumber: () => 0 } },
+    });
+    reservations.getAvailableQty.mockResolvedValue(3);
+    const err = await service.createInTx(tx as never, prepared, 'u1').catch((e: Error) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    expect(reservations.getAvailableQty).toHaveBeenCalledWith(tx, 6n, 77n, 100, undefined, 9n);
+    expect(tx.materialYieldRecipeIssue.create).not.toHaveBeenCalled();
+    expect(reservations.drainPoolBestEffort).not.toHaveBeenCalled();
   });
 });
 
