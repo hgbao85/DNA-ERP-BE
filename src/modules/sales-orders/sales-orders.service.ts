@@ -9,10 +9,12 @@ import {
 } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import {
+  AuditAction,
   BomOptionKind,
   BomRevisionStatus,
   BookingStatus,
   Prisma,
+  PrismaClient,
   ProductionOrderFloorStage,
   SalesOrderItemStatus,
 } from '../../generated/prisma/client';
@@ -33,6 +35,36 @@ import { UpdateSalesOrderDto } from './dto/update-sales-order.dto';
 import { UpdateSalesOrderItemDto } from './dto/update-sales-order-item.dto';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { RealtimeEntityAction } from '../../realtime/realtime.contract';
+import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
+
+/**
+ * Nhật ký dòng đơn hàng bán (19/11, test toàn hệ thống của Sang): SalesOrder (đầu đơn) có trong AUDITED_MODELS nhưng dòng đơn
+ * thì không - sửa số lượng / ngày giao / màu dây-nệm, thêm dòng SKU không để lại dấu vết ai làm. Ghi tay TRONG transaction
+ * nghiệp vụ (cùng commit / rollback với thay đổi), tên bảng theo tên model như extension để trang "Nhật ký hoạt động" lọc được.
+ */
+const ITEM_AUDIT_TABLE = 'SalesOrderItem';
+const auditClient = (tx: PrismaTx) => tx as unknown as Pick<PrismaClient, 'auditLog'>;
+function itemAuditSnapshot(it: {
+  salesOrderId: bigint;
+  mfgProductId: bigint;
+  skuName: string | null;
+  totalQty: number;
+  status: SalesOrderItemStatus | null;
+  deliveryDate: Date | null;
+  wireMaterialId: bigint | null;
+  cushionMaterialId: bigint | null;
+}) {
+  return {
+    salesOrderId: it.salesOrderId.toString(),
+    mfgProductId: it.mfgProductId.toString(),
+    skuName: it.skuName,
+    totalQty: it.totalQty,
+    status: it.status,
+    deliveryDate: it.deliveryDate?.toISOString() ?? null,
+    wireMaterialId: it.wireMaterialId?.toString() ?? null,
+    cushionMaterialId: it.cushionMaterialId?.toString() ?? null,
+  };
+}
 
 /** Dòng đơn luôn kèm sản phẩm + loại dây/nệm Sales đã chọn (nếu có) để trả về FE. */
 const ITEM_INCLUDE = {
@@ -353,6 +385,14 @@ export class SalesOrdersService {
 
       await tx.productionInvoice.deleteMany({ where: { salesOrderId: bigId } });
       await tx.productionInvoiceItem.deleteMany({ where: { salesOrderId: bigId } });
+      for (const it of order.items) {
+        await writeAuditLog(auditClient(tx), this.cls, {
+          action: AuditAction.DELETE,
+          tableName: ITEM_AUDIT_TABLE,
+          recordId: it.id.toString(),
+          oldValue: itemAuditSnapshot(it),
+        });
+      }
       await tx.salesOrderItem.deleteMany({ where: { salesOrderId: bigId } });
       await tx.salesOrder.delete({ where: { id: bigId } }); // hard delete thật
     });
@@ -429,6 +469,12 @@ export class SalesOrdersService {
       });
       await tx.productionInvoiceItem.create({
         data: this.productionInvoiceItemData(order.id, created),
+      });
+      await writeAuditLog(auditClient(tx), this.cls, {
+        action: AuditAction.CREATE,
+        tableName: ITEM_AUDIT_TABLE,
+        recordId: created.id.toString(),
+        newValue: itemAuditSnapshot(created),
       });
       return created;
     });
@@ -528,6 +574,17 @@ export class SalesOrdersService {
       },
       include: ITEM_INCLUDE,
     });
+    const before = itemAuditSnapshot(item);
+    const after = itemAuditSnapshot(updated);
+    if (JSON.stringify(before) !== JSON.stringify(after)) {
+      await writeAuditLog(auditClient(tx), this.cls, {
+        action: AuditAction.UPDATE,
+        tableName: ITEM_AUDIT_TABLE,
+        recordId: item.id.toString(),
+        oldValue: before,
+        newValue: after,
+      });
+    }
     if (qtyChanged) {
       // L6 16/11: dòng sản xuất chưa gom đi theo số mới (khi gom, KHSX lấy quantity từ đây).
       await tx.productionInvoiceItem.updateMany({
