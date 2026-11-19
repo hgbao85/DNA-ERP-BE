@@ -55,7 +55,7 @@ describe('CuttingProposalsService', () => {
     pieceBom: { findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock };
     material: { findMany: jest.Mock };
-    productionInvoiceItem: { findMany: jest.Mock };
+    productionInvoiceItem: { findMany: jest.Mock; count: jest.Mock };
     bomRevision: { findMany: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock; findMany: jest.Mock };
     // Xưởng + tồn kho Phôi (13/11/2026): luật số cỡ theo xưởng và chiều dài đang có tồn.
@@ -245,7 +245,11 @@ describe('CuttingProposalsService', () => {
       material: { findMany: jest.fn().mockResolvedValue([]) },
       // Mặc định "không có đơn nào đang chờ" -> getBatchSuggestions trả [] mà không đụng bảng
       // khác; các test gộp đợt cắt tự override.
-      productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([]) },
+      // CS1 19/11: cổng "Sếp đã duyệt cả lệnh" đếm dòng của lệnh - mặc định 2 dòng.
+      productionInvoiceItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(2),
+      },
       bomRevision: { findMany: jest.fn().mockResolvedValue([]) },
       warehouse: {
         findUniqueOrThrow: jest.fn(({ where }: { where: { code: string } }) =>
@@ -429,6 +433,17 @@ describe('CuttingProposalsService', () => {
   });
 
   describe('requestForInvoice', () => {
+    // CS1 19/11: mặc định cả 2 dòng của lệnh gộp đã có lệnh sản xuất (Sếp đã duyệt).
+    beforeEach(() => {
+      prisma.productionOrder.count.mockResolvedValue(2);
+    });
+
+    it('CS1 19/11: lệnh gộp Sếp CHƯA duyệt hết (1/2 dòng có lệnh SX) -> 409, không tạo phương án', async () => {
+      prisma.productionOrder.count.mockResolvedValue(1);
+      await expect(service.requestForInvoice(5n)).rejects.toThrow('1/2 SKU đã có lệnh');
+      expect(prisma.cuttingProposal.create).not.toHaveBeenCalled();
+    });
+
     // Đối xứng với requestForOrder ở trên - thêm idempotencyKey 2026-08-19 để nút "Tính lại" cho
     // phiếu GỘP (route mới production-invoices/:id/cutting-proposals) chặn được double-click tạo
     // trùng, giống hệt lý do route production-orders/:id/cutting-proposals có sẵn từ trước.
@@ -2706,7 +2721,22 @@ describe('CuttingProposalsService', () => {
       expect(stockReservationsService.releaseByRef).not.toHaveBeenCalled();
     });
 
+    it('CS1 19/11: phương án neo cả lệnh gộp (không ghim SKU) mà lệnh chưa duyệt -> không duyệt được', async () => {
+      prisma.cuttingProposal.findUnique.mockResolvedValue({
+        id: 2n,
+        productionOrderId: null,
+        productionInvoiceId: 7n,
+        status: CuttingProposalStatus.DRAFT,
+        lines: [],
+        items: [],
+      });
+      prisma.productionOrder.count.mockResolvedValue(0);
+      await expect(service.approve('2', 'boss')).rejects.toThrow('0/2 SKU đã có lệnh');
+      expect(prisma.cuttingProposal.update).not.toHaveBeenCalled();
+    });
+
     it('phương án của đợt gộp chỉ supersede anh em CÙNG đợt, không quét mọi phương án gộp khác', async () => {
+      prisma.productionOrder.count.mockResolvedValue(2); // CS1: lệnh đã duyệt hết
       // Regression: `where` cũ lọc thẳng `productionOrderId: proposal.productionOrderId`, mà
       // phương án của PI gộp luôn có trường đó = null -> Prisma dịch thành
       // `WHERE "productionOrderId" IS NULL`, khớp MỌI phương án gộp trong hệ thống. Duyệt nhóm A
@@ -4895,6 +4925,14 @@ describe('CuttingProposalsService', () => {
           where: expect.objectContaining({ productionInvoiceId: 50n }) as unknown,
           data: { status: CuttingProposalStatus.SUPERSEDED, productionInvoiceId: null },
         });
+      });
+
+      it('CS1 19/11: gỡ cả phương án neo cả lệnh (không có dòng ghim SKU) - điều kiện không còn lọc items', async () => {
+        await service.releaseForInvoice(prisma as never, 50n);
+        const call = (prisma.cuttingProposal.updateMany.mock.calls as unknown[][])[0][0] as {
+          where: Record<string, unknown>;
+        };
+        expect(call.where).not.toHaveProperty('items');
       });
     });
 

@@ -562,6 +562,10 @@ export class CuttingProposalsService {
         `${pi.code} không phải đợt gộp - phương án cắt của PI thường tính theo TỪNG SKU khi Sếp duyệt SKU đó (xem requestForOrder), không tính chung cả phiếu`,
       );
     }
+    // CS1 19/11: chỉ tính (lại) khi Sếp đã duyệt cả lệnh (mọi dòng đã có lệnh sản xuất) - cùng cổng với approve() phương án tính
+    // trước. Trước đây gọi thẳng route trên lệnh gộp CHƯA duyệt thì phương án neo PI (không có dòng ghim SKU) lọt cổng, tự duyệt,
+    // giữ chỗ sắt + tạo dòng mua; Sếp từ chối cả cụm thì lệnh bị xoá, giữ chỗ còn trừ tồn mãi và dòng mua mất lệnh.
+    await this.assertInvoiceFullyApproved(productionInvoiceId, `Lệnh ${pi.code}`);
 
     // idempotencyKey đối xứng với requestForOrder() - lời gọi tự động (duyệt cả cụm) không truyền
     // gì (options.idempotencyKey undefined -> luôn tạo mới), còn nút "Tính lại" thủ công cho
@@ -1291,6 +1295,21 @@ export class CuttingProposalsService {
     };
   }
 
+  /** CS1 19/11: mọi dòng của lệnh đã có lệnh sản xuất (Sếp đã duyệt cả lệnh) - không thì 409. */
+  private async assertInvoiceFullyApproved(invoiceId: bigint, label: string): Promise<void> {
+    const [itemCount, poCount] = await Promise.all([
+      this.prisma.productionInvoiceItem.count({ where: { productionInvoiceId: invoiceId } }),
+      this.prisma.productionOrder.count({
+        where: { productionInvoiceItem: { productionInvoiceId: invoiceId } },
+      }),
+    ]);
+    if (itemCount === 0 || poCount < itemCount) {
+      throw new ConflictException(
+        `${label}: chỉ tính / duyệt phương án cắt sau khi Sếp duyệt lệnh sản xuất (${poCount}/${itemCount} SKU đã có lệnh)`,
+      );
+    }
+  }
+
   /** PI bị từ chối/xoá: gỡ phương án tính-trước khỏi PI (đánh SUPERSEDED + productionInvoiceId
    *  null) TRƯỚC khi xoá PI - FK không cho xoá PI đang được phương án trỏ tới. SKU quay về "chưa
    *  gom" nên KHSX phải tính lại (phương án cũ giữ lại làm lịch sử). */
@@ -1298,7 +1317,7 @@ export class CuttingProposalsService {
     await tx.cuttingProposal.updateMany({
       where: {
         productionInvoiceId: invoiceId,
-        items: { some: {} },
+        // CS1 19/11: gỡ cả phương án neo cả lệnh (không có dòng ghim SKU) chưa duyệt - trước đây chỉ gỡ phương án tính trước.
         status: {
           in: [
             CuttingProposalStatus.DRAFT,
@@ -2517,6 +2536,9 @@ export class CuttingProposalsService {
           `Phương án ${id} tính trước lệnh sản xuất - chỉ duyệt được sau khi Sếp duyệt lệnh sản xuất (${poCount}/${proposal.items.length} SKU đã có lệnh)`,
         );
       }
+    } else if (proposal.productionInvoiceId != null && proposal.productionOrderId == null) {
+      // CS1 19/11: phương án neo cả lệnh gộp (không có dòng ghim SKU) - cũng chỉ duyệt khi mọi dòng của lệnh đã có lệnh sản xuất.
+      await this.assertInvoiceFullyApproved(proposal.productionInvoiceId, `Phương án ${id}`);
     }
 
     const buyableLines = proposal.lines.filter(
