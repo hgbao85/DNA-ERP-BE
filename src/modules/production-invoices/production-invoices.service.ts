@@ -69,7 +69,6 @@ import { ConsumableMaterialPurchaseService } from './consumable-material-purchas
 import { MaterialYieldRecipePurchaseService } from './material-yield-recipe-purchase.service';
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
-import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-item.dto';
 import { UpdateItemsDeadlinesDto } from './dto/update-items-deadlines.dto';
 import { ClaimSoloDto } from './dto/claim-solo.dto';
 import { MergeProductionInvoiceDto } from './dto/merge-production-invoice.dto';
@@ -83,7 +82,6 @@ import { RecordTransferCheckDto } from './dto/record-transfer-check.dto';
 import { SolverOverrideDto } from './dto/solver-override.dto';
 import { TransferCheckDefectResponseDto } from './dto/transfer-check-defect-response.dto';
 import { TransferCheckPieceResponseDto } from './dto/transfer-check-piece-response.dto';
-import { UpdateProductionInvoiceDto } from './dto/update-production-invoice.dto';
 import { UpdateTransferCheckDefectPhotoDto } from './dto/update-transfer-check-defect-photo.dto';
 import { UpdateProductionInvoiceItemDto } from './dto/update-production-invoice-item.dto';
 // Phần A – Đợt 9 (YC2)
@@ -556,30 +554,6 @@ export class ProductionInvoicesService {
     return dto;
   }
 
-  async update(id: string, dto: UpdateProductionInvoiceDto): Promise<ProductionInvoiceResponseDto> {
-    const bigId = parseBigIntId(id);
-    await this.findOneOrThrow(id);
-    const updated = await this.prisma.productionInvoice.update({
-      where: { id: bigId },
-      data: { deadline: dto.deadline ? new Date(dto.deadline) : undefined },
-      include: {
-        salesOrder: true,
-        items: {
-          include: {
-            mfgProduct: true,
-            productVariant: true,
-            wireMaterial: true,
-            cushionMaterial: true,
-            workshop: true,
-            stages: true,
-            salesOrder: { include: { customer: true } },
-          },
-        },
-      },
-    });
-    return this.toResponseDto(updated);
-  }
-
   // ─── Gộp đợt cắt (KHSX) ─────────────────────────────────────────────────────
 
   /**
@@ -958,8 +932,17 @@ export class ProductionInvoicesService {
       // Reset sạch mọi vết của chu kỳ duyệt CŨ (2026-08-24, cùng lý do claimSolo()) - 1 trong các
       // item được gộp có thể vừa quay về từ "chưa gom" sau khi bị Sếp từ chối, vẫn còn mang
       // rejectReason/warehouseName/decidedBy... của lần cắt riêng trước.
-      await tx.productionInvoiceItem.updateMany({
-        where: { id: { in: ids } },
+      // CS5 19/11: có điều kiện theo đúng PI + trạng thái duyệt đã đọc ở trên (không khoá dòng) + so count - lượt tạo
+      // lệnh khác chung SKU chen giữa thì báo xung đột thay vì kéo SKU khỏi lệnh kia (để lại lệnh rỗng / mất SKU).
+      // prodApprovalStatus nullable: liệt kê giá trị đã đọc thay vì `not: APPROVED` (Prisma `not` làm rơi NULL).
+      const { count: moved } = await tx.productionInvoiceItem.updateMany({
+        where: {
+          OR: items.map((i) => ({
+            id: i.id,
+            productionInvoiceId: i.productionInvoiceId,
+            prodApprovalStatus: i.prodApprovalStatus,
+          })),
+        },
         data: {
           productionInvoiceId: created.id,
           prodApprovalStatus: null,
@@ -977,6 +960,11 @@ export class ProductionInvoicesService {
           decidedById: null,
         },
       });
+      if (moved !== ids.length) {
+        throw new ConflictException(
+          'Có SKU vừa được gom vào lệnh sản xuất khác trong lúc tạo đợt gộp - tải lại danh sách',
+        );
+      }
       // Gắn phương án đã tính vào PI vừa tạo - cùng transaction nên 2 request tạo PI từ cùng 1
       // phương án thì đúng 1 thắng (updateMany có điều kiện + so count).
       await this.cuttingProposalsService.attachToInvoice(tx, proposal.id, created.id);
@@ -1041,8 +1029,10 @@ export class ProductionInvoicesService {
       // "chưa gom" sau khi bị Sếp từ chối (rejectItem), vẫn còn mang rejectReason/warehouseName/
       // decidedBy... của lần cắt riêng trước. PI mới = chu kỳ duyệt mới, không được lộ dữ liệu cũ
       // (lịch sử thật đã có AuditLog lo, xem auditItemApprovalTransition).
-      await tx.productionInvoiceItem.update({
-        where: { id: bigId },
+      // CS5 19/11: có điều kiện "vẫn chưa gom" + so count - kiểm phía trên đọc ngoài transaction, 2 lượt tạo lệnh chung
+      // SKU (từ 2 phương án khác nhau) cùng lúc thì lượt sau đè productionInvoiceId, để lại PI rỗng.
+      const { count: claimed } = await tx.productionInvoiceItem.updateMany({
+        where: { id: bigId, productionInvoiceId: null },
         data: {
           productionInvoiceId: created.id,
           prodApprovalStatus: null,
@@ -1058,6 +1048,11 @@ export class ProductionInvoicesService {
           decidedById: null,
         },
       });
+      if (claimed !== 1) {
+        throw new ConflictException(
+          `SKU ${itemId} vừa được gom vào lệnh sản xuất khác - tải lại danh sách`,
+        );
+      }
       await this.cuttingProposalsService.attachToInvoice(tx, proposal.id, created.id);
       return created.id;
     });
@@ -1066,39 +1061,6 @@ export class ProductionInvoicesService {
   }
 
   // ─── Items ──────────────────────────────────────────────────────────────────
-
-  async addItem(
-    piId: string,
-    dto: CreateProductionInvoiceItemDto,
-  ): Promise<ProductionInvoiceItemResponseDto> {
-    const pi = await this.findOneOrThrow(piId);
-    const mfgProductBigId = parseBigIntId(dto.mfgProductId);
-    const product = await this.prisma.mfgProduct.findUnique({ where: { id: mfgProductBigId } });
-    if (!product) {
-      throw new NotFoundException(`Không tìm thấy sản phẩm ${dto.mfgProductId}`);
-    }
-
-    const item = await this.prisma.productionInvoiceItem.create({
-      data: {
-        productionInvoiceId: pi.id,
-        mfgProductId: mfgProductBigId,
-        productVariantId: dto.productVariantId ? parseBigIntId(dto.productVariantId) : undefined,
-        quantity: dto.quantity,
-        materialDeadline: dto.materialDeadline ? new Date(dto.materialDeadline) : undefined,
-        deliveryDeadline: dto.deliveryDeadline ? new Date(dto.deliveryDeadline) : undefined,
-      },
-      include: {
-        mfgProduct: true,
-        productVariant: true,
-        wireMaterial: true,
-        cushionMaterial: true,
-        workshop: true,
-        stages: true,
-        salesOrder: { include: { customer: true } },
-      },
-    });
-    return this.toItemResponseDto(item);
-  }
 
   /**
    * KHSX sửa thời hạn kế hoạch của 1 SKU (LenhSXPage "Sửa thời hạn") - materialDeadline/
@@ -1136,6 +1098,7 @@ export class ProductionInvoicesService {
     // Đợt 9 phần 2 (Q9-3): lệnh đã bắt đầu sản xuất (cắt phôi) thì không sửa mốc; (Q9-2) thứ tự mốc ngược thì không lưu.
     await this.assertFloorNotStarted(pi, [item]);
     await this.prisma.$transaction(async (tx) => {
+      await this.assertStillUnapprovedInTx(tx, [item.id]); // LS4 19/11
       await this.deadlineWriter.applyItemDeadlines(tx, item.id, dto);
       if (pi.isMerged) await this.deadlineWriter.assertMergedPiDeadlineRule(tx, pi.id);
       await this.assertMilestoneOrderAfterWrite(tx, pi, [item]);
@@ -1197,6 +1160,13 @@ export class ProductionInvoicesService {
         await this.deadlineChanges.lockForEntries(
           tx,
           dto.items.map((e) => ({ itemId: e.itemId, newValues: {} })),
+        );
+        // LS4: hạn chung PI chỉ ghi khi CẢ lệnh chưa có dòng duyệt -> khoá mọi dòng của lệnh; không thì chỉ dòng ghi thẳng.
+        await this.assertStillUnapprovedInTx(
+          tx,
+          dto.deadline && !hasApprovedItem
+            ? pi.items.map((i) => i.id)
+            : plain.map((p) => p.before.id),
         );
         if (dto.deadline && !hasApprovedItem) {
           await tx.productionInvoice.update({
@@ -1267,6 +1237,23 @@ export class ProductionInvoicesService {
     const out = await this.findOne(piId);
     out.deadlineSave = { applied, batch, skipped: [] };
     return out;
+  }
+
+  /**
+   * LS4 19/11: khoá dòng (FOR UPDATE, theo id) rồi kiểm lại trong transaction rằng các dòng xếp nhánh "ghi thẳng" VẪN chưa duyệt -
+   * phân loại đọc ngoài transaction, Sếp duyệt chen giữa thì mốc mới đã ghi thẳng lên dòng APPROVED, không qua yêu cầu chờ Sếp.
+   * Khoá trước thì lượt duyệt của Sếp chờ tới khi lưu xong (sửa trước - duyệt sau, đúng thứ tự).
+   */
+  private async assertStillUnapprovedInTx(tx: PrismaTx, itemIds: bigint[]): Promise<void> {
+    if (itemIds.length === 0) return;
+    const rows = await tx.$queryRaw<{ id: bigint; prodApprovalStatus: string | null }[]>`
+      SELECT id, "prodApprovalStatus" FROM production_invoice_items
+      WHERE id IN (${Prisma.join(itemIds)}) ORDER BY id FOR UPDATE`;
+    if (rows.some((r) => r.prodApprovalStatus === ProdApprovalStatus.APPROVED)) {
+      throw new ConflictException(
+        'Lệnh vừa được Sếp duyệt trong lúc bạn sửa - tải lại rồi sửa lại (mốc của dòng đã duyệt phải gửi Sếp duyệt lại)',
+      );
+    }
   }
 
   /** Đầu vào "Sửa thời hạn" → mốc dạng `DeadlineValues` ('YYYY-MM-DD' ngày VN). `deliveryDeadline` KHÔNG vào (dòng đã duyệt không đổi hạn giao). */

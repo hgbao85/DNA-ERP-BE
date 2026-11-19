@@ -185,13 +185,21 @@ export class BookingShipmentsService {
           }
         }
 
+        // KH2 19/11: chỉ người đã in (giữ số) mới dùng được số đó - như phiếu nhập NK (L2 14/11). Trước đây thủ kho khác dùng
+        // được số người kia đã in, lệch dấu vết ai in / ai xuất.
         const slip = await tx.reservedSlipCode.updateMany({
-          where: { code: dto.slipCode, kind: SHIP_SLIP_KIND, usedAt: null },
+          where: { code: dto.slipCode, kind: SHIP_SLIP_KIND, usedAt: null, createdById: userId },
           data: { usedAt: new Date() },
         });
         if (slip.count !== 1) {
+          const held = await tx.reservedSlipCode.findUnique({
+            where: { code: dto.slipCode },
+            select: { kind: true, usedAt: true, createdById: true },
+          });
           throw new BadRequestException(
-            `Số phiếu ${dto.slipCode} không hợp lệ hoặc đã dùng - bấm "In phiếu xuất" để lấy số`,
+            held && held.kind === SHIP_SLIP_KIND && !held.usedAt && held.createdById !== userId
+              ? `Số phiếu ${dto.slipCode} do người khác in - bấm "In phiếu xuất" để lấy số của mình`
+              : `Số phiếu ${dto.slipCode} không hợp lệ hoặc đã dùng - bấm "In phiếu xuất" để lấy số`,
           );
         }
 

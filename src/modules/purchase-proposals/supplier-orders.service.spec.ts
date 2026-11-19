@@ -304,7 +304,13 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
         { pid: '300', itemIds: [400n, 402n] },
         'buyer-1',
         'https://file/ky.pdf',
+        90n, // MUA4 19/11: dòng phải vẫn thuộc đơn này
       );
+      // MUA3 19/11: theo thứ tự id đề xuất (300 trước 301) để không khoá chéo
+      expect(proposals.prepareBossApprove.mock.calls.map((c: unknown[]) => c[0])).toEqual([
+        '300',
+        '301',
+      ]);
       expect(proposals.applyBossApproveTx).toHaveBeenCalledTimes(2);
       expect(prisma.supplierOrder.updateMany).toHaveBeenCalledWith({
         where: { id: 90n, status: SupplierOrderStatus.DRAFT },

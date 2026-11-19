@@ -641,6 +641,23 @@ describe('PurchaseProposalsService', () => {
       });
     });
 
+    it('MUA4 19/11: duyệt theo đơn -> điều kiện dòng VẪN thuộc đơn; dòng vừa bị gỡ khỏi đơn (count thiếu) -> 409', async () => {
+      prisma.purchaseProposal.findUnique.mockResolvedValue(
+        proposal({ items: [item({ id: 400n, material: material({ buyerId: 'user-1' }) })] }),
+      );
+      const prepared = await service.prepareBossApprove('300', 'user-1', ['PURCHASER'], [400n]);
+      await service.applyBossApproveTx(prisma as never, prepared, 'user-1', FILE, 90n);
+      const where = (prisma.purchaseProposalItem.updateMany.mock.calls as unknown[][])[0][0] as {
+        where: Record<string, unknown>;
+      };
+      expect(where.where).toMatchObject({ id: { in: [400n] }, supplierOrderId: 90n });
+
+      prisma.purchaseProposalItem.updateMany.mockResolvedValueOnce({ count: 0 });
+      await expect(
+        service.applyBossApproveTx(prisma as never, prepared, 'user-1', FILE, 90n),
+      ).rejects.toThrow(ConflictException);
+    });
+
     // Ca sống-còn của đợt cắt luồng: lúc gỡ màn duyệt của Sếp, production còn 36 dòng nằm ở
     // QUOTING/SUBMITTED (đã bấm Tiếp nhận, hoặc đã gửi Sếp theo luồng cũ). bossApprove() là đường
     // ra DUY NHẤT của chúng - siết lại chỉ nhận NEW là treo vĩnh viễn 36 dòng hàng thật.

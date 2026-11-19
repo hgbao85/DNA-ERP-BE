@@ -1111,7 +1111,19 @@ export class FloorAdminService {
     if (entry.status !== FloorQueueStatus.QUEUED) {
       throw new ConflictException('Chỉ bỏ được PI đang chờ - PI đang chạy dùng "Chuyển PI tiếp"');
     }
-    await this.prisma.floorQueueEntry.delete({ where: { id: entry.id } });
+    // PH3 19/11: xoá trong khoá hàng đợi (cùng khoá với Chuyển PI tiếp / tự chuyển khi xong Phôi) và chỉ khi VẪN đang chờ -
+    // trước đây xoá vô điều kiện ngoài khoá, dòng vừa thành RUNNING/DONE cũng bị xoá (mất lịch sử PI–tổ, tổ mất lệnh đang chạy).
+    await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, queueLockKey(entry.stage, entry.workshopId));
+      const { count } = await tx.floorQueueEntry.deleteMany({
+        where: { id: entry.id, status: FloorQueueStatus.QUEUED },
+      });
+      if (count !== 1) {
+        throw new ConflictException(
+          'Lệnh này vừa bắt đầu chạy hoặc đã bị bỏ ở nơi khác - tải lại hàng đợi',
+        );
+      }
+    });
     return this.queueRows(entry.stage as FloorWorkerStage, entry.workshopId);
   }
 

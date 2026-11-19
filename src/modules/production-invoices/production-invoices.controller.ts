@@ -21,7 +21,6 @@ import { RequireRole } from '../../common/decorators/require-role.decorator';
 import { ChangeWorkshopDto } from './dto/change-workshop.dto';
 import { UpdateItemLsxDto } from './dto/update-item-lsx.dto';
 import { CreateProductionInvoiceDto } from './dto/create-production-invoice.dto';
-import { CreateProductionInvoiceItemDto } from './dto/create-production-invoice-item.dto';
 import { ClaimSoloDto } from './dto/claim-solo.dto';
 import { MergeProductionInvoiceDto } from './dto/merge-production-invoice.dto';
 import { RecordPackagingDto } from './dto/record-packaging.dto';
@@ -29,7 +28,6 @@ import { RecordTransferCheckDto } from './dto/record-transfer-check.dto';
 import { RejectItemDto } from './dto/reject-item.dto';
 import { SendBatchDto, SendBatchToBossDto, SendToQlsxDto } from './dto/send-batch.dto';
 import { SendToBossDto } from './dto/send-to-boss.dto';
-import { UpdateProductionInvoiceDto } from './dto/update-production-invoice.dto';
 import { UpdateProductionInvoiceItemDto } from './dto/update-production-invoice-item.dto';
 import { UpdateItemsDeadlinesDto } from './dto/update-items-deadlines.dto';
 import { UpdateTransferCheckDefectPhotoDto } from './dto/update-transfer-check-defect-photo.dto';
@@ -97,11 +95,9 @@ export class ProductionInvoicesController {
     return this.productionInvoicesService.findOne(id, userId);
   }
 
-  @Patch(':id')
-  @RequirePermissions(UPDATE)
-  update(@Param('id') id: string, @Body() dto: UpdateProductionInvoiceDto) {
-    return this.productionInvoicesService.update(id, dto);
-  }
+  // LS3 19/11: đã gỡ PATCH /production-invoices/:id (sửa hạn chung PI - thủ kho có UPDATE lách được luật Đợt 9 "dòng đã
+  // duyệt đổi mốc phải chờ Sếp") và POST /production-invoices/:id/items (thêm dòng vào PI đã duyệt / đợt gộp, bỏ qua
+  // luồng đơn bán → tính cắt → tạo lệnh). FE không gọi cả 2; mốc sửa qua PATCH :id/items-deadlines / :id/items/:itemId.
 
   /**
    * Tính (hoặc tính lại) nhu cầu mua nguyên liệu cho "vật tư thành phẩm" (needsHan=false, vd
@@ -113,12 +109,6 @@ export class ProductionInvoicesController {
   @RequirePermissions(PURCHASE_PROPOSAL_CREATE)
   computePieceMaterialYieldPurchaseProposals(@Param('id') id: string) {
     return this.pieceMaterialYieldPurchaseService.computeAndUpsertProposals(id);
-  }
-
-  @Post(':id/items')
-  @RequirePermissions(CREATE)
-  addItem(@Param('id') id: string, @Body() dto: CreateProductionInvoiceItemDto) {
-    return this.productionInvoicesService.addItem(id, dto);
   }
 
   /** "Sửa thời hạn" cả PI trong 1 giao dịch - lệnh gộp kiểm luật mốc cần sắt ≤ N ngày (xem UpdateItemsDeadlinesDto). */

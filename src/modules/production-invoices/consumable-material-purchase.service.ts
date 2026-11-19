@@ -12,6 +12,7 @@ import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { loadBomOptionExclusions } from '../bom-revisions/bom-option.util';
+import { cancelEmptiedDraftOrders } from '../purchase-proposals/supplier-order-cleanup.util';
 import { recomputeProposalStatus } from '../purchase-proposals/purchase-proposal-status.util';
 import { notifyPurchaseProposalCreated } from '../purchase-proposals/purchase-proposal-notify.util';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -399,6 +400,7 @@ export class ConsumableMaterialPurchaseService {
         }
         const computedKeys = new Set(computed.map((c) => itemKey(c.materialIdStr, c.spec)));
         const claimedItemIds = new Set<bigint>();
+        const detachedOrderIds: (bigint | null | undefined)[] = []; // MUA5 19/11
         for (const c of computed) {
           let group = itemsByKey.get(itemKey(c.materialIdStr, c.spec)) ?? [];
           if (group.length === 0) {
@@ -416,6 +418,12 @@ export class ConsumableMaterialPurchaseService {
           for (const it of group) claimedItemIds.add(it.id);
           const plan = planPurchaseRecompute(group.map(toRecomputeItem), c.buyQty);
           if (plan.update) {
+            const updateItemId = plan.update.itemId;
+            if (plan.update.toPurchased) {
+              detachedOrderIds.push(
+                proposal.items.find((i) => i.id === updateItemId)?.supplierOrderId,
+              );
+            }
             await tx.purchaseProposalItem.update({
               where: { id: plan.update.itemId },
               data: {
@@ -454,6 +462,7 @@ export class ConsumableMaterialPurchaseService {
           const ev = eventFromPlan(c.materialId, plan);
           if (ev) recomputeEvents.push(ev);
         }
+        await cancelEmptiedDraftOrders(tx, detachedOrderIds);
       }
 
       await recomputeProposalStatus(tx, proposal.id);

@@ -32,6 +32,7 @@ describe('FloorAdminService', () => {
       update: jest.Mock;
       create: jest.Mock;
       aggregate: jest.Mock;
+      deleteMany: jest.Mock;
     };
     floorReport: { count: jest.Mock };
     workstation: { update: jest.Mock };
@@ -85,6 +86,8 @@ describe('FloorAdminService', () => {
         update: jest.fn(),
         create: jest.fn(),
         aggregate: jest.fn().mockResolvedValue({ _max: { position: null } }),
+        // PH3 19/11: bỏ khỏi hàng đợi = xoá có điều kiện QUEUED trong khoá hàng đợi
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       floorReport: { count: jest.fn().mockResolvedValue(0) },
       workstation: {
@@ -1097,11 +1100,31 @@ describe('FloorAdminService', () => {
       });
       scopedTo(PHU_AN, 'Phú An');
       await expect(service.removeEntry('q', '3')).rejects.toThrow(ForbiddenException);
-      expect(prisma.floorQueueEntry.delete).not.toHaveBeenCalled();
+      expect(tx.floorQueueEntry.deleteMany).not.toHaveBeenCalled();
 
       scopedTo(PHUOC_AN, 'Phước An');
       await service.removeEntry('q', '3');
-      expect(prisma.floorQueueEntry.delete).toHaveBeenCalledWith({ where: { id: 3n } });
+      expect(tx.floorQueueEntry.deleteMany).toHaveBeenCalledWith({
+        where: { id: 3n, status: 'QUEUED' },
+      });
+      expect(prisma.floorQueueEntry.delete).not.toHaveBeenCalled();
+    });
+
+    it('PH3 19/11: removeEntry xoá trong khoá hàng đợi; dòng vừa thành RUNNING (xoá có điều kiện ra 0) -> 409', async () => {
+      prisma.floorQueueEntry.findUnique.mockResolvedValue({
+        id: 3n,
+        stage: 'HAN',
+        status: 'QUEUED',
+        workshopId: PHUOC_AN,
+      });
+      scopedTo(PHUOC_AN, 'Phước An');
+      tx.floorQueueEntry.deleteMany.mockResolvedValueOnce({ count: 0 });
+      await expect(service.removeEntry('q', '3')).rejects.toThrow(/vừa bắt đầu chạy/);
+      // khoá nghiệp vụ của đúng hàng đợi (tổ, xưởng) lấy trước khi xoá
+      const lockSql = (tx.$executeRaw.mock.calls as unknown[][])
+        .concat(tx.$queryRaw.mock.calls as unknown[][])
+        .map((c) => c.slice(1).join('|'));
+      expect(lockSql.join(' ')).toContain('floor-queue:HAN:');
     });
 
     describe('queueCandidates', () => {

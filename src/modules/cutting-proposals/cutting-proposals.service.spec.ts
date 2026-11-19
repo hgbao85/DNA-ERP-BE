@@ -4869,6 +4869,14 @@ describe('CuttingProposalsService', () => {
           where: expect.objectContaining({
             id: { not: 70n },
             productionInvoiceId: null,
+            // CS4 19/11: cả lượt đang tính / "nghi treo" của cùng SKU
+            status: {
+              in: [
+                CuttingProposalStatus.CALCULATING,
+                CuttingProposalStatus.DRAFT,
+                CuttingProposalStatus.FAILED,
+              ],
+            },
             items: { some: { productionInvoiceItemId: { in: [20n] } } },
           }) as unknown,
           data: { status: CuttingProposalStatus.SUPERSEDED },
@@ -5176,19 +5184,20 @@ describe('CuttingProposalsService', () => {
         prisma.cuttingProposal.findUnique.mockResolvedValue({
           id: 70n,
           status: 'DRAFT',
+          requestedAt: new Date(),
           productionOrderId: null,
           productionInvoiceId: null,
           ...over,
         });
 
-      it('xoá đợt DRAFT chưa dùng: gỡ dòng ghim SKU rồi đánh SUPERSEDED', async () => {
+      it('xoá đợt DRAFT chưa dùng: gỡ dòng ghim SKU rồi đánh SUPERSEDED (có điều kiện trạng thái đã đọc)', async () => {
         found();
         await service.discardBatchSolve('70');
         expect(prisma.cuttingProposalItem.deleteMany).toHaveBeenCalledWith({
           where: { cuttingProposalId: 70n },
         });
-        expect(prisma.cuttingProposal.update).toHaveBeenCalledWith({
-          where: { id: 70n },
+        expect(prisma.cuttingProposal.updateMany).toHaveBeenCalledWith({
+          where: { id: 70n, status: 'DRAFT', productionOrderId: null, productionInvoiceId: null },
           data: { status: 'SUPERSEDED' },
         });
       });
@@ -5196,7 +5205,24 @@ describe('CuttingProposalsService', () => {
       it('xoá được đợt FAILED', async () => {
         found({ status: 'FAILED' });
         await service.discardBatchSolve('70');
-        expect(prisma.cuttingProposal.update).toHaveBeenCalled();
+        expect(prisma.cuttingProposal.updateMany).toHaveBeenCalled();
+      });
+
+      it('CS4 19/11: xoá được đợt CALCULATING "nghi treo" (quá timeout solver 300 s + 60 s)', async () => {
+        found({ status: 'CALCULATING', requestedAt: new Date(Date.now() - 361_000) });
+        await service.discardBatchSolve('70');
+        expect(prisma.cuttingProposal.updateMany).toHaveBeenCalledWith({
+          where: expect.objectContaining({ id: 70n, status: 'CALCULATING' }) as unknown,
+          data: { status: 'SUPERSEDED' },
+        });
+        expect(prisma.cuttingProposalItem.deleteMany).toHaveBeenCalled();
+      });
+
+      it('CS4 19/11: lượt "nghi treo" vừa kịp tính xong / bị gắn lệnh (ghi có điều kiện ra 0) -> 409, không gỡ dòng ghim', async () => {
+        found({ status: 'CALCULATING', requestedAt: new Date(Date.now() - 361_000) });
+        prisma.cuttingProposal.updateMany.mockResolvedValueOnce({ count: 0 });
+        await expect(service.discardBatchSolve('70')).rejects.toThrow(/vừa thay đổi/);
+        expect(prisma.cuttingProposalItem.deleteMany).not.toHaveBeenCalled();
       });
 
       it('không có -> 404', async () => {
@@ -5214,7 +5240,7 @@ describe('CuttingProposalsService', () => {
         found(over);
         await expect(service.discardBatchSolve('70')).rejects.toThrow(ConflictException);
         expect(prisma.cuttingProposalItem.deleteMany).not.toHaveBeenCalled();
-        expect(prisma.cuttingProposal.update).not.toHaveBeenCalled();
+        expect(prisma.cuttingProposal.updateMany).not.toHaveBeenCalled();
       });
     });
 

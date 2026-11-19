@@ -25,6 +25,7 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { isIdempotencyConflict } from '../../common/utils/floor-report.util';
 import { findOpenProposalForRecompute } from '../../common/utils/purchase-proposal-lock.util';
+import { cancelEmptiedDraftOrders } from '../purchase-proposals/supplier-order-cleanup.util';
 import { recomputeProposalStatus } from '../purchase-proposals/purchase-proposal-status.util';
 import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
@@ -861,6 +862,12 @@ export class CuttingProposalsService {
     if (missing.length > 0) throw new BadRequestException(bundleSpecMissingMessage(missing));
   }
 
+  /** CALCULATING quá mốc timeout HTTP gọi solver + 60 s: không tiến trình BE nào còn chờ kết quả ("Nghi treo"). */
+  private isCalculatingStale(requestedAt: Date): boolean {
+    const timeoutSeconds = this.configService.get('solver.timeoutSeconds', { infer: true });
+    return Date.now() - requestedAt.getTime() > (timeoutSeconds + 60) * 1000;
+  }
+
   /**
    * KHSX xoá 1 đợt tính trước-PI khỏi "Kết quả đã tính" (2026-10-01: thử nhiều lần thì danh sách tràn lan). Chỉ xoá được
    * đợt CHƯA dùng (DRAFT/FAILED, chưa gắn lệnh sản xuất/PO). Đang tính (CALCULATING) không huỷ được vì solver đã chạy
@@ -871,7 +878,13 @@ export class CuttingProposalsService {
     const bigId = parseBigIntId(id);
     const proposal = await this.prisma.cuttingProposal.findUnique({
       where: { id: bigId },
-      select: { id: true, status: true, productionOrderId: true, productionInvoiceId: true },
+      select: {
+        id: true,
+        status: true,
+        requestedAt: true,
+        productionOrderId: true,
+        productionInvoiceId: true,
+      },
     });
     if (!proposal) throw new NotFoundException(`Không tìm thấy phương án cắt ${id}`);
     if (proposal.productionOrderId != null || proposal.productionInvoiceId != null) {
@@ -879,21 +892,38 @@ export class CuttingProposalsService {
         'Phương án này đã được dùng cho một lệnh sản xuất - không xoá ở đây được',
       );
     }
-    if (proposal.status === CuttingProposalStatus.CALCULATING) {
+    // CS4 19/11: CALCULATING quá hạn ("Nghi treo" - BE dừng giữa lúc giải) xoá được như DRAFT/FAILED. Trước đây từ chối
+    // mọi CALCULATING nên thẻ ma nằm mãi khi SKU đã được gom sang lượt khác (Tính lại cũng 409).
+    const staleCalculating =
+      proposal.status === CuttingProposalStatus.CALCULATING &&
+      this.isCalculatingStale(proposal.requestedAt);
+    if (proposal.status === CuttingProposalStatus.CALCULATING && !staleCalculating) {
       throw new ConflictException('Đợt này đang tính - đợi tính xong rồi mới xoá được');
     }
     if (
+      !staleCalculating &&
       proposal.status !== CuttingProposalStatus.DRAFT &&
       proposal.status !== CuttingProposalStatus.FAILED
     ) {
       throw new ConflictException('Đợt này không còn nằm trong danh sách kết quả đã tính');
     }
     await this.prisma.$transaction(async (tx) => {
-      await tx.cuttingProposalItem.deleteMany({ where: { cuttingProposalId: bigId } });
-      await tx.cuttingProposal.update({
-        where: { id: bigId },
+      // Có điều kiện theo trạng thái đã đọc: lượt vừa tính xong / vừa gắn lệnh trong lúc đó thì không xoá nhầm.
+      const { count } = await tx.cuttingProposal.updateMany({
+        where: {
+          id: bigId,
+          status: proposal.status,
+          productionOrderId: null,
+          productionInvoiceId: null,
+        },
         data: { status: CuttingProposalStatus.SUPERSEDED },
       });
+      if (count !== 1) {
+        throw new ConflictException(
+          'Đợt này vừa thay đổi (tính xong hoặc đã được dùng) - tải lại rồi thử lại',
+        );
+      }
+      await tx.cuttingProposalItem.deleteMany({ where: { cuttingProposalId: bigId } });
     });
     this.invalidateBatchContext();
   }
@@ -1184,7 +1214,15 @@ export class CuttingProposalsService {
           id: { not: cuttingProposalId },
           productionOrderId: null,
           productionInvoiceId: null,
-          status: { in: [CuttingProposalStatus.DRAFT, CuttingProposalStatus.FAILED] },
+          // CS4 19/11: cả CALCULATING (đang chạy / "nghi treo") - SKU đã vào lệnh thì lượt đó vô nghĩa; bộ giải xong sau
+          // chỉ ghi kết quả khi vẫn CALCULATING nên kết quả của nó tự bị bỏ.
+          status: {
+            in: [
+              CuttingProposalStatus.CALCULATING,
+              CuttingProposalStatus.DRAFT,
+              CuttingProposalStatus.FAILED,
+            ],
+          },
           items: {
             some: { productionInvoiceItemId: { in: items.map((i) => i.productionInvoiceItemId) } },
           },
@@ -2821,6 +2859,7 @@ export class CuttingProposalsService {
             // sắt trước đó chưa bị Mua hàng xử lý) - ghi đúng các dòng sắt vào đó, không tạo bản ghi
             // mới. cuttingProposalId luôn trỏ về phương án cắt MỚI NHẤT vừa duyệt (ghi đè phương án
             // cũ nếu có - phương án cũ đã bị đánh SUPERSEDED ở trên rồi).
+            const detachedOrderIds: (bigint | null)[] = [];
             for (const it of items) {
               const planned = plannedQtyOf(it.materialId, it.buyQty);
               // Tách bạch ĐƠN KẾ HOẠCH (dòng NEW, chưa ai động vào - được phép ghi đè tự do) với
@@ -2858,6 +2897,7 @@ export class CuttingProposalsService {
                 }
                 const isCovered =
                   linePlanned === 0 && plannedLine.status === PurchaseProposalStatus.NEW;
+                if (isCovered) detachedOrderIds.push(plannedLine.supplierOrderId); // MUA5 19/11
                 await tx.purchaseProposalItem.update({
                   where: { id: plannedLine.id },
                   data: {
@@ -2924,6 +2964,7 @@ export class CuttingProposalsService {
               }
               // planned === 0 và đã có dòng chốt phủ đủ -> không cần làm gì.
             }
+            await cancelEmptiedDraftOrders(tx, detachedOrderIds);
             await tx.purchaseProposal.update({
               where: { id: existingProposal.id },
               data: { cuttingProposalId: bigId },
@@ -5019,9 +5060,7 @@ export class CuttingProposalsService {
       // TTL neo vào chính cấu hình timeout HTTP client gọi solver (`solver.timeoutSeconds`) +
       // biên an toàn - đó CHÍNH XÁC là mốc mà không tiến trình BE nào còn có thể đang thật sự chờ
       // solver trả lời, nên không cần cron riêng: tính lại mỗi lần map response là đủ.
-      const timeoutSeconds = this.configService.get('solver.timeoutSeconds', { infer: true });
-      const ageMs = Date.now() - proposal.requestedAt.getTime();
-      if (ageMs > (timeoutSeconds + 60) * 1000) {
+      if (this.isCalculatingStale(proposal.requestedAt)) {
         return {
           displayStatus: 'NEEDS_ACTION',
           displayReason:
