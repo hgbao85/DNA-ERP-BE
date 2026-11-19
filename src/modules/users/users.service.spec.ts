@@ -18,7 +18,7 @@ describe('UsersService', () => {
       delete: jest.Mock;
     };
     material: { count: jest.Mock; findMany: jest.Mock; updateMany: jest.Mock };
-    role: { count: jest.Mock; findMany: jest.Mock };
+    role: { count: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock };
     workshop: { findFirst: jest.Mock };
     userRole: { deleteMany: jest.Mock; createMany: jest.Mock; create: jest.Mock };
     refreshToken: { updateMany: jest.Mock };
@@ -41,7 +41,7 @@ describe('UsersService', () => {
         findMany: jest.fn(),
         updateMany: jest.fn(),
       },
-      role: { count: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
+      role: { count: jest.fn(), findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn() },
       workshop: { findFirst: jest.fn() },
       userRole: { deleteMany: jest.fn(), createMany: jest.fn(), create: jest.fn() },
       refreshToken: { updateMany: jest.fn() },
@@ -421,6 +421,47 @@ describe('UsersService', () => {
       ]);
       await usersService.update('user-1', { roleIds: ['r-old', 'r-xem'] }, MANAGER);
       expect(prisma.userRole.createMany).toHaveBeenCalled();
+    });
+
+    it('BM2: không tự sửa thuộc tính sản xuất của mình (tự gán mfgRole QLSX)', async () => {
+      prisma.user.findUnique.mockResolvedValue({ ...staffUser, id: 'mgr', mfgRole: null });
+      await expect(
+        usersService.updateMfgAttributes('mgr', { mfgRole: 'PRODUCTION_MANAGER' }, MANAGER),
+      ).rejects.toThrow('tự sửa thuộc tính sản xuất');
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(prisma.userRole.create).not.toHaveBeenCalled();
+    });
+
+    it('BM2: đổi mfgRole người khác kéo theo vai trò có quyền mình không có -> 403', async () => {
+      prisma.user.findUnique.mockResolvedValue({ ...staffUser, mfgRole: null });
+      prisma.role.findFirst.mockResolvedValue({ id: 'r-qlsx' });
+      prisma.role.findMany.mockResolvedValue([
+        {
+          name: 'PRODUCTION_MANAGER',
+          permissions: [{ permission: { module: 'PRODUCTION_ORDER', action: 'UPDATE' } }],
+        },
+      ]);
+      await expect(
+        usersService.updateMfgAttributes('user-1', { mfgRole: 'PRODUCTION_MANAGER' }, MANAGER),
+      ).rejects.toThrow('thiếu PRODUCTION_ORDER:UPDATE');
+      expect(prisma.role.findFirst).toHaveBeenCalledWith({
+        where: { name: 'PRODUCTION_MANAGER' },
+        select: { id: true },
+      });
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('BM3: khoá tài khoản thu hồi mọi refresh token; sửa thường thì không', async () => {
+      prisma.user.findUnique.mockResolvedValue(staffUser);
+      prisma.user.findUniqueOrThrow.mockResolvedValue(staffUser);
+      await usersService.update('user-1', { firstName: 'B' }, ADMIN);
+      expect(prisma.refreshToken.updateMany).not.toHaveBeenCalled();
+
+      await usersService.update('user-1', { isActive: false }, ADMIN);
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith({
+        where: { userId: 'user-1', revokedAt: null },
+        data: { revokedAt: expect.any(Date) },
+      });
     });
   });
 });

@@ -259,6 +259,56 @@ export class WeavingIssuesService {
         `Mảnh ${p.pieceName}: xuất ${p.qty} vượt số mảnh đã qua KCS còn ở kho ${p.warehouse.code} (còn ${Math.max(0, cap.byStock)})`,
       );
     }
+    // HS2 19/11: trần trên đếm theo lô KCS, không đọc tồn thật - mảnh xưởng không có kho Sơn chỉ vào kho Sơn khi phiếu chuyển
+    // Hàn→Sơn được ký, KCS Sơn đạt trước đó thì vẫn lên phiếu đan được (kho âm, hoặc ăn mảnh cùng loại của lệnh khác). Kiểm
+    // thêm tồn mảnh thật ở kho xuất (khoá dòng tồn) trừ phần đã nằm trên phiếu xuất đan chờ ký khác và phiếu chuyển mảnh
+    // chờ nhận rời kho này - cùng cách phiếu chuyển mảnh kiểm từ 16/11.
+    const physical = await this.physicalPieceLeftInTx(tx, p.warehouse.id, p.pieceId, excludeSlipId);
+    if (p.qty > physical) {
+      throw new BadRequestException(
+        `Mảnh ${p.pieceName}: xuất ${p.qty} vượt tồn mảnh thật ở kho ${p.warehouse.code} (còn ${Math.max(0, physical)} sau khi trừ phiếu chờ ký / phiếu chuyển chờ nhận khác) - mảnh có thể chưa về kho (phiếu chuyển chưa ký nhận)`,
+      );
+    }
+  }
+
+  /** Tồn mảnh thật ở kho (khoá dòng tồn) − mảnh đó trên phiếu xuất đan chờ ký khác cùng kho − phiếu chuyển mảnh chờ nhận rời kho. */
+  private async physicalPieceLeftInTx(
+    tx: PrismaTx,
+    warehouseId: bigint,
+    pieceId: bigint,
+    excludeSlipId: bigint | null,
+  ): Promise<number> {
+    const quants = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+      SELECT "qty" FROM "stock_quant"
+      WHERE "warehouseId" = ${warehouseId} AND "pieceId" = ${pieceId}
+      FOR UPDATE
+    `;
+    const [onDraft, pendingTransfer] = await Promise.all([
+      tx.issueSlipLine.aggregate({
+        where: {
+          kind: IssueSlipLineKind.WEAVING_PIECE,
+          pieceId,
+          slip: {
+            status: IssueSlipStatus.DRAFT,
+            warehouseId,
+            ...(excludeSlipId ? { id: { not: excludeSlipId } } : {}),
+          },
+        },
+        _sum: { qty: true },
+      }),
+      tx.warehouseTransferPieceItem.aggregate({
+        where: {
+          pieceId,
+          transfer: { status: TransferStatus.PENDING, fromWarehouseId: warehouseId },
+        },
+        _sum: { quantity: true },
+      }),
+    ]);
+    return (
+      quants.reduce((s, q) => s + q.qty.toNumber(), 0) -
+      (onDraft._sum.qty?.toNumber() ?? 0) -
+      (pendingTransfer._sum.quantity ?? 0)
+    );
   }
 
   /**

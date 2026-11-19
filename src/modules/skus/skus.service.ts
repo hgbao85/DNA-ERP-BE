@@ -243,13 +243,9 @@ export class SkusService {
   }
 
   async create(dto: CreateSkuDto, actorUserId: string): Promise<SkuResponseDto> {
-    // FE upload ảnh ngay trước khi gọi create - tạo thất bại thì ảnh đó thành mồ côi, dọn luôn.
-    try {
-      return await this.createPlanForm(dto, actorUserId);
-    } catch (error) {
-      if (dto.imageUrl) await this.cloudinaryService.deleteByUrl(dto.imageUrl);
-      throw error;
-    }
+    // BM1 19/11: KHÔNG còn xoá dto.imageUrl khi tạo lỗi - URL do client gửi, có thể là file của người khác (kể cả
+    // file vừa tải lên chưa kịp lưu, chưa bản ghi nào trỏ tới). Ảnh mồ côi vô hại hơn mất chứng từ.
+    return this.createPlanForm(dto, actorUserId);
   }
 
   private async createPlanForm(dto: CreateSkuDto, actorUserId: string): Promise<SkuResponseDto> {

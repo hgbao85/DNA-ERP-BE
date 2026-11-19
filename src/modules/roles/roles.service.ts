@@ -8,6 +8,7 @@ import {
   PrivilegeActor,
   assertCanGrantPermissions,
   assertNotAdminRoleUnlessAdmin,
+  assertNotRenamingSystemRole,
   isAdminActor,
 } from '../../common/utils/privilege-guard.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
@@ -85,6 +86,7 @@ export class RolesService {
     // B1 16/11: không phải ADMIN thì không sửa vai trò ADMIN, không đổi tên vai trò khác thành ADMIN, và chỉ THÊM được quyền
     // mình đang có (quyền vai trò đã có giữ nguyên được - FE luôn gửi cả danh sách).
     assertNotAdminRoleUnlessAdmin(actor, [current.name, dto.name ?? ''], 'sửa vai trò ADMIN');
+    assertNotRenamingSystemRole(actor, current.name, dto.name);
     if (dto.permissionIds) {
       const had = new Set(current.permissions.map((p) => p.permissionId));
       await this.assertCanGrant(

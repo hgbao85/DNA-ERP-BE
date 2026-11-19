@@ -293,8 +293,9 @@ describe('WeavingIssuesService', () => {
 
     describe('assertPieceCapInTx', () => {
       beforeEach(() => {
-        // Đã qua KCS Sơn 30 mảnh, chưa xuất, chưa có phiếu nào.
+        // Đã qua KCS Sơn 30 mảnh, chưa xuất, chưa có phiếu nào; kho Sơn có thật 30 mảnh.
         prisma.productionBatch.aggregate.mockResolvedValue({ _sum: { reportedQty: 30 } });
+        prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 30 } }]);
       });
 
       it('đủ định mức và đủ mảnh ở kho -> qua, có khoá advisory', async () => {
@@ -344,6 +345,38 @@ describe('WeavingIssuesService', () => {
             }),
           }),
         );
+      });
+
+      it('HS2: KCS Sơn đạt nhưng mảnh chưa về kho (phiếu chuyển Hàn→Sơn chưa ký) -> 400 theo tồn thật', async () => {
+        prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 4 } }]);
+        await expect(service.assertPieceCapInTx(prisma as never, prepared(), null)).rejects.toThrow(
+          /vượt tồn mảnh thật ở kho phoi-son-han-son-pa \(còn 4 /,
+        );
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest mock.calls typing
+        const sql = (prisma.$queryRaw.mock.calls[0][0] as TemplateStringsArray).join('?');
+        expect(sql).toContain('FOR UPDATE');
+      });
+
+      it('HS2: tồn thật trừ phiếu xuất đan chờ ký khác CÙNG KHO (mọi lệnh) và phiếu chuyển mảnh chờ nhận rời kho', async () => {
+        // 30 tồn: phiếu chờ ký khác (lệnh khác, cùng mảnh) 15 + phiếu chuyển chờ nhận 8 -> còn 7 < 10.
+        prisma.issueSlipLine.aggregate
+          .mockResolvedValueOnce({ _sum: { qty: null } }) // trần theo lệnh: chờ ký
+          .mockResolvedValueOnce({ _sum: { qty: null } }) // trần theo lệnh: đã xuất
+          .mockResolvedValueOnce({ _sum: { qty: { toNumber: () => 15 } } }); // tồn thật: chờ ký cùng kho
+        prisma.warehouseTransferPieceItem.aggregate
+          .mockResolvedValueOnce({ _sum: { quantity: 0 } })
+          .mockResolvedValueOnce({ _sum: { quantity: 8 } });
+        await expect(service.assertPieceCapInTx(prisma as never, prepared(), 9n)).rejects.toThrow(
+          /vượt tồn mảnh thật.*còn 7/,
+        );
+        expect(prisma.issueSlipLine.aggregate).toHaveBeenLastCalledWith({
+          where: {
+            kind: 'WEAVING_PIECE',
+            pieceId: 20n,
+            slip: { status: 'DRAFT', warehouseId: 70n, id: { not: 9n } },
+          },
+          _sum: { qty: true },
+        });
       });
 
       it('mảnh đã chuyển sang kho Phụ kiện theo luồng cũ không tính là còn ở kho Sơn', async () => {

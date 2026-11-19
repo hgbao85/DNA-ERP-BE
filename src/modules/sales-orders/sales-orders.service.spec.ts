@@ -839,6 +839,38 @@ describe('SalesOrdersService', () => {
         );
         expect(prisma.salesOrderItem.update).not.toHaveBeenCalled();
       });
+
+      it('LS2: bản định mức bỏ hết tick dây -> gửi null bỏ chọn, ghi NULL vào dòng đơn và PI item', async () => {
+        prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+        prisma.salesOrderItem.findUnique.mockResolvedValue(item);
+        prisma.bomOption.findMany.mockResolvedValue([]); // bản ACTIVE không còn tick nào
+        prisma.productionInvoiceItem.findFirst.mockResolvedValue(null);
+        prisma.salesOrderItem.update.mockResolvedValue({ ...item, wireMaterialId: null });
+
+        await service.updateItem('10', '5', { wireMaterialId: null });
+
+        expect(prisma.salesOrderItem.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- jest matcher typing
+            data: expect.objectContaining({ wireMaterialId: null }),
+          }),
+        );
+        expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
+          where: { salesOrderItemId: 5n },
+          data: { wireMaterialId: null, cushionMaterialId: undefined },
+        });
+      });
+
+      it('LS2: bỏ chọn dây khi định mức vẫn có tick dây -> 400 bắt buộc chọn', async () => {
+        prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+        prisma.salesOrderItem.findUnique.mockResolvedValue(item);
+        prisma.bomOption.findMany.mockResolvedValue([option('WIRE', 60n)]);
+
+        await expect(service.updateItem('10', '5', { wireMaterialId: '' })).rejects.toThrow(
+          BadRequestException,
+        );
+        expect(prisma.salesOrderItem.update).not.toHaveBeenCalled();
+      });
     });
   });
 
