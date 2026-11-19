@@ -117,6 +117,7 @@ describe('ProductionInvoicesService', () => {
     systemConfig: { findUniqueOrThrow: jest.Mock };
     $transaction: jest.Mock;
     $executeRaw: jest.Mock;
+    $queryRaw: jest.Mock;
   };
   let productionOrdersService: {
     createFromApproval: jest.Mock;
@@ -294,6 +295,8 @@ describe('ProductionInvoicesService', () => {
       },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
       $executeRaw: jest.fn(),
+      // LS4 19/11: khoá + kiểm lại dòng chưa duyệt trong giao dịch sửa mốc - mặc định không dòng nào vừa được duyệt.
+      $queryRaw: jest.fn().mockResolvedValue([]),
     };
     productionOrdersService = {
       createFromApproval: jest.fn().mockResolvedValue({ id: 99n }),
@@ -668,6 +671,33 @@ describe('ProductionInvoicesService', () => {
       expect(prisma.$transaction).toHaveBeenCalled();
     });
 
+    it('LS4 19/11: Sếp duyệt dòng chen giữa (đọc lại trong giao dịch thấy APPROVED) -> 409, không ghi thẳng mốc', async () => {
+      prisma.$queryRaw.mockResolvedValue([{ id: 20n, prodApprovalStatus: 'APPROVED' }]);
+      await expect(updateItemAs('7', '20', { materialDeadline: '2026-11-10' })).rejects.toThrow(
+        /vừa được Sếp duyệt/,
+      );
+      await expect(
+        updateItemsDeadlinesAs('7', { items: [{ itemId: '20', materialDeadline: '2026-11-10' }] }),
+      ).rejects.toThrow(/vừa được Sếp duyệt/);
+      expect(prisma.productionInvoiceItem.update).not.toHaveBeenCalled();
+      expect(prisma.productionInvoiceItemStage.upsert).not.toHaveBeenCalled();
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+    });
+
+    it('LS4 19/11: khoá dòng FOR UPDATE trong giao dịch; có hạn chung PI thì khoá mọi dòng của lệnh', async () => {
+      prisma.productionInvoiceItem.findUniqueOrThrow.mockResolvedValue(
+        piItem({ materialDeadline: new Date('2026-11-10') }),
+      );
+      await updateItemsDeadlinesAs('7', {
+        deadline: '2026-11-20',
+        items: [{ itemId: '20', materialDeadline: '2026-11-10' }],
+      });
+      const sql = (prisma.$queryRaw.mock.calls as unknown[][])
+        .map((c) => (c[0] as string[]).join('?'))
+        .find((q) => q.includes('production_invoice_items'));
+      expect(sql).toMatch(/FOR UPDATE/);
+    });
+
     it('updateItemsDeadlines: thứ tự đúng → lưu, applied không còn cảnh báo', async () => {
       prisma.productionInvoiceItem.findUniqueOrThrow.mockResolvedValue(
         piItem({ materialDeadline: new Date('2026-11-10') }),
@@ -871,6 +901,29 @@ describe('ProductionInvoicesService', () => {
       expect(created.data.mergedById).toBe('user-khsx');
     });
 
+    it('CS5 19/11: 1 SKU vừa bị lượt khác gom (ghi có điều kiện thiếu dòng) -> 409, không gắn phương án', async () => {
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([
+        mergeCandidate(20n, { salesOrderId: 1n }),
+        mergeCandidate(21n, { salesOrderId: 2n, prodApprovalStatus: null }),
+      ]);
+      prisma.productionInvoiceItem.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      await expect(
+        service.mergeItems(
+          { productionInvoiceItemIds: ['20', '21'], cuttingProposalId: '1000' },
+          'user-khsx',
+        ),
+      ).rejects.toThrow(/vừa được gom vào lệnh sản xuất khác/);
+      const where = (prisma.productionInvoiceItem.updateMany.mock.calls as unknown[][])[0][0] as {
+        where: { OR: Record<string, unknown>[] };
+      };
+      expect(where.where.OR).toEqual([
+        { id: 20n, productionInvoiceId: 7n, prodApprovalStatus: null },
+        { id: 21n, productionInvoiceId: 7n, prodApprovalStatus: null },
+      ]);
+      expect(cuttingProposalsService.attachToInvoice).not.toHaveBeenCalled();
+    });
+
     it('KHÔNG đụng salesOrderId của SKU - đó là đường duy nhất truy ra đơn gốc sau khi gộp', async () => {
       prisma.productionInvoiceItem.findMany.mockResolvedValue([
         mergeCandidate(20n, { salesOrderId: 1n }),
@@ -883,10 +936,11 @@ describe('ProductionInvoicesService', () => {
       );
 
       const moved = (prisma.productionInvoiceItem.updateMany.mock.calls as unknown[][])[0][0] as {
-        where: { id: { in: bigint[] } };
+        where: { OR: { id: bigint; productionInvoiceId: bigint | null }[] };
         data: Record<string, unknown>;
       };
-      expect(moved.where.id.in).toEqual([20n, 21n]);
+      // CS5 19/11: điều kiện theo đúng PI + trạng thái duyệt đã đọc của từng dòng
+      expect(moved.where.OR.map((w) => w.id)).toEqual([20n, 21n]);
       // productionInvoiceId đổi + reset sạch chu kỳ duyệt cũ (2026-08-24) - xem rejectItem/
       // claimSolo cùng lý do. salesOrderId KHÔNG được đụng tới - đó là đường duy nhất truy ra
       // đơn gốc của từng SKU sau khi gộp.
@@ -1150,11 +1204,12 @@ describe('ProductionInvoicesService', () => {
       expect(created.data.isMerged).toBe(false);
       expect(created.data.salesOrderId).toBe(1n);
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- jest.Mock.calls typing
-      const updated = prisma.productionInvoiceItem.update.mock.calls[0][0] as {
-        where: { id: bigint };
+      const updated = prisma.productionInvoiceItem.updateMany.mock.calls[0][0] as {
+        where: { id: bigint; productionInvoiceId: null };
         data: { productionInvoiceId: bigint; workshopId: null };
       };
-      expect(updated.where.id).toBe(20n);
+      // CS5 19/11: ghi có điều kiện "vẫn chưa gom"
+      expect(updated.where).toEqual({ id: 20n, productionInvoiceId: null });
       expect(updated.data.productionInvoiceId).toBe(60n);
       // Phần A – Đợt 2: xưởng reset cùng warehouseCode, lsxCode giữ
       expect(updated.data.workshopId).toBeNull();
@@ -1173,6 +1228,22 @@ describe('ProductionInvoicesService', () => {
         ConflictException,
       );
       expect(prisma.productionInvoice.create).not.toHaveBeenCalled();
+    });
+
+    it('CS5 19/11: lượt tạo lệnh khác chung SKU vừa gom trước (ghi có điều kiện ra 0 dòng) -> 409, không gắn phương án', async () => {
+      prisma.productionInvoiceItem.findUnique.mockResolvedValue({
+        id: 20n,
+        productionInvoiceId: null,
+        salesOrderId: 1n,
+        deliveryDeadline: null,
+      });
+      prisma.productionInvoice.create.mockResolvedValue({ id: 60n });
+      prisma.productionInvoiceItem.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      await expect(service.claimSolo('20', { cuttingProposalId: '1000' })).rejects.toThrow(
+        /vừa được gom vào lệnh sản xuất khác/,
+      );
+      expect(cuttingProposalsService.attachToInvoice).not.toHaveBeenCalled();
     });
 
     it('báo 404 khi SKU không tồn tại', async () => {
@@ -4099,6 +4170,7 @@ describe('ProductionInvoicesService', () => {
       });
 
       it('claimSolo: dòng mang sẵn xưởng của phương án', async () => {
+        prisma.productionInvoiceItem.updateMany.mockResolvedValueOnce({ count: 1 });
         cuttingProposalsService.assertReadyForInvoice.mockResolvedValueOnce({
           id: 1000n,
           solverOptions: { workshopId: '3' },
@@ -4117,7 +4189,9 @@ describe('ProductionInvoicesService', () => {
 
         await service.claimSolo('20', { cuttingProposalId: '1000' });
 
-        const updated = (prisma.productionInvoiceItem.update.mock.calls as unknown[][])[0][0] as {
+        const updated = (
+          prisma.productionInvoiceItem.updateMany.mock.calls as unknown[][]
+        )[0][0] as {
           data: { workshopId: bigint | null };
         };
         expect(updated.data.workshopId).toBe(3n);

@@ -34,7 +34,7 @@ describe('BookingShipmentsService - kho thành phẩm xuất hàng theo booking 
     bookingLine: { update: jest.Mock };
     salesOrderItem: { findMany: jest.Mock };
     packagingRecord: { groupBy: jest.Mock };
-    reservedSlipCode: { updateMany: jest.Mock };
+    reservedSlipCode: { updateMany: jest.Mock; findUnique: jest.Mock };
     $queryRaw: jest.Mock;
     $executeRaw: jest.Mock;
     $transaction: jest.Mock;
@@ -60,7 +60,10 @@ describe('BookingShipmentsService - kho thành phẩm xuất hàng theo booking 
           { productionInvoiceItemId: 901n, _sum: { boxesPacked: 30 } },
         ]),
       },
-      reservedSlipCode: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      reservedSlipCode: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
       $queryRaw: jest.fn().mockResolvedValue([
         { id: 500n, totalQty: 200, shippedQty: 0 },
         { id: 501n, totalQty: 50, shippedQty: 0 },
@@ -125,7 +128,13 @@ describe('BookingShipmentsService - kho thành phẩm xuất hàng theo booking 
     const [slipArg] = prisma.reservedSlipCode.updateMany.mock.calls[0] as [
       { where: Record<string, unknown>; data: { usedAt: unknown } },
     ];
-    expect(slipArg.where).toEqual({ code: 'XK-261109-001', kind: 'XK', usedAt: null });
+    // KH2 19/11: số phải do chính người xuất in (giữ)
+    expect(slipArg.where).toEqual({
+      code: 'XK-261109-001',
+      kind: 'XK',
+      usedAt: null,
+      createdById: 'kho-tp',
+    });
     expect(slipArg.data.usedAt).toBeInstanceOf(Date);
     const [upd] = prisma.booking.update.mock.calls[0] as [{ data: Record<string, unknown> }];
     expect(upd.data).toMatchObject({
@@ -205,5 +214,18 @@ describe('BookingShipmentsService - kho thành phẩm xuất hàng theo booking 
     await expect(
       service.ship('1', dto([{ lineId: '11', qty: 0 }]), 'u', null, 'k3'),
     ).rejects.toThrow(/ít nhất 1 dòng/);
+  });
+
+  it('KH2 19/11: số phiếu XK do thủ kho khác in (giữ) -> chặn, báo rõ "do người khác in"', async () => {
+    prisma.reservedSlipCode.updateMany.mockResolvedValue({ count: 0 });
+    prisma.reservedSlipCode.findUnique.mockResolvedValue({
+      kind: 'XK',
+      usedAt: null,
+      createdById: 'kho-khac',
+    });
+    await expect(
+      service.ship('1', dto([{ lineId: '11', qty: 1 }]), 'u', null, 'k4'),
+    ).rejects.toThrow(/do người khác in/);
+    expect(prisma.bookingLine.update).not.toHaveBeenCalled();
   });
 });

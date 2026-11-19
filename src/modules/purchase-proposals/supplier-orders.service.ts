@@ -313,7 +313,10 @@ export class SupplierOrdersService {
     // 13/11/2026: duyệt mọi đề xuất của đơn + chuyển đơn sang APPROVED trong CÙNG 1 transaction. Trước đây mỗi đề xuất 1
     // transaction riêng rồi mới đổi đơn - lỗi giữa chừng thì có dòng đã "Đang mua" trong khi đơn vẫn nháp.
     const prepared: PreparedBossApprove[] = [];
-    for (const [proposalId, itemIds] of byProposal) {
+    // MUA3 19/11: theo thứ tự id đề xuất - applyBossApproveTx khoá từng đề xuất, 2 đơn chung đề xuất duyệt cùng lúc mà khoá
+    // khác thứ tự thì deadlock (các hàm khác đều đã sắp xếp).
+    const proposalOrder = [...byProposal].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    for (const [proposalId, itemIds] of proposalOrder) {
       prepared.push(
         await this.purchaseProposalsService.prepareBossApprove(
           proposalId.toString(),
@@ -326,7 +329,13 @@ export class SupplierOrdersService {
     await this.prisma.$transaction(async (tx) => {
       await this.lockDraft(tx, order.id);
       for (const p of prepared) {
-        await this.purchaseProposalsService.applyBossApproveTx(tx, p, actorUserId, approvalFileUrl);
+        await this.purchaseProposalsService.applyBossApproveTx(
+          tx,
+          p,
+          actorUserId,
+          approvalFileUrl,
+          order.id,
+        );
       }
       const { count } = await tx.supplierOrder.updateMany({
         where: { id: order.id, status: SupplierOrderStatus.DRAFT },

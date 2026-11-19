@@ -8,6 +8,7 @@ import {
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { cancelEmptiedDraftOrders } from '../purchase-proposals/supplier-order-cleanup.util';
 import { recomputeProposalStatus } from '../purchase-proposals/purchase-proposal-status.util';
 import { notifyPurchaseProposalCreated } from '../purchase-proposals/purchase-proposal-notify.util';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -241,10 +242,15 @@ export class MaterialYieldRecipePurchaseService {
           if (list) list.push(it);
           else itemsByMaterial.set(key, [it]);
         }
+        const detachedOrderIds: (bigint | null | undefined)[] = []; // MUA5 19/11
         for (const c of computed) {
           const group = itemsByMaterial.get(c.materialIdStr) ?? [];
           const plan = planPurchaseRecompute(group.map(toRecomputeItem), c.buyQty);
           if (plan.update) {
+            const updateItemId = plan.update.itemId;
+            if (plan.update.toPurchased) {
+              detachedOrderIds.push(group.find((i) => i.id === updateItemId)?.supplierOrderId);
+            }
             await tx.purchaseProposalItem.update({
               where: { id: plan.update.itemId },
               data: {
@@ -281,6 +287,7 @@ export class MaterialYieldRecipePurchaseService {
           const ev = eventFromPlan(c.materialId, plan);
           if (ev) recomputeEvents.push(ev);
         }
+        await cancelEmptiedDraftOrders(tx, detachedOrderIds);
       }
 
       await recomputeProposalStatus(tx, found.id);

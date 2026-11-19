@@ -535,6 +535,8 @@ export class PurchaseProposalsService {
     prepared: PreparedBossApprove,
     actorUserId: string,
     approvalFileUrl: string,
+    /** MUA4 19/11: duyệt theo đơn đặt hàng - dòng phải VẪN thuộc đơn này (dòng vừa được gỡ khỏi đơn thì không thành "Đang mua"). */
+    supplierOrderId?: bigint,
   ): Promise<void> {
     const { proposal, items } = prepared;
     await lockBusinessKey(tx, `purchase-proposal-mutate:${proposal.id}`);
@@ -545,6 +547,7 @@ export class PurchaseProposalsService {
       where: {
         id: { in: items.map((i) => i.id) },
         status: { in: PENDING_APPROVAL_STATUSES },
+        ...(supplierOrderId !== undefined ? { supplierOrderId } : {}),
       },
       data: {
         status: PurchaseProposalStatus.PURCHASING,
