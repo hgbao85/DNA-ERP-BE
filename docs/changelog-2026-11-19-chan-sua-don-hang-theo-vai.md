@@ -26,6 +26,12 @@ Nguồn: đợt test toàn hệ thống 19/11, lỗi C1 (mức Cao), phương á
   4616 đạt; nest build đạt; eslint / prettier sạch. QA review độc lập: Đạt có điều kiện, 0 Cao / 0 Vừa; không còn route nào khác ghi bảng
   đơn hàng bán ngoài 5 route trên và xuất hàng theo booking (có kiểm kho, số còn, số đã đóng gói).
 
+## Sửa CI sau push (cùng ngày)
+- CI `test` đỏ ở commit `843dde8`: trên DB trống của CI, các file e2e chạy song song; suite quyền P1 và suite mới cùng tạo rồi xoá cứng vai
+  hệ thống nên suite này mất vai BOSS giữa chừng (Giám đốc xem đơn nhận 403). Lỗi ở cách chạy test, không ở code sản phẩm.
+- `test/jest-e2e.json`: `"maxWorkers": 1` - e2e dùng chung 1 DB test nên chạy tuần tự (giống integration `--runInBand`). Tái hiện trên DB
+  mới tinh + chạy cả bộ như CI: trước sửa 1 đỏ / 58 xanh; sau sửa 59/59 (2 lần).
+
 ## Deploy
 - Chỉ BE. Không migration, không seed, không cần đăng nhập lại (guard vai đọc vai từ token / DB như các route booking).
 - Trước deploy: SELECT chỉ đọc trên production - (a) vai `SALES_STAFF` và `ADMIN` còn đúng tên, chưa xoá mềm (chặn so theo TÊN vai);

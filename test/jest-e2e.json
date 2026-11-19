@@ -8,5 +8,6 @@
     "^.+\\.(t|j)s$": "ts-jest"
   },
   "setupFiles": ["<rootDir>/test/jest-setup-env.ts"],
-  "globalSetup": "<rootDir>/test/jest-global-setup.ts"
+  "globalSetup": "<rootDir>/test/jest-global-setup.ts",
+  "maxWorkers": 1
 }
