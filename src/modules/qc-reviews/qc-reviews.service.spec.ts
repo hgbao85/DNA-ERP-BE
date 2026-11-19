@@ -14,6 +14,9 @@ import { CloudinaryService } from '../uploads/cloudinary.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PaintTransferReminderService } from '../warehouse-transfers/paint-transfer-reminder.service';
 import { queueWorkshopIdOfPi } from '../floor/floor-queue-workshop.util';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { CreateSteelIssueQcReviewDto } from './dto/create-steel-issue-qc-review.dto';
 import { QcReviewsService } from './qc-reviews.service';
 
 jest.mock('../floor/floor-queue-workshop.util', () => ({ queueWorkshopIdOfPi: jest.fn() }));
@@ -35,6 +38,7 @@ describe('QcReviewsService', () => {
       update: jest.Mock;
     };
     qcReviewSegment: { update: jest.Mock };
+    defectReason: { findUnique: jest.Mock };
     segmentSpec: { findMany: jest.Mock };
     cutPatternSegment: { groupBy: jest.Mock };
     stepBatchSegment: { groupBy: jest.Mock };
@@ -190,6 +194,8 @@ describe('QcReviewsService', () => {
         update: jest.fn(),
       },
       qcReviewSegment: { update: jest.fn() },
+      // Mặc định lý do lỗi tồn tại; test T4-9 override null.
+      defectReason: { findUnique: jest.fn().mockResolvedValue({ id: 9n }) },
       segmentSpec: { findMany: jest.fn().mockResolvedValue([segmentSpecRow]) },
       cutPatternSegment: {
         groupBy: jest.fn().mockResolvedValue([{ segmentSpecId: 30n, _sum: { qty: 8 } }]),
@@ -1741,6 +1747,96 @@ describe('QcReviewsService', () => {
   // Sửa/xóa CHỈ photoUrl - mở cho CHÍNH người đã chấm review (reviewedById) HOẶC Admin, xem doc
   // comment updatePhoto()/UpdateQcReviewPhotoDto (2026-09-11 lần 2, theo Sếp: "cho người nhập được
   // sửa luôn"). actorUserId/actorRoles giờ là tham số bắt buộc.
+  describe('T4-9 (19/11/2026): lý do lỗi không tồn tại -> 400 câu rõ ràng, không ghi gì', () => {
+    const MSG = 'Lý do lỗi không tồn tại hoặc đã xoá';
+    const cutBundleRow = {
+      id: 1n,
+      steelIssueId: 100n,
+      status: 'AWAITING_QC',
+      steelIssue: {
+        productionInvoiceId: 900n,
+        materialId: 30n,
+        material: { code: 'SAT-30', name: 'Sắt phi 10' },
+      },
+    };
+    const stepBundleRow = {
+      id: 800n,
+      productionInvoiceId: 900n,
+      materialId: 30n,
+      step: 'UON',
+      status: 'AWAITING_QC',
+      material: { code: 'SAT-30', name: 'Sắt hộp', spec: '25x50' },
+    };
+    const myBundleRow = { id: 850n, productionInvoiceId: 900n, qty: 10, status: 'AWAITING_QC' };
+
+    beforeEach(() => {
+      prisma.defectReason.findUnique.mockResolvedValue(null);
+      prisma.cutBundle.findUnique.mockResolvedValue(cutBundleRow);
+      prisma.stepBundle.findUnique.mockResolvedValue(stepBundleRow);
+      materialYieldRecipeProductionService.findOneBundleRowOrThrow.mockResolvedValue(myBundleRow);
+    });
+
+    it.each([
+      ['review', () => service.review('100', { segments: [], defectReasonId: '9' }, 'u')],
+      [
+        'reviewCutBundle',
+        () => service.reviewCutBundle('1', { segments: [], defectReasonId: '9' }, 'u'),
+      ],
+      [
+        'reviewStepBundle',
+        () => service.reviewStepBundle('800', { segments: [], defectReasonId: '9' }, 'u'),
+      ],
+      [
+        'reviewProductionBatch',
+        () => service.reviewProductionBatch('700', { failedQty: 0, defectReasonId: '9' }, 'u'),
+      ],
+      [
+        'reviewPieceStep',
+        () => service.reviewPieceStep('800', { failedQty: 0, defectReasonId: '9' }, 'u'),
+      ],
+      [
+        'reviewMaterialYieldStep',
+        () => service.reviewMaterialYieldStep('850', { failedQty: 0, defectReasonId: '9' }, 'u'),
+      ],
+    ])('%s: defectReasonId không có trong DB -> 400', async (_name, call) => {
+      await expect(call()).rejects.toThrow(new BadRequestException(MSG));
+      expect(prisma.defectReason.findUnique).toHaveBeenCalledWith({
+        where: { id: 9n },
+        select: { id: true },
+      });
+      expect(prisma.qcReview.create).not.toHaveBeenCalled();
+    });
+
+    it('không gửi defectReasonId -> không tra bảng lý do lỗi', async () => {
+      await service.review('100', { segments: [] }, 'u');
+      expect(prisma.defectReason.findUnique).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('T4-9 DTO chấm KCS theo cỡ: câu lỗi thiếu segments', () => {
+    const msgs = async (body: object) =>
+      (await validate(plainToInstance(CreateSteelIssueQcReviewDto, body))).flatMap((e) =>
+        Object.values(e.constraints ?? {}),
+      );
+
+    it('thiếu segments -> câu "thiếu danh sách", không có câu "bị trùng" kiểu cũ', async () => {
+      const out = (await msgs({})).join(' | ');
+      expect(out).toMatch(/Thiếu danh sách cỡ đoạn/);
+      expect(out).not.toMatch(/must be unique/);
+    });
+
+    it('[] hợp lệ (đạt hết); trùng cỡ -> câu trùng bằng tiếng Việt', async () => {
+      expect(await msgs({ segments: [] })).toEqual([]);
+      const dup = await msgs({
+        segments: [
+          { segmentSpecId: '30', failedQty: 0 },
+          { segmentSpecId: '30', failedQty: 1 },
+        ],
+      });
+      expect(dup).toEqual(['Danh sách cỡ đoạn có cỡ bị trùng']);
+    });
+  });
+
   describe('updatePhoto', () => {
     it('người ĐÃ CHẤM review này tự sửa được ảnh, xóa ảnh cũ trên Cloudinary khi bị thay bằng ảnh khác', async () => {
       prisma.qcReview.findUnique.mockResolvedValue({

@@ -15,6 +15,7 @@ import { lockBusinessKeyShared } from '../../common/utils/advisory-lock.util';
 import { SEGMENT_LEGACY_CONVERSION_LOCK } from '../segment-stock/segment-stock.config';
 import { warehouseWhereForScope } from '../../common/utils/warehouse-family.util';
 import { TRON_SEGMENT_STEPS, isNormalizedSegmentSteps } from '../../common/utils/segment-code.util';
+import { vnDayStart } from '../../common/utils/floor-stats.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
 import { RealtimeService } from '../../realtime/realtime.service';
@@ -41,6 +42,18 @@ type StockLedgerWithRefs = Prisma.StockLedgerGetPayload<{
     createdBy: { select: { firstName: true; lastName: true } };
   };
 }>;
+
+/**
+ * 19/11/2026 (T3-10): ngày thuần 'YYYY-MM-DD' tính theo ngày lịch giờ VN (UTC+7) - trước đây thành
+ * 00:00 UTC nên toDate loại cả ngày đó. fromDate = 00:00 VN; toDate = 23:59:59.999 VN. Chuỗi có giờ giữ nguyên.
+ */
+function ledgerFromDate(raw: string): Date {
+  return vnDayStart(raw) ?? new Date(raw);
+}
+function ledgerToDate(raw: string): Date {
+  const start = vnDayStart(raw);
+  return start ? new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1) : new Date(raw);
+}
 
 const LEDGER_INCLUDE = {
   fromWarehouse: true,
@@ -449,8 +462,8 @@ export class StockLedgerService {
       createdAt:
         query.fromDate || query.toDate
           ? {
-              gte: query.fromDate ? new Date(query.fromDate) : undefined,
-              lte: query.toDate ? new Date(query.toDate) : undefined,
+              gte: query.fromDate ? ledgerFromDate(query.fromDate) : undefined,
+              lte: query.toDate ? ledgerToDate(query.toDate) : undefined,
             }
           : undefined,
     };

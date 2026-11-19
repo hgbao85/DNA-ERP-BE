@@ -104,17 +104,41 @@ export class WarehousesService {
       throw new ForbiddenException(`Kho "${current.code}" là kho hệ thống, không thể xoá`);
     }
 
-    // Xoá kèm mọi tài khoản đang gắn warehouseScope đúng kho này (Thủ kho được tự động tạo lúc
-    // "Tạo kho thành phẩm mới" - xem MfgWarehousesPage.tsx createThanhPham(), có thể cả tài khoản
-    // mua hàng được gán tay cùng scope) - trước đây tài khoản mồ côi vẫn sống sau khi kho bị xoá,
-    // warehouseScope trỏ vào 1 code không còn tồn tại. User là SOFT_DELETE_MODELS (xem
-    // soft-delete.extension.ts) nên deleteMany() ở đây tự resolve thành updateMany set deletedAt,
-    // không mất lịch sử/audit. Gộp 1 transaction: kho không xoá được (còn tồn/vật tư tham chiếu,
-    // FK constraint) thì tài khoản cũng không bị xoá theo.
-    await this.prisma.$transaction([
-      this.prisma.user.deleteMany({ where: { warehouseScope: current.code } }),
-      this.prisma.warehouse.delete({ where: { id: bigId } }),
-    ]);
+    // 19/11/2026 (T1-1): trước đây $transaction([...]) dạng mảng bị extension xoá mềm viết lại
+    // user.deleteMany thành updateMany gọi ngoài batch nên batch không bao giờ chạy -> DELETE treo.
+    // Nay dùng $transaction(async tx): kiểm kho còn được tham chiếu TRƯỚC (409 tiếng Việt), rồi mới
+    // xoá mềm tài khoản gắn warehouseScope đúng kho này (giữ ý cũ: Thủ kho tự tạo cùng kho không
+    // được sống mồ côi) và xoá kho. Xoá mềm tài khoản PHẢI là tx.user.updateMany(deletedAt) - KHÔNG
+    // dùng tx.user.deleteMany: extension xoá mềm viết lại delete* của User/Role bằng client GỐC nên
+    // chạy ngoài transaction, kho xoá lỗi thì tài khoản vẫn bị xoá mềm (QA thử thật 19/11). Bỏ qua
+    // tài khoản đã xoá mềm từ trước (giữ mốc deletedAt cũ). Kho xoá lỗi thì cả hai cùng lùi.
+    await this.prisma.$transaction(async (tx) => {
+      const where = { warehouseId: bigId };
+      const bothLegs = { OR: [{ fromWarehouseId: bigId }, { toWarehouseId: bigId }] };
+      const counts: Array<[string, number]> = [
+        ['vật tư', await tx.material.count({ where })],
+        ['dòng tồn kho', await tx.stockQuant.count({ where })],
+        ['bút toán sổ kho', await tx.stockLedger.count({ where: bothLegs })],
+        ['giữ chỗ tồn kho', await tx.stockReservation.count({ where })],
+        ['phiếu chuyển kho', await tx.warehouseTransfer.count({ where: bothLegs })],
+        ['giữ chỗ chuyển kho', await tx.warehouseTransferReservation.count({ where })],
+        ['giữ chỗ đoạn', await tx.segmentReservation.count({ where })],
+        ['dòng đoạn dư', await tx.segmentOverage.count({ where })],
+        ['dòng đoạn đã sản xuất', await tx.segmentProduction.count({ where })],
+        ['dòng đoạn còn dư', await tx.segmentProductionLeftover.count({ where })],
+        ['văn phòng phẩm', await tx.officeSupply.count({ where })],
+        ['phiếu xuất kho', await tx.issueSlip.count({ where })],
+      ];
+      const used = counts.filter(([, n]) => n > 0).map(([label, n]) => `${n} ${label}`);
+      if (used.length > 0) {
+        throw new ConflictException(`Kho còn ${used.join(', ')} - không xoá được`);
+      }
+      await tx.user.updateMany({
+        where: { warehouseScope: current.code, deletedAt: null },
+        data: { deletedAt: new Date() },
+      });
+      await tx.warehouse.delete({ where: { id: bigId } });
+    });
   }
 
   private async findOneOrThrow(id: string): Promise<Warehouse> {

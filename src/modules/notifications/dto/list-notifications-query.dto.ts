@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsIn, IsOptional } from 'class-validator';
 import { PaginationQueryDto } from '../../../common/dto/pagination-query.dto';
+import { NotificationCategory } from '../../../generated/prisma/client';
 
 export type NotificationListStatus = 'unread' | 'all';
 
@@ -12,10 +13,12 @@ export class ListNotificationsQueryDto extends PaginationQueryDto {
   status: NotificationListStatus = 'all';
 
   /** Lọc theo 1 category (ANNOUNCEMENT/ACTION_REQUIRED/RESULT/ALERT/INFO) - bỏ trống = tất cả. */
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ enum: NotificationCategory, enumName: 'NotificationCategory' })
   @IsOptional()
-  @IsString()
-  category?: string;
+  @IsEnum(NotificationCategory, {
+    message: 'Loại thông báo không hợp lệ (ANNOUNCEMENT, ACTION_REQUIRED, RESULT, ALERT, INFO)',
+  })
+  category?: NotificationCategory;
 
   /**
    * Lọc theo đã xử lý xong (resolvedAt) hay chưa - KHÁC `status` (đã đọc). "Cần xử lý" của

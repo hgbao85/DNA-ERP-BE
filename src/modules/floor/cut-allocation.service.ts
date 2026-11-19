@@ -888,6 +888,10 @@ export class CutAllocationService {
       const isBundle = row.pattern.bundles != null;
       // Kiểu cắt theo bó không tự tách: máy hư thì Đổi máy với lý do Máy hư.
       if (isBundle) throw new BadRequestException(BUNDLE_LOCKED_MESSAGE);
+      // 19/11/2026: dòng chỉ 1 cây thì câu "từ 1 đến 0" vô nghĩa - báo thẳng là không tách được.
+      if (row.barCount <= 1) {
+        throw new BadRequestException('Dòng chỉ có 1 cây - không tách được');
+      }
       if (dto.barCount < 1 || dto.barCount > row.barCount - 1) {
         throw new BadRequestException(
           `Số cây tách phải từ 1 đến ${row.barCount - 1} (dòng có ${row.barCount} cây)`,

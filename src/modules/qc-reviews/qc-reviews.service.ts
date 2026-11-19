@@ -117,6 +117,22 @@ export class QcReviewsService {
     private readonly paintReminder: PaintTransferReminderService,
   ) {}
 
+  /** 19/11/2026: lý do lỗi gửi lên không có trong DB -> 400 câu rõ ràng thay vì P2003 (khoá ngoại) ra câu chung.
+   *  Gọi trong transaction của từng route chấm KCS, trước mọi lần ghi. */
+  private async assertDefectReasonExists(
+    tx: Pick<PrismaServiceType, 'defectReason'>,
+    defectReasonId: bigint | undefined,
+  ): Promise<void> {
+    if (defectReasonId === undefined) return;
+    const found = await tx.defectReason.findUnique({
+      where: { id: defectReasonId },
+      select: { id: true },
+    });
+    if (!found) {
+      throw new BadRequestException('Lý do lỗi không tồn tại hoặc đã xoá');
+    }
+  }
+
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). `parentId` (2026-10-17,
    *  xem EntityChangedPayload.parentId) - id của lệnh sản xuất/PI mà bản ghi này thuộc về, để FE lọc
    *  đúng màn chi tiết đang xem (vd core.tsx/VatTuTpDetail.tsx/ChanNhomDetail.tsx). Chỉ 3/6 nhánh
@@ -403,6 +419,7 @@ export class QcReviewsService {
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
 
     const created = await this.prisma.$transaction(async (tx) => {
+      await this.assertDefectReasonExists(tx, defectReasonId);
       // Đính chính audit độc lập 09/09 (Nghiêm trọng #5): trước đây update() ghi status vô điều
       // kiện - 2 request duyệt gần như đồng thời (double-click, mạng chập chờn tự gửi lại) cho
       // cùng đợt AWAITING_QC đều pass check status (đọc snapshot NGOÀI transaction ở đầu hàm),
@@ -521,6 +538,7 @@ export class QcReviewsService {
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
 
     const created = await this.prisma.$transaction(async (tx) => {
+      await this.assertDefectReasonExists(tx, defectReasonId);
       // Đính chính audit độc lập 09/09 (Nghiêm trọng #5) - cùng lý do/cùng fix review() ở trên.
       const { count } = await tx.cutBundle.updateMany({
         where: { id: bundle.id, status: CutBundleStatus.AWAITING_QC },
@@ -776,6 +794,7 @@ export class QcReviewsService {
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
 
     const created = await this.prisma.$transaction(async (tx) => {
+      await this.assertDefectReasonExists(tx, defectReasonId);
       // Đính chính audit độc lập 09/09 (Nghiêm trọng #5) - cùng lý do/cùng fix review() ở trên.
       const { count } = await tx.stepBundle.updateMany({
         where: { id: bundle.id, status: StepBundleStatus.AWAITING_QC },
@@ -877,6 +896,7 @@ export class QcReviewsService {
 
     const created = await this.prisma.$transaction(
       async (tx) => {
+        await this.assertDefectReasonExists(tx, defectReasonId);
         // Khoá trước (khoá chuyển đổi tồn đoạn khi công tắc bật, rồi production-batch-open): cùng thứ tự với
         // recordProductionBatch / finishProductionBatch nên không vòng chờ. consumeSegmentsAtReviewInTx lấy lại 2 khoá này.
         await this.productionBatchesService.lockBatchKeysInTx(tx, {
@@ -1019,6 +1039,7 @@ export class QcReviewsService {
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
 
     const created = await this.prisma.$transaction(async (tx) => {
+      await this.assertDefectReasonExists(tx, defectReasonId);
       // Đính chính audit độc lập 09/09 (Nghiêm trọng #5) - cùng lý do/cùng fix review() ở trên.
       // Đặc biệt quan trọng ở đây: autoFinalizePieceOutputIfLastStepComplete() bên dưới cộng
       // failedQty từ MỌI QcReview gắn vào bundle này - 2 request duyệt trùng không chặn sẽ tạo 2
@@ -1107,6 +1128,7 @@ export class QcReviewsService {
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
 
     const created = await this.prisma.$transaction(async (tx) => {
+      await this.assertDefectReasonExists(tx, defectReasonId);
       const { count } = await tx.materialYieldStepBundle.updateMany({
         where: { id: bundle.id, status: PieceStepBundleStatus.AWAITING_QC },
         data: { status: PieceStepBundleStatus.QC_PASSED },

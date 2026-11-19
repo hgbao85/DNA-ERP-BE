@@ -195,3 +195,63 @@ describe('UpdateSystemConfigDto - máy cắt', () => {
     );
   });
 });
+
+/** T1-3 (19/11/2026): chặn giá trị ngoài khoảng / sai dạng ở PUT /system-config. */
+describe('UpdateSystemConfigDto - khoảng giá trị và liên hệ công ty', () => {
+  const base = { companyName: 'DNA Steel' };
+  const errorsOn = async (payload: Record<string, unknown>) =>
+    (await validate(plainToInstance(UpdateSystemConfigDto, { ...base, ...payload }))).map(
+      (e) => e.property,
+    );
+
+  it('solverMaxWastePercentage chỉ nhận 0,01-100', async () => {
+    expect(await errorsOn({ solverMaxWastePercentage: 0.01 })).toEqual([]);
+    expect(await errorsOn({ solverMaxWastePercentage: 100 })).toEqual([]);
+    expect(await errorsOn({ solverMaxWastePercentage: 0 })).toContain('solverMaxWastePercentage');
+    expect(await errorsOn({ solverMaxWastePercentage: 100.5 })).toContain(
+      'solverMaxWastePercentage',
+    );
+    expect(await errorsOn({ solverMaxWastePercentage: 99999 })).toContain(
+      'solverMaxWastePercentage',
+    );
+  });
+
+  it('solverBladeWidthMm (lưỡi laze) chỉ nhận 0-10 mm', async () => {
+    expect(await errorsOn({ solverBladeWidthMm: 0 })).toEqual([]);
+    expect(await errorsOn({ solverBladeWidthMm: 10 })).toEqual([]);
+    expect(await errorsOn({ solverBladeWidthMm: 10.1 })).toContain('solverBladeWidthMm');
+    expect(await errorsOn({ solverBladeWidthMm: 5000 })).toContain('solverBladeWidthMm');
+  });
+
+  it('companyEmail: đúng dạng email, cho phép rỗng để xoá', async () => {
+    expect(await errorsOn({ companyEmail: 'lienhe@congty.vn' })).toEqual([]);
+    expect(await errorsOn({ companyEmail: '' })).toEqual([]);
+    expect(await errorsOn({ companyEmail: 'khong-phai-email' })).toContain('companyEmail');
+  });
+
+  it('companyPhone: 8-40 ký tự gồm số, khoảng trắng, + . - ( ) / , (2 số); cho phép rỗng', async () => {
+    expect(await errorsOn({ companyPhone: '+84 (28) 3822.1234' })).toEqual([]);
+    expect(await errorsOn({ companyPhone: '' })).toEqual([]);
+    expect(await errorsOn({ companyPhone: 'abc12345678' })).toContain('companyPhone');
+    expect(await errorsOn({ companyPhone: '1234567' })).toContain('companyPhone');
+    expect(await errorsOn({ companyPhone: '0912345678 / 0987654321' })).toEqual([]);
+    expect(await errorsOn({ companyPhone: '0912345678, 0987654321' })).toEqual([]);
+    expect(await errorsOn({ companyPhone: '1'.repeat(21) })).toEqual([]);
+    expect(await errorsOn({ companyPhone: '1'.repeat(41) })).toContain('companyPhone');
+  });
+
+  it('câu lỗi là tiếng Việt', async () => {
+    const errs = await validate(
+      plainToInstance(UpdateSystemConfigDto, {
+        ...base,
+        companyEmail: 'x',
+        companyPhone: 'x',
+        solverBladeWidthMm: 99,
+        solverMaxWastePercentage: 0,
+      }),
+    );
+    const msgs = errs.flatMap((e) => Object.values(e.constraints ?? {}));
+    expect(msgs.length).toBe(4);
+    for (const m of msgs) expect(m).toMatch(/[ạảãàáâăêôơưđếềểễệốồổộớờởợứừửữựịỉĩ]|phải|không/);
+  });
+});

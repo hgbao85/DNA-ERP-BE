@@ -12,6 +12,7 @@ describe('MaterialGroupsService', () => {
       update: jest.Mock;
       delete: jest.Mock;
     };
+    material: { count: jest.Mock };
   };
 
   const systemGroup = { id: 1n, name: 'Sat', systemKey: 'STEEL_BAR', codePrefix: 'SAT' };
@@ -25,6 +26,7 @@ describe('MaterialGroupsService', () => {
         update: jest.fn(),
         delete: jest.fn(),
       },
+      material: { count: jest.fn().mockResolvedValue(0) },
     };
     service = new MaterialGroupsService(prisma as unknown as PrismaServiceType);
   });
@@ -121,6 +123,17 @@ describe('MaterialGroupsService', () => {
       prisma.materialGroup.findUnique.mockResolvedValue(systemGroup);
 
       await expect(service.remove('1')).rejects.toThrow(BadRequestException);
+      expect(prisma.materialGroup.delete).not.toHaveBeenCalled();
+    });
+
+    it('T1-2: nhóm còn vật tư thì 409, không xoá', async () => {
+      prisma.materialGroup.findUnique.mockResolvedValue(ordinaryGroup);
+      prisma.material.count.mockResolvedValue(4);
+
+      await expect(service.remove('2')).rejects.toThrow(
+        'Nhóm còn 4 vật tư - chuyển vật tư sang nhóm khác trước khi xoá',
+      );
+      await expect(service.remove('2')).rejects.toThrow(ConflictException);
       expect(prisma.materialGroup.delete).not.toHaveBeenCalled();
     });
 

@@ -125,6 +125,7 @@ export class SkusController {
   // SkusService.resolveNonDraftOrAdminOverride()). Role khác bị chặn như trước.
   @Post(':id/manh-quota')
   @RequirePermissions(UPDATE)
+  @RequireRole(BUSINESS_ROLES.SPEC_STEEL_STAFF, DEFAULT_ROLES.ADMIN)
   updateManhQuota(
     @Param('id') id: string,
     @Body() dto: UpdateQuotaDto,
@@ -139,6 +140,7 @@ export class SkusController {
   // client khác đang xem danh sách SKU (xem SkipRealtimeMutation).
   @Patch(':id/manh-quota/draft')
   @RequirePermissions(UPDATE)
+  @RequireRole(BUSINESS_ROLES.SPEC_STEEL_STAFF, DEFAULT_ROLES.ADMIN)
   @SkipRealtimeMutation()
   saveManhDraft(@Param('id') id: string, @Body() dto: SaveQuotaDraftDto) {
     return this.skusService.saveManhDraft(id, dto);
@@ -146,6 +148,7 @@ export class SkusController {
 
   @Delete(':id/manh-quota/draft')
   @RequirePermissions(UPDATE)
+  @RequireRole(BUSINESS_ROLES.SPEC_STEEL_STAFF, DEFAULT_ROLES.ADMIN)
   @SkipRealtimeMutation()
   clearManhDraft(@Param('id') id: string) {
     return this.skusService.clearManhDraft(id);
@@ -171,6 +174,7 @@ export class SkusController {
 
   @Post(':id/detail-quota')
   @RequirePermissions(UPDATE)
+  @RequireRole(BUSINESS_ROLES.SPEC_ACCESSORY_PACKAGING_STAFF, DEFAULT_ROLES.ADMIN)
   updateDetailQuota(
     @Param('id') id: string,
     @Body() dto: UpdateQuotaDto,
@@ -182,6 +186,7 @@ export class SkusController {
 
   @Patch(':id/detail-quota/draft')
   @RequirePermissions(UPDATE)
+  @RequireRole(BUSINESS_ROLES.SPEC_ACCESSORY_PACKAGING_STAFF, DEFAULT_ROLES.ADMIN)
   @SkipRealtimeMutation()
   saveDetailDraft(@Param('id') id: string, @Body() dto: SaveQuotaDraftDto) {
     return this.skusService.saveDetailDraft(id, dto);
@@ -189,6 +194,7 @@ export class SkusController {
 
   @Delete(':id/detail-quota/draft')
   @RequirePermissions(UPDATE)
+  @RequireRole(BUSINESS_ROLES.SPEC_ACCESSORY_PACKAGING_STAFF, DEFAULT_ROLES.ADMIN)
   @SkipRealtimeMutation()
   clearDetailDraft(@Param('id') id: string) {
     return this.skusService.clearDetailDraft(id);

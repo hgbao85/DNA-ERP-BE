@@ -123,6 +123,15 @@ export class MaterialGroupsService {
         `Nhóm vật tư hệ thống "${group.name}" (systemKey=${group.systemKey}) không thể xoá - mọi màn hình Spec phụ thuộc vào nhóm này`,
       );
     }
+    // 19/11/2026 (T1-2): FK ON DELETE SET NULL nên xoá nhóm còn vật tư sẽ làm vật tư mất nhóm - chặn.
+    const inUse = await this.prisma.material.count({
+      where: { materialGroupId: bigId, deletedAt: null },
+    });
+    if (inUse > 0) {
+      throw new ConflictException(
+        `Nhóm còn ${inUse} vật tư - chuyển vật tư sang nhóm khác trước khi xoá`,
+      );
+    }
     await this.prisma.materialGroup.delete({ where: { id: bigId } });
   }
 

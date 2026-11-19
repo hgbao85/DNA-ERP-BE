@@ -7,6 +7,7 @@ import {
   IsArray,
   IsBoolean,
   IsDivisibleBy,
+  IsEmail,
   IsEnum,
   IsInt,
   IsNumber,
@@ -19,6 +20,7 @@ import {
   Min,
   MinLength,
   Validate,
+  ValidateIf,
   ValidatorConstraint,
   type ValidatorConstraintInterface,
 } from 'class-validator';
@@ -117,13 +119,18 @@ export class UpdateSystemConfigDto {
   companyAddress?: string;
 
   @ApiPropertyOptional()
-  @IsOptional()
+  // 19/11/2026: kiểm dạng số điện thoại; chuỗi rỗng = xoá (FE gửi '' khi để trống ô).
+  @ValidateIf((_o, v: unknown) => v !== undefined && v !== null && v !== '')
   @IsString()
+  @Matches(/^[0-9 +.\-()/,]{8,40}$/, {
+    message: 'Số điện thoại chỉ gồm chữ số, khoảng trắng, + . - ( ) / , và dài 8-40 ký tự',
+  })
   companyPhone?: string;
 
   @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
+  // 19/11/2026: kiểm đúng dạng email; chuỗi rỗng = xoá (FE gửi '' khi để trống ô).
+  @ValidateIf((_o, v: unknown) => v !== undefined && v !== null && v !== '')
+  @IsEmail({}, { message: 'Email công ty không đúng định dạng (vd lienhe@congty.vn)' })
   companyEmail?: string;
 
   @ApiPropertyOptional()
@@ -203,13 +210,15 @@ export class UpdateSystemConfigDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
-  @Min(0)
+  @Min(0, { message: 'Bề rộng lưỡi cắt laze phải từ 0 đến 10 mm' })
+  @Max(10, { message: 'Bề rộng lưỡi cắt laze phải từ 0 đến 10 mm' })
   solverBladeWidthMm?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
-  @Min(0)
+  @Min(0.01, { message: 'Ngưỡng hao hụt tối đa phải từ 0,01% đến 100%' })
+  @Max(100, { message: 'Ngưỡng hao hụt tối đa phải từ 0,01% đến 100%' })
   solverMaxWastePercentage?: number;
 
   @ApiPropertyOptional()
