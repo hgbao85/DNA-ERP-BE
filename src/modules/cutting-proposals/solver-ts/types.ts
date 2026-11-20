@@ -22,6 +22,15 @@ export interface ProposeRequest {
   max_waste_percentage?: number | string;
   max_waste_percentage_by_material?: Record<string, number | string>;
   stock_lengths_by_material?: Record<string, string | number | Array<number | string>>;
+  /**
+   * CS2 (anh Nhân 20/11/2026): cây lẻ đang có ở kho Phôi của xưởng làm lệnh, khoá như `stock_lengths_by_material`:
+   * `{ "<mã sắt>": [{ length: 5450, count: 1 }, ...] }`. Bộ giải dùng cây lẻ trước (tối đa đúng số cây), phần còn thiếu cắt
+   * từ chiều dài mua (1 chiều dài / loại sắt như cũ).
+   */
+  leftover_stock_by_material?: Record<
+    string,
+    Array<{ length: number | string; count: number | string }>
+  >;
   max_surplus?: number | string;
   auto_scan?: boolean;
   stop_on_first?: boolean;

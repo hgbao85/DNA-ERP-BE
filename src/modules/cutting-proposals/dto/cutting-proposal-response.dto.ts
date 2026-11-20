@@ -97,6 +97,9 @@ export class CuttingProposalPatternResponseDto {
   @Expose() @ApiProperty() patternIndex!: number;
   @Expose() @ApiProperty() barCount!: number;
   @Expose() @ApiPropertyOptional({ nullable: true }) wastePerBarMm!: number | null;
+  /// CS2 (20/11/2026): chiều dài cây (mm) của kiểu cắt này - cây lẻ đang có ở kho Phôi hoặc cây chiều dài mua. Phương án cũ
+  /// chưa lưu theo kiểu cắt thì = bestStockLengthMm của dòng.
+  @Expose() @ApiPropertyOptional({ nullable: true }) stockLengthMm!: number | null;
   /// CHỈ khi dòng cắt bằng MC Tự động (2026-10-23): số bó theo hệ số + số cây cắt tay, dạng
   /// { "<hệ số>": số bó, "1": số cây cắt tay } (vd {"16": 3, "14": 1, "1": 2}); barCount = Σ hệ số × số bó.
   /// null với MC Laser và với phương án tính trước khi có máy cắt.

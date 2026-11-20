@@ -100,7 +100,8 @@ function buildRows(snap: Snapshot, info: Map<string, SegmentProcessInfo>): CutAl
       materialId: meta.materialId,
       materialCode: meta.line.material.code,
       materialLabel: materialLabel(meta.line.material),
-      barLengthMm: meta.line.bestStockLengthMm ?? null,
+      // CS2 (20/11): kiểu cắt cây lẻ kho Phôi có chiều dài riêng; kiểu cắt cũ chưa lưu thì theo chiều dài của dòng.
+      barLengthMm: meta.pattern.stockLengthMm ?? meta.line.bestStockLengthMm ?? null,
       lineMachine: lineMachine ? toMachineType(lineMachine) : null,
       machineClass: r.machineClass,
       barCount: r.barCount,

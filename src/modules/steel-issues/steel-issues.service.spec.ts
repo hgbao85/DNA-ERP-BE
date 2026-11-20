@@ -71,6 +71,7 @@ describe('SteelIssuesService', () => {
       update: jest.Mock;
       updateMany: jest.Mock;
       findUniqueOrThrow: jest.Mock;
+      aggregate: jest.Mock;
     };
     floorReport: { create: jest.Mock; findUnique: jest.Mock; findFirst: jest.Mock };
     productionInvoice: { findUnique: jest.Mock; findMany: jest.Mock };
@@ -201,6 +202,7 @@ describe('SteelIssuesService', () => {
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findUniqueOrThrow: jest.fn(),
+        aggregate: jest.fn().mockResolvedValue({ _sum: { barCount: null } }),
       },
       // Sổ ghi từng lần báo (2026-10-12) - mặc định chưa có khoá nào (findUnique null), không có lần
       // báo trước để đảo (findFirst null).
@@ -592,7 +594,6 @@ describe('SteelIssuesService', () => {
           where: expect.objectContaining({
             materialId: 30n,
             feasible: true,
-            bestStockLengthMm: { not: null },
           }),
         }),
       );
@@ -616,6 +617,75 @@ describe('SteelIssuesService', () => {
         null,
       );
       expect(prisma.steelIssue.create).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('CS2 20/11: phương án dùng cả cây lẻ kho Phôi và cây chiều dài mua', () => {
+    const twoLengthPlan = [
+      {
+        bestStockLengthMm: 6000,
+        totalBars: 4,
+        patterns: [
+          { stockLengthMm: 5800, barCount: 1 },
+          { stockLengthMm: 6000, barCount: 3 },
+        ],
+      },
+    ];
+
+    it('xuất được cây lẻ 5800 (không còn bị chặn vì khác chiều dài mua)', async () => {
+      prisma.steelIssue.create.mockResolvedValue(issue);
+      prisma.cuttingProposalLine.findMany.mockResolvedValueOnce(twoLengthPlan);
+
+      await service.create('1', { materialId: '30', barLengthMm: 5800, barCount: 1 }, 'user-1', null);
+
+      expect(prisma.steelIssue.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('xuất quá số cây phương án cần ở 1 chiều dài -> 400 nêu chiều dài còn lại, không ghi', async () => {
+      prisma.cuttingProposalLine.findMany.mockResolvedValueOnce(twoLengthPlan);
+      prisma.steelIssue.aggregate.mockResolvedValueOnce({ _sum: { barCount: 2 } });
+
+      const err = await service
+        .create('1', { materialId: '30', barLengthMm: 6000, barCount: 2 }, 'user-1', null)
+        .catch((e: Error) => e);
+
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect((err as Error).message).toContain('chỉ còn xuất được 1 cây');
+      expect((err as Error).message).toContain('1 cây 5800mm');
+      expect(prisma.steelIssue.create).not.toHaveBeenCalled();
+    });
+
+    it('loại sắt CHỈ cắt cây lẻ (1 chiều dài khác chiều dài mua): không xuất cây chiều dài mua, chặn quá số cây lẻ', async () => {
+      const leftoverOnly = [
+        { bestStockLengthMm: 6000, totalBars: 1, patterns: [{ stockLengthMm: 5650, barCount: 1 }] },
+      ];
+      prisma.cuttingProposalLine.findMany.mockResolvedValueOnce(leftoverOnly);
+      const wrongLen = await service
+        .create('1', { materialId: '30', barLengthMm: 6000, barCount: 1 }, 'user-1', null)
+        .catch((e: Error) => e);
+      expect(wrongLen).toBeInstanceOf(BadRequestException);
+      expect((wrongLen as Error).message).toContain('dùng cây dài 5650mm');
+
+      prisma.cuttingProposalLine.findMany.mockResolvedValueOnce(leftoverOnly);
+      prisma.steelIssue.aggregate.mockResolvedValueOnce({ _sum: { barCount: 1 } });
+      const over = await service
+        .create('1', { materialId: '30', barLengthMm: 5650, barCount: 1 }, 'user-1', null)
+        .catch((e: Error) => e);
+      expect(over).toBeInstanceOf(BadRequestException);
+      expect((over as Error).message).toContain('chỉ còn xuất được 0 cây');
+      expect((over as Error).message).not.toContain('chiều dài khác');
+      expect(prisma.steelIssue.create).not.toHaveBeenCalled();
+    });
+
+    it('chiều dài không có trong phương án vẫn bị chặn', async () => {
+      prisma.cuttingProposalLine.findMany.mockResolvedValueOnce(twoLengthPlan);
+
+      const err = await service
+        .create('1', { materialId: '30', barLengthMm: 5450, barCount: 1 }, 'user-1', null)
+        .catch((e: Error) => e);
+
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect((err as Error).message).toContain('5800 / 6000mm');
     });
   });
 
@@ -2623,6 +2693,42 @@ describe('SteelIssuesService', () => {
       const [result] = await service.getIssuePlan('1');
 
       expect(result.physicalStockQty).toBe(50); // không phải 80
+    });
+  });
+
+  describe('getIssuePlan - CS2 20/11 số cây theo từng chiều dài', () => {
+    it('tách Cần / Đã xuất / Tồn theo cây lẻ và cây chiều dài mua', async () => {
+      prisma.cuttingProposalLine.findMany.mockResolvedValue([
+        {
+          materialId: 30n,
+          totalBars: 4,
+          bestStockLengthMm: 6000,
+          patterns: [
+            { stockLengthMm: 5800, barCount: 1 },
+            { stockLengthMm: 6000, barCount: 3 },
+          ],
+        },
+      ]);
+      prisma.steelIssue.findMany.mockResolvedValue([
+        { materialId: 30n, barCount: 1, barLengthMm: 5800 },
+        { materialId: 30n, barCount: 2, barLengthMm: 6000 },
+      ]);
+      prisma.material.findMany.mockResolvedValue([
+        { id: 30n, warehouseId: 800n, code: 'ST-18', name: 'Sắt vuông 18x18' },
+      ]);
+      prisma.stockQuant.findMany.mockResolvedValue([
+        { warehouseId: 800n, materialId: 30n, stockLengthMm: 6000, qty: decimal(7) },
+        { warehouseId: 800n, materialId: 30n, stockLengthMm: 5800, qty: decimal(1) },
+      ]);
+
+      const [result] = await service.getIssuePlan('1');
+
+      expect(result.requiredBars).toBe(4);
+      expect(result.bestStockLengthMm).toBe(6000);
+      expect(result.lengths).toEqual([
+        { lengthMm: 5800, requiredBars: 1, issuedBars: 1, physicalStockQty: 1 },
+        { lengthMm: 6000, requiredBars: 3, issuedBars: 2, physicalStockQty: 7 },
+      ]);
     });
   });
 

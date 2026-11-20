@@ -32,6 +32,27 @@ export class SteelIssuePlanItemResponseDto {
   /// phải số dành riêng cho lệnh này, chỉ để thủ kho biết kho có bao nhiêu trước khi xuất.
   /// `null` = vật tư chưa được gán Kho (Material.warehouseId trống).
   @Expose() @ApiProperty({ nullable: true }) physicalStockQty!: number | null;
+  /** CS2 (20/11/2026): số cây theo TỪNG chiều dài cây của phương án (cây lẻ kho Phôi + cây chiều dài mua), tăng dần theo
+   *  chiều dài; phương án 1 chiều dài thì 1 phần tử. physicalStockQty = tồn vật lý ô chiều dài đó ở kho Phôi của lệnh. */
+  @Expose()
+  @ApiProperty({
+    type: 'array',
+    items: {
+      type: 'object',
+      properties: {
+        lengthMm: { type: 'number' },
+        requiredBars: { type: 'number' },
+        issuedBars: { type: 'number' },
+        physicalStockQty: { type: 'number', nullable: true },
+      },
+    },
+  })
+  lengths!: Array<{
+    lengthMm: number;
+    requiredBars: number;
+    issuedBars: number;
+    physicalStockQty: number | null;
+  }>;
 
   constructor(partial: Partial<SteelIssuePlanItemResponseDto>) {
     Object.assign(this, partial);

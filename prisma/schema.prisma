@@ -2398,6 +2398,9 @@ model CuttingProposalPattern {
   /// Số bó theo hệ số (CHỈ khi cắt MC Tự động): { "<hệ số>": số bó, "1": số cây cắt tay }, vd
   /// {"16": 3, "14": 1, "1": 2}; barCount = Σ hệ số × số bó. null với MC Laser.
   bundles       Json?
+  /// CS2 (20/11/2026): chiều dài cây của kiểu cắt này (mm). Một loại sắt có thể vừa cắt cây lẻ trong kho vừa cắt chiều dài
+  /// mua, nên chiều dài theo TỪNG kiểu cắt. null = phương án tính trước 20/11 -> dùng CuttingProposalLine.bestStockLengthMm.
+  stockLengthMm Int?
 
   line           CuttingProposalLine             @relation(fields: [lineId], references: [id])
   segments       CuttingProposalPatternSegment[]
