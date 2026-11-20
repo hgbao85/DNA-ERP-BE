@@ -45,7 +45,7 @@ export class IdempotencyKeyInUseException extends ConflictException {
 
 /** Phạm vi khoá: cùng chuỗi khoá ở 2 phạm vi khác nhau không chặn nhau. */
 export type IdempotencyScope =
-  'notifications' | 'purchase_receipts' | 'stock_ledger' | 'floor_reports';
+  'notifications' | 'purchase_receipts' | 'stock_ledger' | 'floor_reports' | 'warehouse_transfers';
 
 const MAX_KEY_LENGTH = 255;
 

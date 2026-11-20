@@ -35,9 +35,11 @@ export class MaterialsController {
     @Body() dto: CreateMaterialDto,
     @CurrentUser('roles') roles: string[],
     @CurrentUser('warehouseScope') warehouseScope: string | null,
+    @CurrentUser('id') userId: string,
   ) {
-    // 19/11: tồn kho ban đầu chỉ ghi được vào kho mình phụ trách (Admin / Giám đốc mọi kho) - xem MaterialsService.
-    return this.materialsService.create(dto, { roles: roles ?? [], warehouseScope });
+    // 19/11: tồn kho ban đầu chỉ ghi được vào kho mình phụ trách (Admin / Giám đốc mọi kho) - xem MaterialsService. 20/11: dòng
+    // tồn đầu ghi người tạo.
+    return this.materialsService.create(dto, { id: userId, roles: roles ?? [], warehouseScope });
   }
 
   @Get()

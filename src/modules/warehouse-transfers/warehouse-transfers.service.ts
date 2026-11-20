@@ -49,6 +49,11 @@ import { CUTTING_RECHECK_MESSAGE } from './cutting-recheck.util';
 import { lockPisForIssue } from '../../common/utils/pi-workshop-lock.util';
 import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
+import {
+  assertSameIdempotentRequest,
+  lockIdempotencyKey,
+  normalizeIdempotencyKey,
+} from '../../common/utils/idempotency.util';
 
 const ACTOR_NAME_SELECT = { select: { firstName: true, lastName: true } };
 
@@ -199,16 +204,17 @@ export class WarehouseTransfersService {
     userId: string,
     idempotencyKey?: string,
   ): Promise<WarehouseTransferResponseDto> {
-    // Vấn đề #11 audit 26/08 (phần còn thiếu) - trước đây create() không có gì để dedupe, khác
-    // material-issues/packaging-issues/steel-issues đã có. Cùng idiom resolve-or-return.
-    if (idempotencyKey) {
+    // Chống bấm trùng theo quy ước chung 20/11 (common/utils/idempotency.util.ts): cùng khoá + cùng nội dung -> trả lại phiếu
+    // cũ, không báo / phát realtime lại; khác nội dung / người / loại phiếu -> 422; lần trước đang xử lý -> 409. Trước đây chỉ
+    // tra theo khoá rồi trả phiếu cũ, không so nội dung và không khoá trong transaction.
+    const idemKey = normalizeIdempotencyKey(idempotencyKey, false);
+    const incoming = this.freeTransferFingerprint(dto, userId);
+    if (idemKey) {
       const existing = await this.prisma.warehouseTransfer.findUnique({
-        where: { idempotencyKey },
+        where: { idempotencyKey: idemKey },
         include: TRANSFER_INCLUDE,
       });
-      if (existing) {
-        return this.toResponseDto(existing);
-      }
+      if (existing) return this.replayTransfer(existing, incoming);
     }
 
     const fromWarehouseId = parseBigIntId(dto.fromWarehouseId);
@@ -279,6 +285,11 @@ export class WarehouseTransfersService {
     const planFormId = dto.planFormId ? parseBigIntId(dto.planFormId) : undefined;
 
     const created = await this.prisma.$transaction(async (tx) => {
+      // Khoá chống trùng là câu ĐẦU transaction, trước mọi khoá nghiệp vụ (quy ước 20/11).
+      if (idemKey) {
+        const raced = await this.replayTransferInTx(tx, idemKey, incoming);
+        if (raced) return { raced };
+      }
       // Khoá advisory TRƯỚC khi đếm - live-test 15/09/2026 (2 request đồng thời) xác nhận
       // nextTransferCode() cũ (đếm ở NGOÀI transaction, không khoá gì) cho ra cùng 1 mã ở 4/5
       // request bắn cùng lúc, rớt 409 "Duplicate value" dù tồn kho thừa sức phục vụ cả 2 - lưới
@@ -288,7 +299,7 @@ export class WarehouseTransfersService {
       // dùng ở createPieceTransfer() - tự nhả khi transaction này commit/rollback.
       const code = await this.nextTransferCode(tx, fromWarehouse);
 
-      const clampedItems: {
+      const lineItems: {
         materialId: bigint;
         materialName: string;
         unit: string;
@@ -301,7 +312,7 @@ export class WarehouseTransfersService {
       // Gộp các dòng CÙNG materialId TRƯỚC khi tính khả dụng (2026-09-15, phát hiện qua live-test:
       // 1 request với 2 dòng cùng materialId, mỗi dòng xin 2000/2788 tồn thật - cả 2 dòng đều đọc
       // CÙNG 1 `available` (reservation của dòng 1 chỉ ghi vào WarehouseTransferReservation SAU khi
-      // cả vòng lặp xong, xem createMany bên dưới), nên cả 2 CÙNG được clamp riêng rẽ theo 2788 →
+      // cả vòng lặp xong, xem createMany bên dưới), nên cả 2 CÙNG được so riêng rẽ với 2788 (bản cũ còn cắt bớt) →
       // tổng 4000 lọt qua, phiếu tạo ra "giữ chỗ" vượt tồn thật. postEntry() (StockLedgerService)
       // không tự chặn âm số dư khi confirm() ghi ledger sau này - nếu phiếu này được duyệt sẽ làm
       // âm tồn kho thật. Gộp theo materialId để mỗi vật tư chỉ bị trừ khả dụng ĐÚNG 1 lần cho dù
@@ -401,7 +412,7 @@ export class WarehouseTransfersService {
           continue;
         }
         if (item.quantity > 0) {
-          clampedItems.push({
+          lineItems.push({
             materialId,
             materialName: catalogMaterial.name,
             unit: catalogMaterial.unit,
@@ -417,7 +428,7 @@ export class WarehouseTransfersService {
           `Không đủ tồn kho khả dụng ở "${fromWarehouse.name}" (đã trừ phần phiếu khác đang giữ) - chưa lập phiếu:\n${shortages.join('\n')}`,
         );
       }
-      if (clampedItems.length === 0) {
+      if (lineItems.length === 0) {
         throw new BadRequestException('Phiếu chuyển kho phải có ít nhất 1 dòng số lượng lớn hơn 0');
       }
 
@@ -429,14 +440,14 @@ export class WarehouseTransfersService {
           planFormId,
           note: dto.note,
           createdById: userId,
-          idempotencyKey,
-          items: { create: clampedItems },
+          idempotencyKey: idemKey,
+          items: { create: lineItems },
         },
         include: TRANSFER_INCLUDE,
       });
 
       await tx.warehouseTransferReservation.createMany({
-        data: clampedItems.map((item) => ({
+        data: lineItems.map((item) => ({
           transferId: transfer.id,
           warehouseId: fromWarehouseId,
           materialId: item.materialId,
@@ -447,6 +458,7 @@ export class WarehouseTransfersService {
 
       return transfer;
     }, TRANSFER_TX_OPTIONS);
+    if ('raced' in created) return created.raced;
 
     await this.notifyTransferCreated(created);
     this.publishTransferChanged(created.id, 'CREATED', created.createdById);
@@ -457,7 +469,7 @@ export class WarehouseTransfersService {
    * Phiếu chuyển kho piece-only (mảnh/vật tư thành phẩm - mục 7 docs/review-2026-08-17-
    * sanxuat-stage-v16-va-chuyen-kho-manh.md) - tách khỏi create() (vật tư tiêu hao) theo quyết
    * định "không gộp" mục 7.5. Không dùng WarehouseTransferReservation (piece không có StockQuant
-   * làm nguồn khả dụng) - clamp theo GetPieceTransferPlan tại thời điểm tạo thay thế.
+   * làm nguồn khả dụng) - trần theo GetPieceTransferPlan + tồn mảnh thật tại thời điểm tạo; vượt thì báo lỗi, không cắt bớt (19/11).
    */
   async createPieceTransfer(
     dto: CreatePieceWarehouseTransferDto,
@@ -465,15 +477,15 @@ export class WarehouseTransfersService {
     userId: string,
     idempotencyKey?: string,
   ): Promise<WarehouseTransferResponseDto> {
-    // Vấn đề #11 audit 26/08 (phần còn thiếu) - cùng lý do create().
-    if (idempotencyKey) {
+    // Chống bấm trùng theo quy ước chung 20/11 - cùng cách create().
+    const idemKey = normalizeIdempotencyKey(idempotencyKey, false);
+    const incoming = this.pieceTransferFingerprint(dto, userId);
+    if (idemKey) {
       const existing = await this.prisma.warehouseTransfer.findUnique({
-        where: { idempotencyKey },
+        where: { idempotencyKey: idemKey },
         include: TRANSFER_INCLUDE,
       });
-      if (existing) {
-        return this.toResponseDto(existing);
-      }
+      if (existing) return this.replayTransfer(existing, incoming);
     }
 
     const fromWarehouseId = parseBigIntId(dto.fromWarehouseId);
@@ -525,6 +537,11 @@ export class WarehouseTransfersService {
     // khác nhau) là cách duy nhất chặn 2 request đồng thời cùng đọc 1 suggestedQty rồi cùng tạo
     // phiếu vượt số mảnh thực đã qua KCS.
     const transfer = await this.prisma.$transaction(async (tx) => {
+      // Khoá chống trùng là câu ĐẦU transaction, trước khoá theo lệnh (quy ước 20/11).
+      if (idemKey) {
+        const raced = await this.replayTransferInTx(tx, idemKey, incoming);
+        if (raced) return { raced };
+      }
       for (const orderId of [...orderIds].sort()) {
         await lockBusinessKey(tx, `piece-transfer:${orderId}`);
       }
@@ -620,12 +637,13 @@ export class WarehouseTransfersService {
           planFormId: dto.planFormId ? parseBigIntId(dto.planFormId) : undefined,
           note: dto.note,
           createdById: userId,
-          idempotencyKey,
+          idempotencyKey: idemKey,
           pieceItems: { create: rows },
         },
         include: TRANSFER_INCLUDE,
       });
     }, TRANSFER_TX_OPTIONS);
+    if ('raced' in transfer) return transfer.raced;
 
     await this.notifyTransferCreated(transfer);
     this.publishTransferChanged(transfer.id, 'CREATED', transfer.createdById);
@@ -1332,6 +1350,86 @@ export class WarehouseTransfersService {
         );
       }
     }
+  }
+
+  /**
+   * Vân tay chống trùng của phiếu chuyển (quy ước 20/11): loại phiếu + người tạo + 2 kho + SKU (planForm) + các dòng. KHÔNG so
+   * ghi chú. Phiếu đã lưu: có dòng mảnh = chuyển mảnh, có lệnh = chuyển hàng của lệnh đổi xưởng, còn lại = chuyển tự do.
+   */
+  private storedTransferFingerprint(t: WarehouseTransferWithRefs) {
+    const kind =
+      t.pieceItems.length > 0 ? 'PIECE' : t.productionInvoiceId != null ? 'WORKSHOP_MOVE' : 'FREE';
+    return {
+      kind,
+      createdById: t.createdById,
+      fromWarehouseId: t.fromWarehouseId,
+      toWarehouseId: t.toWarehouseId,
+      planFormId: t.planFormId,
+      lines:
+        kind === 'PIECE'
+          ? t.pieceItems.map((p) => `${p.productionOrderId}|${p.pieceId}|${Number(p.quantity)}`)
+          : t.items.map(
+              (i) => `${i.materialId}|${i.spec?.trim() ?? ''}|${Number(i.quantity.toNumber().toFixed(4))}`,
+            ),
+    };
+  }
+
+  /** Vân tay lần gửi chuyển kho tự do: gộp dòng cùng (vật tư, quy cách) đúng như lúc ghi, bỏ dòng 0. */
+  private freeTransferFingerprint(dto: CreateWarehouseTransferDto, userId: string) {
+    const merged = new Map<string, number>();
+    for (const it of dto.items) {
+      const key = `${parseBigIntId(it.materialId)}|${it.spec?.trim() ?? ''}`;
+      merged.set(key, (merged.get(key) ?? 0) + it.quantity);
+    }
+    return {
+      kind: 'FREE',
+      createdById: userId,
+      fromWarehouseId: parseBigIntId(dto.fromWarehouseId),
+      toWarehouseId: parseBigIntId(dto.toWarehouseId),
+      planFormId: dto.planFormId ? parseBigIntId(dto.planFormId) : null,
+      lines: [...merged]
+        .filter(([, q]) => q > 0)
+        .map(([key, q]) => `${key}|${Number(q.toFixed(4))}`),
+    };
+  }
+
+  /** Vân tay lần gửi chuyển mảnh: mỗi dòng (lệnh, mảnh, số) như lúc ghi, bỏ dòng 0. */
+  private pieceTransferFingerprint(dto: CreatePieceWarehouseTransferDto, userId: string) {
+    return {
+      kind: 'PIECE',
+      createdById: userId,
+      fromWarehouseId: parseBigIntId(dto.fromWarehouseId),
+      toWarehouseId: parseBigIntId(dto.toWarehouseId),
+      planFormId: dto.planFormId ? parseBigIntId(dto.planFormId) : null,
+      lines: dto.pieceItems
+        .filter((p) => p.quantity > 0)
+        .map(
+          (p) => `${parseBigIntId(p.productionOrderId)}|${parseBigIntId(p.pieceId)}|${p.quantity}`,
+        ),
+    };
+  }
+
+  /** Gửi lại cùng khoá: khác vân tay -> 422; giống -> trả đúng phiếu cũ, KHÔNG báo / phát realtime lại. */
+  private replayTransfer(
+    row: WarehouseTransferWithRefs,
+    incoming: ReturnType<WarehouseTransfersService['freeTransferFingerprint']>,
+  ): WarehouseTransferResponseDto {
+    assertSameIdempotentRequest(this.storedTransferFingerprint(row), incoming);
+    return this.toResponseDto(row);
+  }
+
+  /** Câu ĐẦU transaction: try-lock khoá chống trùng (đang xử lý -> 409) rồi đọc lại theo khoá. */
+  private async replayTransferInTx(
+    tx: PrismaTx,
+    key: string,
+    incoming: ReturnType<WarehouseTransfersService['freeTransferFingerprint']>,
+  ): Promise<WarehouseTransferResponseDto | null> {
+    await lockIdempotencyKey(tx, 'warehouse_transfers', key);
+    const row = await tx.warehouseTransfer.findUnique({
+      where: { idempotencyKey: key },
+      include: TRANSFER_INCLUDE,
+    });
+    return row ? this.replayTransfer(row, incoming) : null;
   }
 
   private async findWarehouseOrThrow(id: bigint): Promise<Warehouse> {
