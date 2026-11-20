@@ -1,10 +1,13 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
+import { NO_ASSIGNED_WAREHOUSE_MESSAGE } from '../../common/guards/warehouse-scope.guard';
 import {
   MaterialDetailKind,
   Prisma,
@@ -59,7 +62,10 @@ export class MaterialsService {
     private readonly stockLedgerService: StockLedgerService,
   ) {}
 
-  async create(dto: CreateMaterialDto): Promise<MaterialResponseDto> {
+  async create(
+    dto: CreateMaterialDto,
+    actor?: { roles: string[]; warehouseScope: string | null },
+  ): Promise<MaterialResponseDto> {
     // name/unit là cột NOT NULL ở DB - không thể bỏ qua được (không phải "validate form" chặn
     // nhập liệu, chỉ là guard tránh PrismaClientValidationError raw -> 500 khó hiểu khi thiếu
     // field mà lẽ ra DB sẽ từ chối). `code` KHÔNG còn bắt buộc - để trống thì tự sinh theo nhóm
@@ -71,6 +77,9 @@ export class MaterialsService {
     }
     if (dto.openingQty && dto.openingQty > 0 && !dto.warehouseId) {
       throw new BadRequestException('Phải chọn Kho trước khi nhập Tồn kho ban đầu');
+    }
+    if (dto.openingQty && dto.openingQty > 0 && dto.warehouseId && actor) {
+      await this.assertCanWriteOpeningStock(actor, parseBigIntId(dto.warehouseId));
     }
 
     const materialGroupId = dto.materialGroupId ? parseBigIntId(dto.materialGroupId) : undefined;
@@ -139,6 +148,32 @@ export class MaterialsService {
     }
 
     return this.toResponseDto(material);
+  }
+
+  /**
+   * Test toàn hệ thống 19/11 (việc Bảo nhận từ Sang): tồn đầu lúc tạo vật tư là 1 bút toán ghi tồn (đối ứng kho ảo Cân đối tồn
+   * kho) như "Sửa nhanh tồn" - cùng luật phạm vi: Admin / Giám đốc ghi được mọi kho, còn lại phải đang phụ trách ĐÚNG kho đó.
+   * Trước đây quyền tạo vật tư đi theo vai nền "Nhân viên" của mọi tài khoản văn phòng nên ai cũng ghi tồn vào kho bất kỳ.
+   * Tạo vật tư KHÔNG kèm tồn đầu không đổi.
+   */
+  private async assertCanWriteOpeningStock(
+    actor: { roles: string[]; warehouseScope: string | null },
+    warehouseId: bigint,
+  ): Promise<void> {
+    const isTop =
+      actor.roles.includes(DEFAULT_ROLES.ADMIN) || actor.roles.includes(BUSINESS_ROLES.BOSS);
+    if (isTop) return;
+    if (!actor.warehouseScope) throw new ForbiddenException(NO_ASSIGNED_WAREHOUSE_MESSAGE);
+    const wh = await this.prisma.warehouse.findUnique({
+      where: { id: warehouseId },
+      select: { code: true, name: true },
+    });
+    if (!wh) throw new NotFoundException(`Không tìm thấy kho ${warehouseId}`);
+    if (wh.code !== actor.warehouseScope) {
+      throw new ForbiddenException(
+        `Bạn phụ trách kho '${actor.warehouseScope}', không ghi tồn kho ban đầu vào "${wh.name}" được - bỏ trống số tồn ban đầu hoặc nhờ thủ kho kho đó / Admin`,
+      );
+    }
   }
 
   /** 1 lần fetch group dùng chung cho mọi resolver phụ thuộc systemKey (resolveDetailKind,

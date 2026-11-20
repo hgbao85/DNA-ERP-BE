@@ -1,4 +1,9 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { Prisma, StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { StockLedgerService } from '../stock/stock-ledger.service';
@@ -26,7 +31,7 @@ describe('MaterialsService', () => {
       delete: jest.Mock;
     };
     materialGroup: { findUnique: jest.Mock; findMany: jest.Mock };
-    warehouse: { findUniqueOrThrow: jest.Mock };
+    warehouse: { findUniqueOrThrow: jest.Mock; findUnique: jest.Mock };
     segmentSpec: { deleteMany: jest.Mock };
     materialSupplier: { deleteMany: jest.Mock };
     pieceBom: { findMany: jest.Mock };
@@ -63,7 +68,11 @@ describe('MaterialsService', () => {
         delete: jest.fn(),
       },
       materialGroup: { findUnique: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
-      warehouse: { findUniqueOrThrow: jest.fn() },
+      warehouse: {
+        findUniqueOrThrow: jest.fn(),
+        // 19/11: kiểm phạm vi kho khi ghi tồn đầu - kho 9 = kho Phụ kiện.
+        findUnique: jest.fn().mockResolvedValue({ code: 'vat-tu-tp', name: 'Kho Phụ kiện' }),
+      },
       segmentSpec: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
       materialSupplier: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
       pieceBom: { findMany: jest.fn().mockResolvedValue([]) },
@@ -209,6 +218,52 @@ describe('MaterialsService', () => {
           refType: StockLedgerRefType.OPENING_BALANCE,
         }),
       );
+    });
+
+    describe('19/11: tồn đầu chỉ ghi vào kho mình phụ trách', () => {
+      const input = {
+        code: 'BULONG-01',
+        name: 'Bu long',
+        unit: 'cai',
+        warehouseId: '9',
+        openingQty: 50,
+      };
+      beforeEach(() => {
+        prisma.material.findUnique.mockResolvedValue(null);
+        prisma.material.create.mockResolvedValue({ ...existingMaterial, id: 5n, warehouseId: 9n });
+        prisma.warehouse.findUniqueOrThrow.mockResolvedValue({ id: 99n, code: 'OPENING_BALANCE' });
+      });
+
+      it('thủ kho kho khác -> 403, không tạo vật tư, không ghi tồn', async () => {
+        await expect(
+          service.create(input, { roles: ['WAREHOUSE_STAFF'], warehouseScope: 'thanh-pham' }),
+        ).rejects.toThrow(ForbiddenException);
+        expect(prisma.material.create).not.toHaveBeenCalled();
+        expect(stockLedger.postEntry).not.toHaveBeenCalled();
+      });
+
+      it('tài khoản văn phòng chưa gán kho -> 403', async () => {
+        await expect(
+          service.create(input, { roles: ['WAREHOUSE_STAFF'], warehouseScope: null }),
+        ).rejects.toThrow(ForbiddenException);
+        expect(stockLedger.postEntry).not.toHaveBeenCalled();
+      });
+
+      it('thủ kho đúng kho -> ghi được; Admin / Giám đốc -> mọi kho', async () => {
+        await service.create(input, { roles: ['WAREHOUSE_STAFF'], warehouseScope: 'vat-tu-tp' });
+        await service.create(input, { roles: ['ADMIN'], warehouseScope: null });
+        await service.create(input, { roles: ['BOSS'], warehouseScope: null });
+        expect(stockLedger.postEntry).toHaveBeenCalledTimes(3);
+      });
+
+      it('không kèm tồn đầu -> ai có quyền tạo vật tư cũng tạo được như cũ', async () => {
+        await service.create(
+          { code: 'BULONG-02', name: 'Bu long', unit: 'cai', warehouseId: '9' },
+          { roles: ['WAREHOUSE_STAFF'], warehouseScope: null },
+        );
+        expect(prisma.material.create).toHaveBeenCalled();
+        expect(stockLedger.postEntry).not.toHaveBeenCalled();
+      });
     });
 
     it('does not post any stock-ledger entry when openingQty is absent', async () => {
