@@ -81,6 +81,12 @@ export interface OneMaterialOptions {
    * (chuẩn, retry, dò, bestAchievable).
    */
   laserMinTailMm?: number;
+  /**
+   * CS2 (anh Nhân 20/11/2026): cây lẻ đang có ở kho Phôi của xưởng làm lệnh. Đi theo MỌI lần giải (chuẩn, retry, dò,
+   * bestAchievable): mỗi lần giải thêm các chiều dài này (trừ chiều dài đang thử làm cây mua) với giới hạn đúng số cây, và
+   * ưu tiên dùng hết cây lẻ trước. Chiều dài MUA vẫn chỉ 1 / loại sắt như cũ.
+   */
+  leftovers?: Array<{ length: number; count: number }>;
 }
 
 export type OptimizeMaterialFn = typeof optimizeMaterial;
@@ -275,10 +281,31 @@ function optimizeOneMaterialAtCap(
     ...(opts.hardMaxSizesPerBar != null ? { hardMaxSizesPerBar: opts.hardMaxSizesPerBar } : {}),
   };
   const machineOpts = { ...baseMachineOpts, ...(minTail > 0 ? { laserMinTailMm: minTail } : {}) };
-  const optimize: OptimizeMaterialFn = (h, cl, dm, sl, t, k, o) =>
-    baseOptimize(h, cl, dm, sl, t, k, { ...o, ...machineOpts });
-  const optimizeNoRule: OptimizeMaterialFn = (h, cl, dm, sl, t, k, o) =>
-    baseOptimize(h, cl, dm, sl, t, k, { ...o, ...baseMachineOpts });
+  // CS2: thêm cây lẻ (khác chiều dài mua đang thử) + giới hạn số cây vào mọi lần giải. Anh Nhân câu 2b (C): dùng HẾT cây lẻ kể
+  // cả khi làm hao hụt vượt ngưỡng - KHSX xin đặc cách. Nên khi có cây lẻ thì KHÔNG lọc kiểu cắt theo ngưỡng TỪNG cây (lọc thì
+  // bộ giải tự bỏ cây lẻ để giữ dưới ngưỡng - đo thật 20/11: SAT-001 cây lẻ 5800 bị bỏ); ngưỡng vẫn xét trên TỔNG hao hụt
+  // (over_waste) như cũ -> vượt thì báo vượt ngưỡng.
+  const leftovers = (opts.leftovers ?? []).filter(
+    (l) => Number.isFinite(l.length) && l.length > 0 && Math.trunc(l.count) > 0,
+  );
+  const withLeftovers = (sl: number[], o: Parameters<OptimizeMaterialFn>[6]) => {
+    const extra = leftovers.filter((l) => !sl.includes(l.length));
+    if (!extra.length) return { sl, o };
+    const lengthCaps: Record<number, number> = {};
+    for (const l of extra) lengthCaps[l.length] = Math.trunc(l.count);
+    return {
+      sl: [...sl, ...extra.map((l) => l.length)],
+      o: { ...o, lengthCaps, maxWasteRatio: 1.0 },
+    };
+  };
+  const optimize: OptimizeMaterialFn = (h, cl, dm, sl, t, k, o) => {
+    const w = withLeftovers(sl, o);
+    return baseOptimize(h, cl, dm, w.sl, t, k, { ...w.o, ...machineOpts });
+  };
+  const optimizeNoRule: OptimizeMaterialFn = (h, cl, dm, sl, t, k, o) => {
+    const w = withLeftovers(sl, o);
+    return baseOptimize(h, cl, dm, w.sl, t, k, { ...w.o, ...baseMachineOpts });
+  };
   const tailInfo = minTail > 0 ? { minTailMm: minTail, optimizeNoRule } : undefined;
 
   const threshold = maxWastePct;

@@ -115,6 +115,33 @@ function parseMaxWastePctByMaterial(raw: unknown): Record<string, number> {
   return out;
 }
 
+/**
+ * CS2: `leftover_stock_by_material` -> { khoá chuẩn hoá: [{length, count}] } - chiều dài nguyên > 0, số cây nguyên > 0, cùng
+ * chiều dài cộng dồn. Rác bị bỏ qua (không lỗi: thiếu cây lẻ chỉ là tính như cũ).
+ */
+function parseLeftoversByMaterial(
+  raw: unknown,
+): Record<string, Array<{ length: number; count: number }>> {
+  const out: Record<string, Array<{ length: number; count: number }>> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(v)) continue;
+    const byLen = new Map<number, number>();
+    for (const it of v as Array<Record<string, unknown>>) {
+      const length = Math.trunc(Number(it?.length));
+      const count = Math.trunc(Number(it?.count));
+      if (!(length > 0) || !(count > 0)) continue;
+      byLen.set(length, (byLen.get(length) ?? 0) + count);
+    }
+    const key = normalizeMaterialKey(k);
+    if (key && byLen.size)
+      out[key] = [...byLen]
+        .sort((a, b) => a[0] - b[0])
+        .map(([length, count]) => ({ length, count }));
+  }
+  return out;
+}
+
 function parseStockLengthsByMaterial(raw: unknown): Record<string, number[]> {
   const out: Record<string, number[]> = {};
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
@@ -209,6 +236,7 @@ export async function propose(body: ProposeRequest): Promise<ProposeResponse> {
   const maxWastePct = toFloat(body.max_waste_percentage ?? 1.0, 1.0);
   const maxWastePctByMaterial = parseMaxWastePctByMaterial(body.max_waste_percentage_by_material);
   const stockLengthsByMaterial = parseStockLengthsByMaterial(body.stock_lengths_by_material);
+  const leftoversByMaterial = parseLeftoversByMaterial(body.leftover_stock_by_material);
   const maxSurplus = Math.max(0, toInt(body.max_surplus ?? 10, 10));
   const autoScan = Boolean(body.auto_scan ?? false);
   const stopOnFirst = Boolean(body.stop_on_first ?? false);
@@ -338,6 +366,7 @@ export async function propose(body: ProposeRequest): Promise<ProposeResponse> {
         // Cắt từng cây (laser, hoặc loại sắt cutEach khi tu_dong) mới chịu luật nhát cắt cuối; cắt
         // theo bó thì không.
         ...(!gBundle && laserMinTailMm > 0 ? { laserMinTailMm } : {}),
+        ...(leftoversByMaterial[key] ? { leftovers: leftoversByMaterial[key] } : {}),
       },
     );
     const solveSeconds = Math.round(((performance.now() - t0) / 1000) * 100) / 100;

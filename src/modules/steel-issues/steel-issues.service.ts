@@ -84,10 +84,23 @@ import { RecordStepBatchDto } from './dto/record-step-batch.dto';
 import { SteelIssuePlanItemResponseDto } from './dto/steel-issue-plan-item-response.dto';
 import { SteelIssueResponseDto } from './dto/steel-issue-response.dto';
 import { StepBatchResponseDto, StepBatchSegmentResponseDto } from './dto/step-batch-response.dto';
+import { barsByStockLength } from '../cutting-proposals/pattern-stock-length.util';
 import {
   StepBundleResponseDto,
   StepBundleSegmentResponseDto,
 } from './dto/step-bundle-response.dto';
+
+/** "Cần xuất" 1 loại sắt trong PI; barsByLength = số cây theo từng chiều dài kiểu cắt (CS2 20/11/2026). */
+type RequiredSteel = {
+  requiredBars: number;
+  bestStockLengthMm: number | null;
+  barsByLength: Map<number, number>;
+};
+type StockInfo = {
+  remainingToIssue: number | null;
+  physicalStockQty: number | null;
+  physicalByLength: Map<number, number>;
+};
 
 const PROCESS_CAT = ProcessStep.CAT;
 
@@ -426,7 +439,7 @@ export class SteelIssuesService {
     }
     await this.assertMaterialUsedInInvoice(orders, materialId, invoice.id);
     const poIds = orders.map((o) => o.id);
-    const { approvedAt, stockLengthsMm } = await this.assertMaterialInApprovedProposal(
+    const { approvedAt, stockLengthsMm, requiredBarsByLength, usesLeftover } = await this.assertMaterialInApprovedProposal(
       invoice.id,
       poIds,
       materialId,
@@ -437,6 +450,28 @@ export class SteelIssuesService {
       throw new BadRequestException(
         `Phương án cắt đã duyệt dùng cây dài ${stockLengthsMm.join(' / ')}mm - không xuất cây ${dto.barLengthMm}mm cho lệnh này`,
       );
+    }
+    // CS2 (anh Nhân 20/11/2026): phương án dùng cả cây lẻ kho Phôi lẫn cây chiều dài mua -> mỗi chiều dài chỉ xuất tới đúng số
+    // cây phương án cần. Giữ chỗ rút theo TỔNG cây nên không tự chặn được: xuất dư chiều dài này sẽ ăn mất phần của chiều dài
+    // kia. Cũng áp dụng khi CẢ loại sắt chỉ cắt cây lẻ (1 chiều dài nhưng khác chiều dài mua) - không xuất cây chiều dài mua
+    // không được giữ chỗ cho lệnh. Phương án 1 chiều dài mua (cũ) giữ nguyên như trước (giữ chỗ chặn tổng).
+    if (requiredBarsByLength.size > 1 || usesLeftover) {
+      const need = requiredBarsByLength.get(dto.barLengthMm) ?? 0;
+      const agg = await this.prisma.steelIssue.aggregate({
+        where: { productionInvoiceId: invoice.id, materialId, barLengthMm: dto.barLengthMm, reworkOfId: null },
+        _sum: { barCount: true },
+      });
+      const issued = agg._sum.barCount ?? 0;
+      if (issued + dto.barCount > need) {
+        const others = [...requiredBarsByLength]
+          .filter(([len]) => len !== dto.barLengthMm)
+          .map(([len, bars]) => `${bars} cây ${len}mm`)
+          .join(', ');
+        throw new BadRequestException(
+          `Phương án cắt cần ${need} cây ${dto.barLengthMm}mm (đã xuất ${issued}) - chỉ còn xuất được ${Math.max(0, need - issued)} cây chiều dài này.` +
+            (others ? `\nPhần còn lại của loại sắt này xuất theo chiều dài khác: ${others}` : ''),
+        );
+      }
     }
     // approvedAt null về lý thuyết không xảy ra (status đã lọc APPROVED ở query trên, field này
     // luôn được set cùng lúc chuyển status) - coi như "trước cutover" nếu có, an toàn hơn (không
@@ -3162,30 +3197,43 @@ export class SteelIssuesService {
             ],
           },
         },
-        select: { materialId: true, totalBars: true, bestStockLengthMm: true },
+        select: {
+          materialId: true,
+          totalBars: true,
+          bestStockLengthMm: true,
+          patterns: { select: { stockLengthMm: true, barCount: true } },
+        },
       }),
       // Chỉ đợt gốc (không tính rework) - đúng cách daXuatOf() bên mock cộng dồn.
       this.prisma.steelIssue.findMany({
         where: { productionInvoiceId: invoice.id, reworkOfId: null },
-        select: { materialId: true, barCount: true },
+        select: { materialId: true, barCount: true, barLengthMm: true },
       }),
     ]);
 
     const issuedByMaterial = new Map<string, number>();
+    const issuedByMaterialLength = new Map<string, number>();
     for (const i of issues) {
       const key = i.materialId.toString();
       issuedByMaterial.set(key, (issuedByMaterial.get(key) ?? 0) + i.barCount);
+      const lk = `${key}:${i.barLengthMm}`;
+      issuedByMaterialLength.set(lk, (issuedByMaterialLength.get(lk) ?? 0) + i.barCount);
     }
 
-    const requiredByMaterial = new Map<
-      string,
-      { requiredBars: number; bestStockLengthMm: number | null }
-    >();
+    const requiredByMaterial = new Map<string, RequiredSteel>();
     for (const l of lines) {
       const key = l.materialId.toString();
-      const entry = requiredByMaterial.get(key) ?? { requiredBars: 0, bestStockLengthMm: null };
+      const entry = requiredByMaterial.get(key) ?? {
+        requiredBars: 0,
+        bestStockLengthMm: null,
+        barsByLength: new Map<number, number>(),
+      };
       entry.requiredBars += l.totalBars ?? 0;
       entry.bestStockLengthMm ??= l.bestStockLengthMm ?? null;
+      // CS2 (20/11): tách theo chiều dài từng kiểu cắt (cây lẻ kho Phôi + cây chiều dài mua).
+      for (const [len, bars] of barsByStockLength(l, l.patterns)) {
+        entry.barsByLength.set(len, (entry.barsByLength.get(len) ?? 0) + bars);
+      }
       requiredByMaterial.set(key, entry);
     }
 
@@ -3219,6 +3267,14 @@ export class SteelIssuesService {
         issuedBarCount: issuedByMaterial.get(key) ?? 0,
         remainingToIssue: stockInfo?.remainingToIssue ?? null,
         physicalStockQty: stockInfo?.physicalStockQty ?? null,
+        lengths: [...(req?.barsByLength ?? new Map<number, number>())].map(
+          ([lengthMm, requiredBars]) => ({
+            lengthMm,
+            requiredBars,
+            issuedBars: issuedByMaterialLength.get(`${key}:${lengthMm}`) ?? 0,
+            physicalStockQty: stockInfo?.physicalByLength.get(lengthMm) ?? null,
+          }),
+        ),
       });
     });
   }
@@ -3238,12 +3294,9 @@ export class SteelIssuesService {
   private async buildStockInfoByMaterial(
     productionInvoiceId: bigint,
     materialIds: bigint[],
-    requiredByMaterial: Map<string, { requiredBars: number; bestStockLengthMm: number | null }>,
-  ): Promise<Map<string, { remainingToIssue: number | null; physicalStockQty: number | null }>> {
-    const result = new Map<
-      string,
-      { remainingToIssue: number | null; physicalStockQty: number | null }
-    >();
+    requiredByMaterial: Map<string, RequiredSteel>,
+  ): Promise<Map<string, StockInfo>> {
+    const result = new Map<string, StockInfo>();
     if (materialIds.length === 0) return result;
 
     // L5 (2026-08-26): TỔNG cả pool giữ chỗ ACTIVE của (PI, vật tư) - KHÔNG còn tra qua 1
@@ -3322,9 +3375,16 @@ export class SteelIssuesService {
           physicalStockQty = sum;
         }
       }
+      const physicalByLength = new Map<number, number>();
+      if (warehouseId != null) {
+        for (const len of requiredByMaterial.get(key)?.barsByLength.keys() ?? []) {
+          physicalByLength.set(len, quantByKey.get(`${warehouseId}:${materialId}:${len}`) ?? 0);
+        }
+      }
       result.set(key, {
         remainingToIssue: remainingByMaterial.has(key) ? remainingByMaterial.get(key)! : null,
         physicalStockQty,
+        physicalByLength,
       });
     }
     return result;
@@ -3379,7 +3439,12 @@ export class SteelIssuesService {
     productionInvoiceId: bigint,
     productionOrderIds: bigint[],
     materialId: bigint,
-  ): Promise<{ approvedAt: Date | null; stockLengthsMm: number[] }> {
+  ): Promise<{
+    approvedAt: Date | null;
+    stockLengthsMm: number[];
+    requiredBarsByLength: Map<number, number>;
+    usesLeftover: boolean;
+  }> {
     const where: Prisma.CuttingProposalLineWhereInput = {
       materialId,
       // `feasible: true` là BẮT BUỘC, không thừa: saveSuccess() tạo dòng cho MỌI vật tư solver
@@ -3406,17 +3471,37 @@ export class SteelIssuesService {
         `Chưa có phương án cắt (CuttingProposal) đã duyệt và cắt được cho vật tư ${materialId} của PI ${productionInvoiceId} - chưa thể xuất sắt`,
       );
     }
-    // 1 chiều dài cho mỗi (lệnh, loại sắt) - findConflictingStockLengthReason() chặn từ lúc duyệt; vẫn đọc tập để an toàn.
-    const lengths = await this.prisma.cuttingProposalLine.findMany({
-      where: { ...where, bestStockLengthMm: { not: null } },
-      select: { bestStockLengthMm: true },
-      distinct: ['bestStockLengthMm'],
+    // CS2 (20/11): chiều dài theo TỪNG kiểu cắt (cây lẻ kho Phôi + cây chiều dài mua); kiểu cắt cũ chưa lưu chiều dài thì theo
+    // chiều dài của dòng (1 chiều dài / (lệnh, loại sắt), findConflictingStockLengthReason() chặn từ lúc duyệt).
+    const planLines = await this.prisma.cuttingProposalLine.findMany({
+      where,
+      select: {
+        bestStockLengthMm: true,
+        totalBars: true,
+        patterns: { select: { stockLengthMm: true, barCount: true } },
+      },
     });
-    const stockLengthsMm = lengths
-      .map((l) => l.bestStockLengthMm)
-      .filter((v): v is number => v != null)
-      .sort((a, b) => a - b);
-    return { approvedAt: line.cuttingProposal.approvedAt, stockLengthsMm };
+    const requiredBarsByLength = new Map<number, number>();
+    for (const l of planLines) {
+      for (const [len, bars] of barsByStockLength(l, l.patterns)) {
+        requiredBarsByLength.set(len, (requiredBarsByLength.get(len) ?? 0) + bars);
+      }
+    }
+    // Chiều dài được xuất = chiều dài các kiểu cắt; chỉ khi không tách được số cây nào (dòng thiếu số cây) mới rơi về chiều dài mua.
+    const purchaseLengths = new Set(
+      planLines.map((l) => l.bestStockLengthMm).filter((v): v is number => v != null),
+    );
+    const stockLengthsMm = (
+      requiredBarsByLength.size > 0 ? [...requiredBarsByLength.keys()] : [...purchaseLengths]
+    ).sort((x, y) => x - y);
+    // Có kiểu cắt dùng cây lẻ kho Phôi (chiều dài khác chiều dài mua của dòng).
+    const usesLeftover = [...requiredBarsByLength.keys()].some((len) => !purchaseLengths.has(len));
+    return {
+      approvedAt: line.cuttingProposal.approvedAt,
+      stockLengthsMm,
+      requiredBarsByLength,
+      usesLeftover,
+    };
   }
 
   private async findInvoiceOrThrow(id: string) {

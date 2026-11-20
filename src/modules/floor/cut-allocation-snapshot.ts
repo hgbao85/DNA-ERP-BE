@@ -59,6 +59,8 @@ export const PROPOSAL_SELECT = {
           barCount: true,
           wastePerBarMm: true,
           bundles: true,
+          // CS2 (20/11): chiều dài cây của TỪNG kiểu cắt (cây lẻ kho Phôi hoặc cây chiều dài mua).
+          stockLengthMm: true,
           segments: {
             select: { countPerBar: true, segmentSpec: { select: { cutLengthMm: true } } },
           },

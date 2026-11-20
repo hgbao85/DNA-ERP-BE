@@ -30,7 +30,7 @@ describe('CuttingProposalsService', () => {
     cuttingProposalLine: { create: jest.Mock; findMany: jest.Mock; update: jest.Mock };
     cuttingProposalItem: { findMany: jest.Mock; deleteMany: jest.Mock };
     cuttingPlanCoverage: { create: jest.Mock; update: jest.Mock; findUnique: jest.Mock };
-    cuttingProposalPattern: { create: jest.Mock };
+    cuttingProposalPattern: { create: jest.Mock; findMany: jest.Mock };
     cuttingProposalPatternSegment: { create: jest.Mock };
     purchaseProposal: {
       findFirst: jest.Mock;
@@ -197,7 +197,7 @@ describe('CuttingProposalsService', () => {
       // L2 mức 2 (2026-08-27): bảng phủ - mặc định SKU CHƯA có chủ (câu FOR UPDATE trong
       // claimCuttingPlanCoverage trả rỗng, xem $queryRaw dưới) nên luôn đi nhánh create.
       cuttingPlanCoverage: { create: jest.fn(), update: jest.fn(), findUnique: jest.fn() },
-      cuttingProposalPattern: { create: jest.fn() },
+      cuttingProposalPattern: { create: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
       cuttingProposalPatternSegment: { create: jest.fn() },
       // 2026-08-25 "gộp 1 PI = 1 form": findFirst tìm đề xuất còn mở của cùng PI để gộp thêm dòng
       // sắt vào - mặc định null (không tìm thấy) vì productionOrder fixture dưới đây KHÔNG có
@@ -2330,21 +2330,26 @@ describe('CuttingProposalsService', () => {
       });
     });
 
-    describe('chiều dài đang có tồn ở kho Phôi', () => {
+    // CS2 (anh Nhân 20/11/2026): cây lẻ ở ĐÚNG kho Phôi của xưởng làm lệnh dùng TRƯỚC (tối đa đúng số cây), gửi bộ giải qua
+    // leftover_stock_by_material; chiều dài MUA giữ 1 chiều dài/loại sắt (chuẩn hoặc KHSX chọn). Thay hành vi 13/11 (chiều dài tồn
+    // ở kho Phôi MỌI xưởng bị đưa vào danh sách chiều dài mua, không giới hạn số cây).
+    describe('cây lẻ kho Phôi của xưởng làm lệnh (CS2)', () => {
       beforeEach(() => {
         prisma.warehouse.findMany.mockResolvedValue([{ id: 11n }, { id: 12n }]);
+        workshop('PHU_AN', 'Phú An');
       });
 
-      it('gửi [chuẩn..., tồn...] cho loại KHSX không gõ: chỉ lấy bội 50, trong dải, khác chuẩn, còn ≥ 1 cây chưa giữ chỗ', async () => {
+      it('gửi số cây lẻ (bội 50, trong dải, còn >= 1 cây chưa giữ chỗ, khác chiều dài mua), chỉ đọc kho Phôi của xưởng làm lệnh', async () => {
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(3n));
         prisma.stockQuant.findMany.mockResolvedValue([
           quant(11n, 5950, 4), // hợp lệ
-          quant(12n, 5950, 1), // cùng chiều dài ở kho khác: gộp, không lặp
+          quant(12n, 5950, 1), // cùng chiều dài ở kho Phôi khác của CÙNG xưởng: cộng dồn -> 5 cây
           quant(11n, 5900, 2), // bị giữ chỗ hết
           quant(12n, 5925, 9), // không bội 50
-          quant(12n, 6000, 9), // chiều dài chuẩn
+          quant(12n, 6000, 9), // chiều dài MUA (chuẩn) - không phải cây lẻ
           quant(12n, 4500, 9), // ngoài dải 5000..6000
           quant(12n, 5500, 0.5), // chưa đủ 1 cây
-          quant(11n, 5800, 3), // 3 cây, giữ chỗ 3 - đã lấy 1 -> còn 1: hợp lệ
+          quant(11n, 5800, 3), // 3 cây, giữ chỗ 3 - đã lấy 1 -> còn 1
         ]);
         prisma.stockReservation.findMany.mockResolvedValue([
           reservation(5900, 2, 0),
@@ -2354,76 +2359,92 @@ describe('CuttingProposalsService', () => {
 
         await invoke();
 
-        expect(sentBody().stock_lengths_by_material).toEqual({ '200': [5850, 6000, 5800, 5950] });
-        // Truy vấn gộp: đúng 1 lần mỗi bảng dù có nhiều chiều dài.
+        expect(sentBody().leftover_stock_by_material).toEqual({
+          '200': [
+            { length: 5800, count: 1 },
+            { length: 5950, count: 5 },
+          ],
+        });
+        // Chiều dài mua KHÔNG còn bị thêm chiều dài tồn (hành vi 13/11 đã bỏ).
+        expect(sentBody()).not.toHaveProperty('stock_lengths_by_material');
+        expect(prisma.warehouse.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({ kind: 'PHOI', workshopId: 3n }) as unknown,
+          }),
+        );
         expect(prisma.stockQuant.findMany).toHaveBeenCalledTimes(1);
         expect(prisma.stockReservation.findMany).toHaveBeenCalledTimes(1);
       });
 
-      it('loại KHSX đã tự gõ chiều dài: giữ đúng chiều dài đã gõ, KHÔNG đọc tồn cho loại đó', async () => {
+      it('KHSX đã tự chọn chiều dài: VẪN dùng cây lẻ trước (câu 3); cây cùng chiều dài đã chọn không tính là cây lẻ', async () => {
         prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(
-          orderIn(null, { solverStockLengthsByMaterial: { '200': 5900 } }),
+          orderIn(3n, { solverStockLengthsByMaterial: { '200': 5950 } }),
         );
-        prisma.stockQuant.findMany.mockResolvedValue([quant(11n, 5950, 4)]);
+        prisma.stockQuant.findMany.mockResolvedValue([quant(11n, 5950, 4), quant(11n, 6000, 2)]);
         respond(okLine());
 
         await invoke();
 
-        expect(sentBody().stock_lengths_by_material).toEqual({ '200': 5900 });
-        expect(prisma.warehouse.findMany).not.toHaveBeenCalled();
+        expect(sentBody().stock_lengths_by_material).toEqual({ '200': 5950 });
+        // 6000 là cây chuẩn nhưng loại này mua 5950 -> 2 cây 6000 trong kho là cây lẻ của lệnh này.
+        expect(sentBody().leftover_stock_by_material).toEqual({
+          '200': [{ length: 6000, count: 2 }],
+        });
       });
 
-      it('không có chiều dài tồn hợp lệ -> không gửi stock_lengths_by_material (như cũ)', async () => {
+      it('lệnh chưa có xưởng -> không biết đúng kho Phôi nào, không đọc cây lẻ', async () => {
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(null));
+        respond(okLine());
+
+        await invoke();
+
+        expect(prisma.warehouse.findMany).not.toHaveBeenCalled();
+        expect(sentBody()).not.toHaveProperty('leftover_stock_by_material');
+      });
+
+      it('không có cây lẻ hợp lệ -> không gửi leftover_stock_by_material', async () => {
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(3n));
         prisma.stockQuant.findMany.mockResolvedValue([quant(11n, 6000, 4)]);
         respond(okLine());
 
         await invoke();
 
-        expect(sentBody()).not.toHaveProperty('stock_lengths_by_material');
+        expect(sentBody()).not.toHaveProperty('leftover_stock_by_material');
       });
 
-      it('chế độ không cho đặt cây riêng (auto_scan=false) vẫn thử chiều dài tồn - đó là hàng có sẵn', async () => {
-        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(
-          orderIn(null, { solverAllowCustomLength: false }),
-        );
-        prisma.stockQuant.findMany.mockResolvedValue([quant(11n, 5950, 4)]);
-        respond(okLine());
-
-        await invoke();
-
-        expect(sentBody().auto_scan).toBe(false);
-        expect(sentBody().stock_lengths_by_material).toEqual({ '200': [5850, 6000, 5950] });
-      });
-
-      it('lengthSource = "stock" khi chiều dài tốt nhất là chiều dài tồn đã gửi; chuẩn vẫn "fixed", scan vẫn "scan"', async () => {
-        prisma.stockQuant.findMany.mockResolvedValue([quant(11n, 5950, 4)]);
-        respond(
-          okLine({ best_stock_length: 5950 }), // trong danh sách tồn đã gửi
-          okLine({ material: '201', best_stock_length: 5950 }), // loại này KHÔNG gửi chiều dài tồn
-          okLine({ material: '202', best_stock_length: 6000 }), // chiều dài chuẩn
-          okLine({ material: '203', best_stock_length: 5900, length_source: 'scan' }),
-        );
-
-        await invoke();
-
-        expect(lineData(0).lengthSource).toBe('stock');
-        expect(lineData(1).lengthSource).toBe('fixed');
-        expect(lineData(2).lengthSource).toBe('fixed');
-        expect(lineData(3).lengthSource).toBe('scan');
-      });
-
-      it('đọc tồn lỗi KHÔNG làm hỏng lượt tính: cảnh báo rồi tính như không có chiều dài tồn', async () => {
+      it('đọc tồn lỗi KHÔNG làm hỏng lượt tính: cảnh báo rồi tính như không có cây lẻ', async () => {
         const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(3n));
         prisma.warehouse.findMany.mockRejectedValue(new Error('db sập'));
         respond(okLine());
 
         await invoke();
 
         expect(solverClient.propose).toHaveBeenCalledTimes(1);
-        expect(sentBody()).not.toHaveProperty('stock_lengths_by_material');
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining('chiều dài tồn kho'));
+        expect(sentBody()).not.toHaveProperty('leftover_stock_by_material');
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('cây lẻ kho Phôi'));
         expect(lineData(0).lengthSource).toBe('fixed');
         warn.mockRestore();
+      });
+
+      it('kiểu cắt lưu chiều dài cây của TỪNG kiểu (cây lẻ 5950 + cây mua 6000 trong cùng 1 loại sắt)', async () => {
+        prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(3n));
+        prisma.cuttingProposalPattern.create.mockResolvedValue({ id: 70n });
+        respond(
+          okLine({
+            cutting_patterns: [
+              { pattern_id: 1, bars: 1, stock_length: 5950, pieces_breakdown: [] },
+              { pattern_id: 2, bars: 3, stock_length: 6000, pieces_breakdown: [] },
+            ],
+          }),
+        );
+
+        await invoke();
+
+        const lens = (prisma.cuttingProposalPattern.create.mock.calls as unknown[][]).map(
+          (c) => (c[0] as { data: { stockLengthMm: number | null } }).data.stockLengthMm,
+        );
+        expect(lens).toEqual([5950, 6000]);
       });
     });
   });
@@ -3063,6 +3084,91 @@ describe('CuttingProposalsService', () => {
         expect.objectContaining({ stockLengthMm: 5900 }),
         expect.anything(),
       );
+    });
+
+    describe('CS2 20/11: cây lẻ kho Phôi + cây chiều dài mua trong cùng 1 dòng', () => {
+      const setup = (availableByLength: Record<number, number>) => {
+        prisma.cuttingProposal.findUnique.mockResolvedValue({
+          id: 2n,
+          productionOrderId: 1n,
+          status: CuttingProposalStatus.DRAFT,
+          lines: [{ id: 9n, materialId: 30n, feasible: true, totalBars: 4, bestStockLengthMm: 6000 }],
+        });
+        prisma.cuttingProposal.update.mockResolvedValue({
+          id: 2n,
+          productionOrderId: 1n,
+          status: CuttingProposalStatus.APPROVED,
+          ...productionOrderRelation(),
+        });
+        prisma.cuttingProposalPattern.findMany.mockResolvedValue([
+          { lineId: 9n, stockLengthMm: 5800, barCount: 1 },
+          { lineId: 9n, stockLengthMm: 6000, barCount: 3 },
+        ]);
+        prisma.material.findMany.mockResolvedValue([
+          { id: 30n, code: 'SAT-30', warehouseId: 800n, warehouse: { code: 'phoi-son-han' } },
+        ]);
+        stockQty = 5;
+        stockReservationsService.getAvailableQty.mockImplementation(
+          (_tx: unknown, _w: unknown, _m: unknown, _onHand: number, len: number) =>
+            Promise.resolve(availableByLength[len] ?? 0),
+        );
+      };
+
+      it('giữ chỗ cây lẻ đúng chiều dài, chỉ MUA phần cây chiều dài mua (không mua cây lẻ)', async () => {
+        setup({ 5800: 1, 6000: 0 });
+
+        await service.approve('2', 'user-1');
+
+        expect(prisma.purchaseProposal.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            items: {
+              create: [
+                expect.objectContaining({ materialId: 30n, buyQty: 3, stockLengthMm: 6000 }),
+              ],
+            },
+          }) as unknown,
+        });
+        expect(stockReservationsService.reserve).toHaveBeenCalledTimes(1);
+        expect(stockReservationsService.reserve).toHaveBeenCalledWith(
+          expect.objectContaining({ qty: 1, stockLengthMm: 5800, warehouseId: 800n }),
+          expect.anything(),
+        );
+        expect(prisma.cuttingProposalLine.update).toHaveBeenCalledWith({
+          where: { id: 9n },
+          data: { buyBars: 3 },
+        });
+      });
+
+      it('có tồn chiều dài mua: giữ chỗ cả 2 chiều dài, mua phần còn thiếu', async () => {
+        setup({ 5800: 1, 6000: 2 });
+
+        await service.approve('2', 'user-1');
+
+        expect(stockReservationsService.reserve).toHaveBeenCalledWith(
+          expect.objectContaining({ qty: 1, stockLengthMm: 5800 }),
+          expect.anything(),
+        );
+        expect(stockReservationsService.reserve).toHaveBeenCalledWith(
+          expect.objectContaining({ qty: 2, stockLengthMm: 6000 }),
+          expect.anything(),
+        );
+        expect(prisma.cuttingProposalLine.update).toHaveBeenCalledWith({
+          where: { id: 9n },
+          data: { buyBars: 1 },
+        });
+      });
+
+      it('cây lẻ đã bị lệnh khác giữ mất trước lúc duyệt -> 409 bảo Tính lại, không mua bù cây lẻ, không ghi gì', async () => {
+        setup({ 5800: 0, 6000: 0 });
+
+        const err = await service.approve('2', 'user-1').catch((e: Error) => e);
+
+        expect(err).toBeInstanceOf(ConflictException);
+        expect((err as Error).message).toContain('cây lẻ 5800 mm');
+        expect((err as Error).message).toContain('Tính lại');
+        expect(stockReservationsService.reserve).not.toHaveBeenCalled();
+        expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
+      });
     });
 
     it('giữ chỗ tự động (B4 Đợt 2): thiếu 1 phần thì split đúng giữa tồn giữ chỗ và buyQty (Phase 8.1)', async () => {

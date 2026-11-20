@@ -63,9 +63,9 @@ import { loadSegmentProcessInfo, resolveProposalBomEntries } from './proposal-se
 import {
   buildSizesRelaxNote,
   loadAvailableStockLengths,
-  mergeStandardAndStockLengths,
   parseMaxSizesPerBarByWorkshop,
 } from './steel-stock-lengths.util';
+import { barsByStockLength } from './pattern-stock-length.util';
 import {
   bundleSpecMissingMessage,
   findSteelSpecsOutsideBundleTable,
@@ -248,6 +248,8 @@ interface SolverProposeResponse {
     cutting_patterns?: Array<{
       pattern_id: number;
       bars: number;
+      /// Chiều dài cây của kiểu cắt (mm) - CS2: 1 loại sắt có thể vừa cây lẻ trong kho vừa chiều dài mua.
+      stock_length?: number;
       waste_per_bar?: number;
       pieces_breakdown?: Array<{ size: number; count: number }>;
       /// CHỈ khi machine = 'tu_dong': { "<hệ số bó>": số bó, "1": số cây cắt tay }; bars = Σ hệ số × số bó.
@@ -2559,6 +2561,23 @@ export class CuttingProposalsService {
     const buyableLines = proposal.lines.filter(
       (line) => line.feasible && line.totalBars != null && line.totalBars > 0,
     );
+    // CS2 (20/11): số cây theo TỪNG chiều dài kiểu cắt (cây lẻ kho Phôi + cây chiều dài mua) của mỗi dòng.
+    const patternRows =
+      buyableLines.length > 0
+        ? await this.prisma.cuttingProposalPattern.findMany({
+            where: { lineId: { in: buyableLines.map((l) => l.id) } },
+            select: { lineId: true, stockLengthMm: true, barCount: true },
+          })
+        : [];
+    const barsByLengthOfLine = new Map(
+      buyableLines.map((l) => [
+        l.id,
+        barsByStockLength(
+          l,
+          patternRows.filter((p) => p.lineId === l.id),
+        ),
+      ]),
+    );
 
     // materialId -> kho đã khai cho chính vật tư đó (Material.warehouseId) - nguồn xác thực duy
     // nhất cho "vật tư này tồn/nhập ở kho nào", KHÔNG còn 1 hằng số dùng chung cho cả phương án.
@@ -2567,6 +2586,8 @@ export class CuttingProposalsService {
       { warehouseId: bigint; warehouseCode: string; receiveWarehouseCode: string | null }
     >();
     const baseWarehouseByMaterialId = new Map<bigint, WarehouseLike | null>();
+    const materialCodeById = new Map<bigint, string>();
+    const warehouseCodeById = new Map<bigint, string>();
     if (buyableLines.length > 0) {
       const materials = await this.prisma.material.findMany({
         where: { id: { in: [...new Set(buyableLines.map((l) => l.materialId))] } },
@@ -2594,6 +2615,8 @@ export class CuttingProposalsService {
             `Vật tư ${m.code} chưa được cấu hình Kho - vào Admin > Vật tư để gán Kho trước khi duyệt phương án cắt`,
           );
         }
+        materialCodeById.set(m.id, m.code);
+        warehouseCodeById.set(m.warehouseId, m.warehouse.code);
         warehouseByMaterialId.set(m.id, {
           warehouseId: m.warehouseId,
           warehouseCode: m.warehouse.code,
@@ -2615,6 +2638,7 @@ export class CuttingProposalsService {
         if (!base) continue;
         const real = await resolver.resolveForPi(base, targetProductionInvoiceId);
         if (real.id !== wh.warehouseId) {
+          warehouseCodeById.set(real.id, real.code);
           warehouseByMaterialId.set(materialId, {
             warehouseId: real.id,
             warehouseCode: real.code,
@@ -2780,35 +2804,63 @@ export class CuttingProposalsService {
             // trừ kho nằm trong cùng transaction ở dưới - trigger trg_sync_stock_quant cập nhật
             // stock_quant lúc INSERT stock_ledger, nên nếu bút toán ra ngoài transaction thì khoá
             // đã nhả trước khi số dư kịp đổi và lượt duyệt kế tiếp vẫn đọc thấy số cũ.
-            // Lọc đúng bucket chiều dài của DÒNG NÀY (bestStockLengthMm) - từ 2026-09-05 tồn kho
-            // sắt phân biệt theo chiều dài (stockLengthMm), 1 material có thể có nhiều dòng
-            // stock_quant khác chiều dài (mua ở PI/thời điểm khác) - không lọc sẽ cộng lẫn tồn của
-            // chiều dài KHÁC vào available, tính buyQty/consumeQty sai.
-            const lineLengthMm = line.bestStockLengthMm ?? 0;
             // C2 (16/11): stock_quant là 1 dòng/(kho, vật tư, chiều dài, QUY CÁCH) - chỉ đọc đúng ô quy cách rỗng (sắt không
-            // mang quy cách; xuất sắt / giữ chỗ cũng chỉ đi ô này). Trước đây không lọc quy cách mà lấy locked[0] - có hơn 1
-            // dòng thì lấy bừa 1 dòng.
-            const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
-            SELECT "qty" FROM "stock_quant"
-            WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${line.materialId}
-              AND "stockLengthMm" = ${lineLengthMm} AND "spec" = ''
-            FOR UPDATE
-          `;
-            const onHand = Math.floor(locked[0]?.qty.toNumber() ?? 0);
-            // B4 Đợt 2 (mục 13 changelog): available = onHand trừ phần đã giữ chỗ bởi phương án
-            // khác (kể cả từ luồng chuyển kho) - KHÔNG dùng onHand trực tiếp nữa, nếu không 2
-            // phương án cùng vật tư duyệt gần nhau sẽ lại cùng thấy tồn còn nguyên (đúng lỗ đã vá ở
-            // dưới bằng FOR UPDATE, giờ tái hiện qua đường giữ chỗ nếu quên bước này).
-            const available = await this.stockReservationsService.getAvailableQty(
-              tx,
-              warehouseId,
-              line.materialId,
-              onHand,
-              lineLengthMm,
+            // mang quy cách; xuất sắt / giữ chỗ cũng chỉ đi ô này).
+            //
+            // CS2 (anh Nhân 20/11/2026): dòng có thể cắt cả cây lẻ đang có ở kho Phôi (chiều dài khác chiều dài mua) lẫn cây
+            // chiều dài mua - đọc tồn + giữ chỗ theo TỪNG chiều dài (khoá theo chiều dài tăng dần, thứ tự nhất quán).
+            //   - Chiều dài mua (bestStockLengthMm): lấy tồn khả dụng trước, thiếu thì mua (như cũ).
+            //   - Cây lẻ: bộ giải đã giới hạn đúng số cây đang có lúc tính; lúc duyệt không còn đủ (đã bị lệnh khác giữ /
+            //     xuất mất) thì KHÔNG mua bù cây lẻ (Mua hàng chỉ mua 1 chiều dài/loại sắt) - báo KHSX tính lại.
+            const purchaseLengthMm = line.bestStockLengthMm ?? 0;
+            const barsByLength = new Map(barsByLengthOfLine.get(line.id) ?? []);
+            // Phần cây chưa gán được chiều dài nào (dòng thiếu chiều dài mua / kiểu cắt) tính theo chiều dài mua như trước.
+            const splitBars = [...barsByLength.values()].reduce((t, n) => t + n, 0);
+            barsByLength.set(
+              purchaseLengthMm,
+              (barsByLength.get(purchaseLengthMm) ?? 0) + Math.max(0, line.totalBars! - splitBars),
             );
-            const totalBars = line.totalBars!;
-            const consumeQty = Math.min(totalBars, available);
-            const buyQty = totalBars - consumeQty;
+            let onHand = 0;
+            let buyQty = 0;
+            for (const [lengthMm, bars] of [...barsByLength].sort((x, y) => x[0] - y[0])) {
+              const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+              SELECT "qty" FROM "stock_quant"
+              WHERE "warehouseId" = ${warehouseId} AND "materialId" = ${line.materialId}
+                AND "stockLengthMm" = ${lengthMm} AND "spec" = ''
+              FOR UPDATE
+            `;
+              const lengthOnHand = Math.floor(locked[0]?.qty.toNumber() ?? 0);
+              if (bars <= 0) {
+                if (lengthMm === purchaseLengthMm) onHand = lengthOnHand;
+                continue;
+              }
+              // B4 Đợt 2: available = onHand trừ phần đã giữ chỗ bởi phương án khác (kể cả từ luồng chuyển kho).
+              const available = await this.stockReservationsService.getAvailableQty(
+                tx,
+                warehouseId,
+                line.materialId,
+                lengthOnHand,
+                lengthMm,
+              );
+              const consumeQty = Math.min(bars, available);
+              if (lengthMm === purchaseLengthMm) {
+                onHand = lengthOnHand;
+                buyQty = bars - consumeQty;
+              } else if (consumeQty < bars) {
+                const code = materialCodeById.get(line.materialId) ?? line.materialId.toString();
+                throw new ConflictException(
+                  `Không duyệt được phương án cắt ${id}: phương án dùng ${bars} cây lẻ ${lengthMm} mm của ${code} ở kho ${warehouseCodeById.get(warehouseId) ?? warehouseId}, nay chỉ còn ${available} cây chưa bị giữ chỗ - bấm Tính lại để bộ giải dùng đúng số cây lẻ đang có`,
+                );
+              }
+              if (consumeQty > 0) {
+                consumptions.push({
+                  materialId: line.materialId,
+                  consumeQty,
+                  warehouseId,
+                  bestStockLengthMm: lengthMm,
+                });
+              }
+            }
 
             // actualStock vẫn là TỒN VẬT LÝ THẬT (onHand) - không đổi ý nghĩa field này sang
             // "khả dụng". Đây là số hiển thị cho người xem (audit "lúc duyệt kho có bao nhiêu cây
@@ -2833,14 +2885,6 @@ export class CuttingProposalsService {
               where: { id: line.id },
               data: { buyBars: buyQty },
             });
-            if (consumeQty > 0) {
-              consumptions.push({
-                materialId: line.materialId,
-                consumeQty,
-                warehouseId,
-                bestStockLengthMm: line.bestStockLengthMm,
-              });
-            }
           }
 
           // Nếu tồn hiện có đã đủ (buyQty=0) cho 1 dòng thì không có gì để mua dòng đó - tạo/set
@@ -3058,10 +3102,9 @@ export class CuttingProposalsService {
               // loadPool(). undefined khi phương án không neo PI nào (dữ liệu hỏng, ca cực hiếm).
               productionInvoiceId: targetProductionInvoiceId ?? undefined,
               createdById: actorUserId ?? undefined,
-              // Ghi lại audit chiều dài cây đã chốt cho lần giữ chỗ này (2026-09-05) - KHÔNG đổi
-              // logic pool (loadPool/drainPool/creditPool vẫn cố ý length-agnostic, xem comment ở
-              // StockReservationsService): findConflictingStockLengthReason() đã đảm bảo chỉ 1
-              // chiều dài/vật tư/PI nên rút theo tổng số cây vẫn đúng.
+              // Chiều dài cây của lần giữ chỗ này (2026-09-05; CS2 20/11: 1 dòng giữ chỗ / chiều dài - cây lẻ và cây mua tách
+              // riêng). Pool vẫn rút theo tổng số cây (length-agnostic); xuất sắt tự chặn số cây theo từng chiều dài
+              // (SteelIssuesService.prepareIssue).
               stockLengthMm: bestStockLengthMm ?? 0,
             },
             tx,
@@ -3198,33 +3241,32 @@ export class CuttingProposalsService {
 
       const standardLengths = config.solverStockLengths as number[];
 
-      // Chiều dài đang có TỒN ở kho Phôi 2 xưởng (13/11/2026, chỉ lượt tính chính thức): loại sắt
-      // KHSX KHÔNG tự gõ chiều dài thì được
-      // thử cây chuẩn + các chiều dài tồn; bộ giải chọn chiều dài ít hao hụt nhất (bằng nhau ưu
-      // tiên cây chuẩn). Loại KHSX đã gõ giữ
-      // đúng chiều dài đã gõ. Lỗi đọc tồn KHÔNG được làm hỏng lượt tính - log cảnh báo rồi tính như
-      // không có chiều dài tồn.
+      // CS2 (anh Nhân 20/11/2026): cây lẻ ở ĐÚNG kho Phôi của xưởng làm lệnh được dùng TRƯỚC (tối đa đúng số cây đang có), phần
+      // còn thiếu cắt từ chiều dài MUA - 1 chiều dài / loại sắt: chiều dài KHSX chọn cho quy cách, không thì cây chuẩn. Áp cho MỌI
+      // loại sắt, kể cả loại KHSX đã tự chọn chiều dài (câu 3). Trước 20/11 chiều dài tồn ở kho Phôi MỌI xưởng bị đưa vào danh
+      // sách chiều dài mua, không giới hạn số cây. Lỗi đọc tồn KHÔNG được làm hỏng lượt tính - log rồi tính như không có cây lẻ.
       const typedLengths = job.stockLengthsByMaterial ?? {};
-      let stockLengthsByMaterialId = new Map<string, number[]>();
+      const stockLengthsByMaterialBody: Record<string, number | number[]> = { ...typedLengths };
+      const leftoverStockBody: Record<string, Array<{ length: number; count: number }>> = {};
       try {
-        const untypedIds = distinctMaterialIds.filter((id) => typedLengths[id.toString()] == null);
-        stockLengthsByMaterialId = await loadAvailableStockLengths(this.prisma, untypedIds, {
-          minMm: config.solverMinLengthMm,
-          maxMm: config.solverMaxLengthMm,
-          standardLengths,
-        });
+        const leftovers = await loadAvailableStockLengths(
+          this.prisma,
+          distinctMaterialIds,
+          { minMm: config.solverMinLengthMm, maxMm: config.solverMaxLengthMm, standardLengths: [] },
+          job.workshop ? BigInt(job.workshop.id) : null,
+        );
+        for (const [id, rows] of leftovers) {
+          const typed = typedLengths[id];
+          const purchase = typed == null ? standardLengths : ([] as number[]).concat(typed);
+          const usable = rows.filter((r) => !purchase.includes(r.length));
+          if (usable.length > 0) leftoverStockBody[id] = usable;
+        }
       } catch (error) {
         this.logger.warn(
-          `Cutting proposal ${proposalId}: không đọc được chiều dài tồn kho Phôi, tính chỉ với chiều dài chuẩn/KHSX chọn: ${
+          `Cutting proposal ${proposalId}: không đọc được cây lẻ kho Phôi, tính chỉ với chiều dài mua: ${
             (error as Error).message
           }`,
         );
-      }
-      const stockLengthsByMaterialBody: Record<string, number | number[]> = { ...typedLengths };
-      for (const [id, lengths] of stockLengthsByMaterialId) {
-        if (lengths.length > 0) {
-          stockLengthsByMaterialBody[id] = mergeStandardAndStockLengths(standardLengths, lengths);
-        }
       }
 
       // Luật xưởng "tối đa N cỡ đoạn/cây" (13/11/2026): xưởng có mức N thì bộ giải thử N cỡ trước,
@@ -3294,6 +3336,10 @@ export class CuttingProposalsService {
         // sắt KHSX không gõ.
         ...(Object.keys(stockLengthsByMaterialBody).length > 0
           ? { stock_lengths_by_material: stockLengthsByMaterialBody }
+          : {}),
+        // CS2: cây lẻ kho Phôi đúng xưởng, kèm số cây (xem leftoverStockBody ở trên).
+        ...(Object.keys(leftoverStockBody).length > 0
+          ? { leftover_stock_by_material: leftoverStockBody }
           : {}),
         max_surplus: config.solverMaxSurplus,
         min_length: config.solverMinLengthMm,
@@ -3389,7 +3435,6 @@ export class CuttingProposalsService {
         preInvoice ? config.solverMaxWastePercentage.toNumber() : null,
         {
           standardLengths,
-          stockLengthsByMaterialId,
           workshopName: job.workshop?.name ?? null,
           thresholdPct: requestBody.max_waste_percentage,
         },
@@ -4967,6 +5012,8 @@ export class CuttingProposalsService {
                 lineId: line.id,
                 patternIndex: pattern.pattern_id ?? index,
                 barCount: pattern.bars,
+                // CS2 (20/11): chiều dài cây của TỪNG kiểu cắt (cây lẻ trong kho khác chiều dài mua của dòng).
+                stockLengthMm: pattern.stock_length ?? null,
                 wastePerBarMm: pattern.waste_per_bar,
                 // { "<hệ số>": số bó, "1": số cây cắt tay } - chỉ MC Tự động; undefined (không phải null)
                 // với MC Laser để Prisma bỏ qua cột Json?.
@@ -5312,6 +5359,7 @@ export class CuttingProposalsService {
           patternIndex: pattern.patternIndex,
           barCount: pattern.barCount,
           wastePerBarMm: pattern.wastePerBarMm ? Number(pattern.wastePerBarMm) : null,
+          stockLengthMm: pattern.stockLengthMm ?? line.bestStockLengthMm ?? null,
           bundles: pattern.bundles as Record<string, number> | null,
           segments: pattern.segments.map((segment) => ({
             segmentSpecId: segment.segmentSpecId.toString(),

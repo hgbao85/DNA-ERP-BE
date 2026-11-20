@@ -98,22 +98,30 @@ describe('steel-stock-lengths.util', () => {
 
     it('không có vật tư nào -> không truy vấn', async () => {
       const prisma = makePrisma();
-      expect((await loadAvailableStockLengths(asPrisma(prisma), [], filter)).size).toBe(0);
+      expect((await loadAvailableStockLengths(asPrisma(prisma), [], filter, 3n)).size).toBe(0);
       expect(prisma.warehouse.findMany).not.toHaveBeenCalled();
     });
 
     it('không có kho Phôi nào đang hoạt động -> rỗng, không đọc tồn', async () => {
       const prisma = makePrisma({ warehouse: { findMany: jest.fn().mockResolvedValue([]) } });
-      const res = await loadAvailableStockLengths(asPrisma(prisma), [200n], filter);
+      const res = await loadAvailableStockLengths(asPrisma(prisma), [200n], filter, 3n);
       expect(res.size).toBe(0);
       expect(prisma.stockQuant.findMany).not.toHaveBeenCalled();
     });
 
-    it('chỉ lọc kho Phôi đang hoạt động (truy vấn đúng điều kiện)', async () => {
+    it('CS2: chưa biết xưởng làm lệnh -> rỗng, không truy vấn gì', async () => {
       const prisma = makePrisma();
-      await loadAvailableStockLengths(asPrisma(prisma), [200n], filter);
+      expect((await loadAvailableStockLengths(asPrisma(prisma), [200n], filter, null)).size).toBe(
+        0,
+      );
+      expect(prisma.warehouse.findMany).not.toHaveBeenCalled();
+    });
+
+    it('CS2: chỉ lọc kho Phôi đang hoạt động CỦA XƯỞNG làm lệnh (truy vấn đúng điều kiện)', async () => {
+      const prisma = makePrisma();
+      await loadAvailableStockLengths(asPrisma(prisma), [200n], filter, 3n);
       expect(prisma.warehouse.findMany).toHaveBeenCalledWith({
-        where: { kind: 'PHOI', isActive: true, deletedAt: null },
+        where: { kind: 'PHOI', workshopId: 3n, isActive: true, deletedAt: null },
         select: { id: true },
       });
     });
@@ -159,10 +167,14 @@ describe('steel-stock-lengths.util', () => {
         },
       });
 
-      const res = await loadAvailableStockLengths(asPrisma(prisma), [200n, 201n], filter);
+      const res = await loadAvailableStockLengths(asPrisma(prisma), [200n, 201n], filter, 3n);
 
-      expect(res.get('200')).toEqual([5800, 5950]);
-      expect(res.get('201')).toEqual([5700]);
+      // CS2: kèm SỐ CÂY khả dụng (kho 11 bị giữ hết 5950, kho 12 còn 1).
+      expect(res.get('200')).toEqual([
+        { length: 5800, count: 1 },
+        { length: 5950, count: 1 },
+      ]);
+      expect(res.get('201')).toEqual([{ length: 5700, count: 5 }]);
       // Gộp truy vấn: 1 lần mỗi bảng cho mọi vật tư.
       expect(prisma.stockQuant.findMany).toHaveBeenCalledTimes(1);
       expect(prisma.stockReservation.findMany).toHaveBeenCalledTimes(1);
@@ -180,7 +192,7 @@ describe('steel-stock-lengths.util', () => {
             ]),
         },
       });
-      const res = await loadAvailableStockLengths(asPrisma(prisma), [200n], filter);
+      const res = await loadAvailableStockLengths(asPrisma(prisma), [200n], filter, 3n);
       expect(res.has('200')).toBe(false);
     });
 
@@ -198,8 +210,8 @@ describe('steel-stock-lengths.util', () => {
             ]),
         },
       });
-      const res = await loadAvailableStockLengths(asPrisma(prisma), [200n], filter);
-      expect(res.get('200')).toEqual([5600]);
+      const res = await loadAvailableStockLengths(asPrisma(prisma), [200n], filter, 3n);
+      expect(res.get('200')).toEqual([{ length: 5600, count: 1 }]);
     });
   });
 });

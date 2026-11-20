@@ -50,7 +50,15 @@ export interface OptimizeMaterialOptions {
    * (kể cả thang ENUM_RATIO_LADDER).
    */
   laserMinTailMm?: number;
+  /**
+   * CS2 (anh Nhân 20/11/2026): cây lẻ trong kho Phôi của xưởng làm lệnh - { chiều dài (mm): số cây đang có }. Chiều dài này phải
+   * có trong `stockLengths`; số cây dùng ≤ số đang có và được ưu tiên dùng hết trước (xem TwoStageInput.lengthCaps).
+   */
+  lengthCaps?: Record<number, number>;
 }
+
+/** Số kiểu cắt ít phế nhất của MỖI chiều dài cây lẻ luôn được giữ khi lọc bớt kiểu cắt đưa vào IP (CS2). */
+const CAPPED_LENGTH_KEEP_PATTERNS = 300;
 
 /**
  * Thang ngưỡng hao hụt/cây (giảm dần) để tìm tập kiểu cắt ĐẦY ĐỦ khi liệt kê ở ngưỡng người dùng chạm trần 100.000
@@ -252,7 +260,13 @@ export function optimizeMaterial(
   // 10.000 -> 325 cây chưa chứng minh, 5.000 -> 324 cây tối ưu 22 s. 4 ca tham chiếu (3-12.343 pattern)
   // vẫn trùng OR-Tools với 5.000. Biến môi trường SOLVER_TS_WARM_START=0 / SOLVER_TS_MAX_IP_PATTERNS=0
   // tắt (ngữ nghĩa Python: đưa hết tới 100.000 pattern).
-  const warmStart = opts.warmStart ?? process.env.SOLVER_TS_WARM_START !== '0';
+  // CS2: chiều dài cây lẻ có trong bài này (bỏ chiều dài không có trong stockLengths / số cây ≤ 0).
+  const cappedLengths = Object.entries(opts.lengthCaps ?? {})
+    .map(([len, max]) => [Number(len), Math.trunc(max)] as const)
+    .filter(([len, max]) => max > 0 && stockLengths.includes(len));
+  const hasCaps = cappedLengths.length > 0;
+  // Nghiệm tham lam không biết giới hạn cây lẻ -> tắt khi có cây lẻ (HiGHS tự tìm nghiệm đầu).
+  const warmStart = hasCaps ? false : (opts.warmStart ?? process.env.SOLVER_TS_WARM_START !== '0');
   const maxIpPatterns =
     opts.maxIpPatterns ??
     parseInt(process.env.SOLVER_TS_MAX_IP_PATTERNS ?? String(DEFAULT_MAX_IP_PATTERNS), 10);
@@ -265,6 +279,15 @@ export function optimizeMaterial(
       .map((_, i) => i)
       .sort((a, c) => allPatterns[a].waste - allPatterns[c].waste || a - c);
     const keep = new Set<number>(order.slice(0, maxIpPatterns));
+    // CS2: kiểu cắt trên cây lẻ thường hao hơn cây chuẩn nên dễ bị lọc hết - giữ lại một phần cho mỗi chiều dài cây lẻ.
+    for (const [len] of cappedLengths) {
+      let kept = 0;
+      for (const i of order) {
+        if (allPatterns[i].S !== len) continue;
+        keep.add(i);
+        if (++kept >= CAPPED_LENGTH_KEEP_PATTERNS) break;
+      }
+    }
     for (let k = 0; k < n; k++) {
       if ([...keep].some((i) => allPatterns[i].counts[k] > 0)) continue;
       const first = order.find((i) => allPatterns[i].counts[k] > 0);
@@ -274,7 +297,14 @@ export function optimizeMaterial(
     allPatterns = allPatterns.filter((_, i) => keep.has(i));
   }
   const ipPatterns: IpPattern[] = allPatterns.map((p) => ({ counts: p.counts, waste: p.waste }));
+  const lengthCaps = cappedLengths
+    .map(([len, max]) => ({
+      patterns: allPatterns.flatMap((p, i) => (p.S === len ? [i] : [])),
+      max,
+    }))
+    .filter((g) => g.patterns.length > 0);
   const res = solveTwoStage(highs, {
+    ...(lengthCaps.length > 0 ? { lengthCaps } : {}),
     patterns: ipPatterns,
     demands,
     maxSurplus,

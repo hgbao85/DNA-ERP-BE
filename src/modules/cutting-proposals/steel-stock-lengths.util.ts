@@ -53,33 +53,32 @@ const bucketKey = (warehouseId: bigint, materialId: bigint, lengthMm: number, sp
   `${warehouseId}|${materialId}|${lengthMm}|${spec}`;
 
 /**
- * Chiều dài đang có tồn KHẢ DỤNG ở kho Phôi của MỌI xưởng (13/11/2026, Sếp: chiều dài nào đang có
- * trong kho thì được thử cùng cây chuẩn). Trả `Map<materialId (chuỗi), chiều dài tăng dần>`; loại
- * sắt không
- * có chiều dài nào đạt thì KHÔNG có khoá.
+ * CS2 (anh Nhân 20/11/2026): cây lẻ đang có KHẢ DỤNG ở ĐÚNG kho Phôi của xưởng làm lệnh, kèm SỐ CÂY. Trả
+ * `Map<materialId (chuỗi), [{ length, count }] tăng dần theo chiều dài>`; loại sắt không có cây lẻ nào thì KHÔNG có khoá.
+ * Không biết xưởng (`workshopId` null) -> rỗng (không biết kho nào là "đúng kho").
  *
- * Khả dụng = tồn - giữ chỗ còn hiệu lực của đúng (kho, vật tư, chiều dài, quy cách)
- * (StockReservation
- * ACTIVE: quantity - consumedQty). Giữ chỗ chuyển kho (WarehouseTransferReservation) không có chiều
- * dài
- * nên - đúng như getAvailableQty - trừ vào MỌI chiều dài của (kho, vật tư, quy cách) đó. Chỉ cần
- * còn >= 1
- * cây ở BẤT KỲ kho Phôi nào là chiều dài đó vào danh sách.
+ * Trước 20/11: lấy chiều dài có >= 1 cây ở kho Phôi của MỌI xưởng và đưa vào danh sách chiều dài MUA (không giới hạn số cây) -
+ * 1 cây lẻ ở xưởng kia kéo cả lệnh sang chiều dài lẻ rồi đề xuất mua cả lô chiều dài đó (mục CS2 rà soát 18/11).
  *
- * Gộp truy vấn (4 câu, không N+1). Hàm này CÓ THỂ ném lỗi DB - nơi gọi phải bắt và tính như không
- * có
- * chiều dài tồn (lỗi đọc tồn không được làm hỏng lượt tính).
+ * Khả dụng = tồn - giữ chỗ còn hiệu lực của đúng (kho, vật tư, chiều dài, quy cách) (StockReservation ACTIVE: quantity -
+ * consumedQty). Giữ chỗ chuyển kho (WarehouseTransferReservation) không có chiều dài nên - đúng như getAvailableQty - trừ vào MỌI
+ * chiều dài của (kho, vật tư, quy cách) đó. Số cây = phần nguyên của khả dụng; chiều dài lọc theo `isUsableStockLength` (nơi
+ * gọi tự bỏ chiều dài đang mua của từng loại sắt).
+ *
+ * Gộp truy vấn (4 câu, không N+1). Hàm này CÓ THỂ ném lỗi DB - nơi gọi phải bắt và tính như không có cây lẻ (lỗi đọc tồn không
+ * được làm hỏng lượt tính).
  */
 export async function loadAvailableStockLengths(
   prisma: PrismaServiceType,
   materialIds: bigint[],
   filter: StockLengthFilter,
-): Promise<Map<string, number[]>> {
-  const result = new Map<string, number[]>();
-  if (materialIds.length === 0) return result;
+  workshopId: bigint | null,
+): Promise<Map<string, Array<{ length: number; count: number }>>> {
+  const result = new Map<string, Array<{ length: number; count: number }>>();
+  if (materialIds.length === 0 || workshopId == null) return result;
 
   const warehouses = await prisma.warehouse.findMany({
-    where: { kind: WarehouseKind.PHOI, isActive: true, deletedAt: null },
+    where: { kind: WarehouseKind.PHOI, workshopId, isActive: true, deletedAt: null },
     select: { id: true },
   });
   if (warehouses.length === 0) return result;
@@ -151,23 +150,24 @@ export async function loadAvailableStockLengths(
     }
   }
 
-  const lengthsByMaterial = new Map<string, Set<number>>();
+  const countByMaterial = new Map<string, Map<number, number>>();
   for (const [key, b] of buckets) {
     if (!isUsableStockLength(b.stockLengthMm, filter)) continue;
     const available =
       b.onHand -
       (reservedByBucket.get(key) ?? 0) -
       (transferHeld.get(`${b.warehouseId}|${b.materialId}|${b.spec}`) ?? 0);
-    if (available < 1) continue;
+    const bars = Math.floor(available + 1e-9);
+    if (bars < 1) continue;
     const id = b.materialId.toString();
-    const set = lengthsByMaterial.get(id) ?? new Set<number>();
-    set.add(b.stockLengthMm);
-    lengthsByMaterial.set(id, set);
+    const byLen = countByMaterial.get(id) ?? new Map<number, number>();
+    byLen.set(b.stockLengthMm, (byLen.get(b.stockLengthMm) ?? 0) + bars);
+    countByMaterial.set(id, byLen);
   }
-  for (const [id, set] of lengthsByMaterial) {
+  for (const [id, byLen] of countByMaterial) {
     result.set(
       id,
-      [...set].sort((a, b) => a - b),
+      [...byLen].sort((a, b) => a[0] - b[0]).map(([length, count]) => ({ length, count })),
     );
   }
   return result;
