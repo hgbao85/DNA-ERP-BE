@@ -209,6 +209,7 @@ describe('MaterialsService', () => {
       expect(prisma.warehouse.findUniqueOrThrow).toHaveBeenCalledWith({
         where: { code: 'OPENING_BALANCE' },
       });
+      // 20/11: ghi CÙNG transaction với tạo vật tư (tham số thứ 2 = tx).
       expect(stockLedger.postEntry).toHaveBeenCalledWith(
         expect.objectContaining({
           fromWarehouseId: 99n,
@@ -217,6 +218,7 @@ describe('MaterialsService', () => {
           qty: 50,
           refType: StockLedgerRefType.OPENING_BALANCE,
         }),
+        expect.anything(),
       );
     });
 
@@ -250,7 +252,16 @@ describe('MaterialsService', () => {
       });
 
       it('thủ kho đúng kho -> ghi được; Admin / Giám đốc -> mọi kho', async () => {
-        await service.create(input, { roles: ['WAREHOUSE_STAFF'], warehouseScope: 'vat-tu-tp' });
+        await service.create(input, {
+          id: 'u-kho',
+          roles: ['WAREHOUSE_STAFF'],
+          warehouseScope: 'vat-tu-tp',
+        });
+        // 20/11: dòng tồn đầu ghi người tạo (sổ kho trước đây hiện "Người sửa: —").
+        expect(stockLedger.postEntry).toHaveBeenLastCalledWith(
+          expect.objectContaining({ createdById: 'u-kho' }),
+          expect.anything(),
+        );
         await service.create(input, { roles: ['ADMIN'], warehouseScope: null });
         await service.create(input, { roles: ['BOSS'], warehouseScope: null });
         expect(stockLedger.postEntry).toHaveBeenCalledTimes(3);

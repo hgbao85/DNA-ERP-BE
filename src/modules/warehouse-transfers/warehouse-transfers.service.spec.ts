@@ -12,6 +12,10 @@ import { StockReservationsService } from '../stock/stock-reservations.service';
 import { WarehouseTransfersService } from './warehouse-transfers.service';
 import * as piLock from '../../common/utils/pi-workshop-lock.util';
 import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
+import {
+  IdempotencyKeyInUseException,
+  IdempotencyKeyReusedException,
+} from '../../common/utils/idempotency.util';
 import { RealtimeService } from '../../realtime/realtime.service';
 
 describe('WarehouseTransfersService', () => {
@@ -624,8 +628,27 @@ describe('WarehouseTransfersService', () => {
       });
     });
 
+    // 20/11: phiếu đã lưu khớp ĐÚNG lần gửi (cùng người, 2 kho, vật tư, số) - quy ước chống trùng so nội dung.
+    const sameAsDto = () =>
+      transferRow({
+        fromWarehouseId: 9n,
+        toWarehouseId: 2n,
+        createdById: 'user-1',
+        items: [
+          {
+            id: 500n,
+            materialId: 10n,
+            materialName: 'Sat 25',
+            unit: 'kg',
+            spec: '',
+            quantity: { toNumber: () => 50 },
+            note: null,
+          },
+        ],
+      });
+
     it('idempotency short-circuit - KHÔNG emit lại WAREHOUSE_TRANSFER_CREATED (chỉ notify đúng 1 lần lúc tạo thật)', async () => {
-      prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(sameAsDto());
 
       await service.create(dto, null, 'user-1', 'idem-key-1');
 
@@ -633,8 +656,44 @@ describe('WarehouseTransfersService', () => {
     });
 
     // Vấn đề #11 audit 26/08 (phần còn thiếu) - cùng idiom material-issues/packaging-issues.
+    it('20/11: cùng khoá nhưng khác nội dung (số lượng) / khác người -> 422, không lập phiếu', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(sameAsDto());
+      await expect(
+        service.create(
+          { ...dto, items: [{ ...dto.items[0], quantity: 49 }] },
+          null,
+          'user-1',
+          'idem-key-1',
+        ),
+      ).rejects.toThrow(IdempotencyKeyReusedException);
+      await expect(service.create(dto, null, 'user-khac', 'idem-key-1')).rejects.toThrow(
+        IdempotencyKeyReusedException,
+      );
+      expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
+    });
+
+    it('20/11: lần gửi trước đang xử lý (try-lock khoá chống trùng thất bại) -> 409, không lập phiếu', async () => {
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(null);
+      prisma.$queryRaw.mockResolvedValueOnce([{ ok: false }]);
+      await expect(service.create(dto, null, 'user-1', 'idem-key-1')).rejects.toThrow(
+        IdempotencyKeyInUseException,
+      );
+      expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
+    });
+
+    it('20/11: bản trùng chạy song song đã lập phiếu (đọc lại trong transaction thấy phiếu) -> trả phiếu đó, không lập thêm', async () => {
+      prisma.warehouseTransfer.findUnique
+        .mockResolvedValueOnce(null) // đọc nhanh ngoài transaction
+        .mockResolvedValueOnce(sameAsDto()); // đọc lại sau try-lock
+      prisma.$queryRaw.mockResolvedValueOnce([{ ok: true }]);
+      const result = await service.create(dto, null, 'user-1', 'idem-key-1');
+      expect(result.id).toBe('50');
+      expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
+      expect(notificationsService.emit).not.toHaveBeenCalled();
+    });
+
     it('idempotency short-circuit - returns the existing transfer, does not create a duplicate', async () => {
-      const existing = transferRow();
+      const existing = sameAsDto();
       prisma.warehouseTransfer.findUnique.mockResolvedValue(existing);
 
       const result = await service.create(dto, null, 'user-1', 'idem-key-1');
@@ -1343,6 +1402,28 @@ describe('WarehouseTransfersService', () => {
           'idem-key-1',
         ),
       ).rejects.toThrow(BadRequestException);
+      expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
+    });
+
+    it('20/11: gửi lại cùng khoá - cùng nội dung trả phiếu cũ; khác số mảnh -> 422; không lập phiếu thứ hai', async () => {
+      const stored = transferRow({
+        fromWarehouseId: 1n,
+        toWarehouseId: 3n,
+        createdById: 'user-1',
+        items: [],
+        pieceItems: [{ id: 700n, productionOrderId: 900n, pieceId: 30n, quantity: 20, note: null }],
+      });
+      prisma.warehouseTransfer.findUnique.mockResolvedValue(stored);
+      const same = await service.createPieceTransfer(pieceDto, 'phoi-son-han', 'user-1', 'k-1');
+      expect(same.id).toBe('50');
+      await expect(
+        service.createPieceTransfer(
+          { ...pieceDto, pieceItems: [{ productionOrderId: '900', pieceId: '30', quantity: 19 }] },
+          'phoi-son-han',
+          'user-1',
+          'k-1',
+        ),
+      ).rejects.toThrow(IdempotencyKeyReusedException);
       expect(prisma.warehouseTransfer.create).not.toHaveBeenCalled();
     });
 

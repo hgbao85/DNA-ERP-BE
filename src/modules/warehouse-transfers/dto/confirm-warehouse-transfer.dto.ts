@@ -1,3 +1,4 @@
+import { IsSystemUploadUrl } from '../../../common/validators/system-upload-url.validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
@@ -30,6 +31,8 @@ export class ConfirmWarehouseTransferDto {
   @ArrayMinSize(1)
   @ArrayMaxSize(20)
   @IsString({ each: true })
+  // 20/11 (Sang báo): chỉ nhận tệp do chính hệ thống tải lên - gọi thẳng API không xác nhận được phiếu với ảnh giả.
+  @IsSystemUploadUrl({ each: true })
   signedSlipUrls!: string[];
 
   @ApiPropertyOptional({ type: [ReceivedLineDto], description: 'Dòng vật tư' })

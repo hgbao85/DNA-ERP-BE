@@ -1,3 +1,4 @@
+import { IsSystemUploadUrl } from '../../../common/validators/system-upload-url.validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsBoolean, IsEnum, IsNumber, IsOptional, Max, Min } from 'class-validator';
 import { MaterialDetailKind, SteelSubGroup } from '../../../generated/prisma/client';
@@ -80,6 +81,8 @@ export class CreateMaterialDto {
     description: 'URL ảnh vật tư (Cloudinary secure_url) - xem POST /uploads/image',
   })
   @IsOptional()
+  // 20/11 (Sang báo): chỉ nhận tệp do chính hệ thống tải lên (áp cả lúc sửa - UpdateMaterialDto kế thừa).
+  @IsSystemUploadUrl()
   imageUrl?: string;
 
   // 2 field dưới đây CỐ Ý phá lệ "không validate" của file này (xem docstring class) - chúng

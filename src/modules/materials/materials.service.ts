@@ -64,7 +64,7 @@ export class MaterialsService {
 
   async create(
     dto: CreateMaterialDto,
-    actor?: { roles: string[]; warehouseScope: string | null },
+    actor?: { id?: string; roles: string[]; warehouseScope: string | null },
   ): Promise<MaterialResponseDto> {
     // name/unit là cột NOT NULL ở DB - không thể bỏ qua được (không phải "validate form" chặn
     // nhập liệu, chỉ là guard tránh PrismaClientValidationError raw -> 500 khó hiểu khi thiếu
@@ -105,46 +105,55 @@ export class MaterialsService {
     // create(), request thua bị unique constraint ở DB chặn (nguồn chặn thật, không phải check ở
     // trên) nhưng ném ra Prisma P2002 thô, rơi vào AllExceptionsFilter thành thông báo chung chung
     // "Duplicate value for: code" thay vì lỗi nghiệp vụ rõ ràng như nhánh pre-check phía trên.
+    // 20/11 (Sang báo): tạo vật tư + ghi dòng tồn đầu trong CÙNG 1 transaction (trước đây 2 bước rời - ghi tồn lỗi thì còn vật
+    // tư không tồn đầu), dòng tồn đầu ghi người tạo (sổ kho trước đây hiện "Người sửa: —").
+    const writeOpening = !!(dto.openingQty && dto.openingQty > 0 && dto.warehouseId);
     let material: MaterialWithRelations;
     try {
-      material = await this.prisma.material.create({
-        data: {
-          code,
-          name: dto.name,
-          unit: dto.unit,
-          spec: dto.spec,
-          materialGroupId,
-          detailKind,
-          steelSubGroup,
-          warehouseId: dto.warehouseId ? parseBigIntId(dto.warehouseId) : undefined,
-          buyerId: dto.buyerId || undefined,
-          maxCuttingWastePercentage: wasteFields.maxCuttingWastePercentage,
-          purchaseWastePercentage: wasteFields.purchaseWastePercentage,
-          purchaseRoundUp: dto.purchaseRoundUp,
-          imageUrl: dto.imageUrl,
-        },
-        include: MATERIAL_RELATIONS_INCLUDE,
+      material = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.material.create({
+          data: {
+            code,
+            name: dto.name,
+            unit: dto.unit,
+            spec: dto.spec,
+            materialGroupId,
+            detailKind,
+            steelSubGroup,
+            warehouseId: dto.warehouseId ? parseBigIntId(dto.warehouseId) : undefined,
+            buyerId: dto.buyerId || undefined,
+            maxCuttingWastePercentage: wasteFields.maxCuttingWastePercentage,
+            purchaseWastePercentage: wasteFields.purchaseWastePercentage,
+            purchaseRoundUp: dto.purchaseRoundUp,
+            imageUrl: dto.imageUrl,
+          },
+          include: MATERIAL_RELATIONS_INCLUDE,
+        });
+        if (writeOpening) {
+          const openingWarehouse = await tx.warehouse.findUniqueOrThrow({
+            where: { code: OPENING_BALANCE_WAREHOUSE_CODE },
+          });
+          await this.stockLedgerService.postEntry(
+            {
+              fromWarehouseId: openingWarehouse.id,
+              toWarehouseId: parseBigIntId(dto.warehouseId!),
+              materialId: created.id,
+              qty: dto.openingQty!,
+              refType: StockLedgerRefType.OPENING_BALANCE,
+              refId: created.id.toString(),
+              note: 'Tồn kho ban đầu lúc tạo vật tư',
+              createdById: actor?.id,
+            },
+            tx,
+          );
+        }
+        return created;
       });
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
         throw new ConflictException(`Vật tư "${code}" đã tồn tại`);
       }
       throw e;
-    }
-
-    if (dto.openingQty && dto.openingQty > 0 && dto.warehouseId) {
-      const openingWarehouse = await this.prisma.warehouse.findUniqueOrThrow({
-        where: { code: OPENING_BALANCE_WAREHOUSE_CODE },
-      });
-      await this.stockLedgerService.postEntry({
-        fromWarehouseId: openingWarehouse.id,
-        toWarehouseId: parseBigIntId(dto.warehouseId),
-        materialId: material.id,
-        qty: dto.openingQty,
-        refType: StockLedgerRefType.OPENING_BALANCE,
-        refId: material.id.toString(),
-        note: 'Tồn kho ban đầu lúc tạo vật tư',
-      });
     }
 
     return this.toResponseDto(material);
