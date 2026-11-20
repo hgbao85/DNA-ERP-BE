@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { UpdateSalesOrderItemDto } from './update-sales-order-item.dto';
+import { KeepRawValue } from '../../../common/validators/strict-type.decorators';
 
 /** 1 dòng sửa kèm khi sửa đơn (K6 16/11). */
 export class UpdateSalesOrderItemWithIdDto extends UpdateSalesOrderItemDto {
@@ -27,16 +28,19 @@ export class UpdateSalesOrderDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @KeepRawValue()
   @IsString()
   note?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @KeepRawValue()
   @IsBoolean()
   depositConfirmed?: boolean;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @KeepRawValue()
   @IsBoolean()
   isActive?: boolean;
 

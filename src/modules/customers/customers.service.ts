@@ -1,5 +1,5 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { Customer } from '../../generated/prisma/client';
+import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Customer, Prisma } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
@@ -84,8 +84,32 @@ export class CustomersService {
 
   async remove(id: string): Promise<void> {
     const bigId = parseBigIntId(id);
-    await this.findOneOrThrow(id);
-    await this.prisma.customer.delete({ where: { id: bigId } });
+    const customer = await this.findOneOrThrow(id);
+    try {
+      // 20/11/2026: kiểm đơn hàng / booking trong transaction trước khi xoá -> 409 nêu lý do
+      // (trước đây ra lỗi khoá ngoại, câu chung). Biến thể sản phẩm vẫn SET NULL, không chặn.
+      await this.prisma.$transaction(async (tx) => {
+        const [orders, bookings] = await Promise.all([
+          tx.salesOrder.count({ where: { customerId: bigId } }),
+          tx.booking.count({ where: { customerId: bigId } }),
+        ]);
+        const parts = [
+          orders > 0 ? `${orders} đơn hàng` : null,
+          bookings > 0 ? `${bookings} booking` : null,
+        ].filter((p): p is string => p !== null);
+        if (parts.length > 0) {
+          throw new ConflictException(
+            `Khách hàng "${customer.name}" đang có ${parts.join(', ')} - không xoá được`,
+          );
+        }
+        await tx.customer.delete({ where: { id: bigId } });
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2003') {
+        throw new ConflictException('Khách hàng đang được dùng ở chứng từ khác - không xoá được');
+      }
+      throw e;
+    }
   }
 
   private async findOneOrThrow(id: string): Promise<Customer> {

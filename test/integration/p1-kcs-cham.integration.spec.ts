@@ -116,7 +116,11 @@ describe('P1 IT3: KCS chấm có thiếu, tồn đoạn bật (integration, real
       expect(await consumeRows(batchId)).toHaveLength(0); // sau chốt chưa trừ đoạn (AC8)
 
       await withSegmentStock(true, () =>
-        h.api.reviewProductionBatch(batchId.toString(), { failedQty: 1, shortQty: 4 }, w.kcsA),
+        h.api.reviewProductionBatch(
+          batchId.toString(),
+          { defectReasonId: w.defectReasonId.toString(), failedQty: 1, shortQty: 4 },
+          w.kcsA,
+        ),
       );
 
       const batch = await batchOf(batchId);
@@ -278,7 +282,11 @@ describe('P1 IT3: KCS chấm có thiếu, tồn đoạn bật (integration, real
         bundled: PieceStepBundleStatus.AWAITING_QC,
       }))!;
 
-      await h.api.reviewPieceStep(bundleId.toString(), { failedQty: 1, shortQty: 3 }, w.kcsA);
+      await h.api.reviewPieceStep(
+        bundleId.toString(),
+        { defectReasonId: w.defectReasonId.toString(), failedQty: 1, shortQty: 3 },
+        w.kcsA,
+      );
 
       const reviews = await w.qcReviews({ pieceStepBundleId: bundleId });
       expect(reviews).toHaveLength(1);
@@ -312,7 +320,7 @@ describe('P1 IT3: KCS chấm có thiếu, tồn đoạn bật (integration, real
 
       await h.api.reviewMaterialYieldStep(
         bundleId.toString(),
-        { failedQty: 1, shortQty: 3 },
+        { defectReasonId: w.defectReasonId.toString(), failedQty: 1, shortQty: 3 },
         w.kcsA,
       );
 
@@ -349,7 +357,11 @@ describe('P1 IT3: KCS chấm có thiếu, tồn đoạn bật (integration, real
       const started = Date.now();
       const err = await errOf(
         withSegmentStock(true, () =>
-          h.api.reviewProductionBatch(batchId.toString(), { failedQty: 1, shortQty: 4 }, w.kcsA),
+          h.api.reviewProductionBatch(
+            batchId.toString(),
+            { defectReasonId: w.defectReasonId.toString(), failedQty: 1, shortQty: 4 },
+            w.kcsA,
+          ),
         ),
       );
       const ms = Date.now() - started;
@@ -427,7 +439,11 @@ describe('P1 IT3: KCS chấm có thiếu, tồn đoạn bật (integration, real
           status: ProductionBatchStatus.AWAITING_QC,
         });
         const review = () =>
-          h.api.reviewProductionBatch(batchId.toString(), { failedQty: 1, shortQty: 4 }, w.kcsA);
+          h.api.reviewProductionBatch(
+            batchId.toString(),
+            { defectReasonId: w.defectReasonId.toString(), failedQty: 1, shortQty: 4 },
+            w.kcsA,
+          );
         const report = () => hanReport(world, 6, w.workerB);
 
         const out = await withSegmentStock(true, () =>
@@ -592,6 +608,7 @@ describe('P1 IT3: KCS chấm có thiếu, tồn đoạn bật (integration, real
       const res = await h.api.reviewCutBundle(
         bundleId.toString(),
         {
+          defectReasonId: w.defectReasonId.toString(),
           segments: [{ segmentSpecId: w.spec441.toString(), failedQty: 3, shortQty: 5 }],
           reason: 'test',
         },
@@ -641,7 +658,10 @@ describe('P1 IT3: KCS chấm có thiếu, tồn đoạn bật (integration, real
 
       await h.api.reviewStepBundle(
         bundleId.toString(),
-        { segments: [{ segmentSpecId: w.spec355.toString(), failedQty: 8, scrapQty: 5 }] },
+        {
+          defectReasonId: w.defectReasonId.toString(),
+          segments: [{ segmentSpecId: w.spec355.toString(), failedQty: 8, scrapQty: 5 }],
+        },
         w.kcsA,
       );
 
@@ -701,7 +721,10 @@ describe('P1 IT3: KCS chấm có thiếu, tồn đoạn bật (integration, real
 
       await h.api.reviewStepBundle(
         dapBundle.toString(),
-        { segments: [{ segmentSpecId: spec777.toString(), failedQty: 4, scrapQty: 4 }] },
+        {
+          defectReasonId: w.defectReasonId.toString(),
+          segments: [{ segmentSpecId: spec777.toString(), failedQty: 4, scrapQty: 4 }],
+        },
         w.kcsA,
       );
 
@@ -742,7 +765,10 @@ describe('P1 IT3: KCS chấm có thiếu, tồn đoạn bật (integration, real
         const uon = await awaitingStep(world, ProcessStep.UON, w.spec355, 20);
         await h.api.reviewStepBundle(
           uon.toString(),
-          { segments: [{ segmentSpecId: w.spec355.toString(), failedQty: 3, scrapQty: 0 }] },
+          {
+            defectReasonId: w.defectReasonId.toString(),
+            segments: [{ segmentSpecId: w.spec355.toString(), failedQty: 3, scrapQty: 0 }],
+          },
           w.kcsA,
         );
         expect((await prog(world, ProcessStep.UON, w.spec355)).physicalLeft).toBe(3); // cắt 20 - dùng 17
@@ -830,7 +856,10 @@ describe('P1 IT3: KCS chấm có thiếu, tồn đoạn bật (integration, real
       await withSegmentStock(true, async () => {
         await h.api.reviewStepBundle(
           uon.toString(),
-          { segments: [{ segmentSpecId: w.spec355.toString(), failedQty: 8, scrapQty: 5 }] },
+          {
+            defectReasonId: w.defectReasonId.toString(),
+            segments: [{ segmentSpecId: w.spec355.toString(), failedQty: 8, scrapQty: 5 }],
+          },
           w.kcsA,
         );
         await h.api.reviewCutBundle(
@@ -899,7 +928,10 @@ describe('P1 IT3: KCS chấm có thiếu, tồn đoạn bật (integration, real
       const uon = await awaitingStep(world, ProcessStep.UON, w.spec355, 20);
       await h.api.reviewStepBundle(
         uon.toString(),
-        { segments: [{ segmentSpecId: w.spec355.toString(), failedQty: 5, scrapQty: 5 }] },
+        {
+          defectReasonId: w.defectReasonId.toString(),
+          segments: [{ segmentSpecId: w.spec355.toString(), failedQty: 5, scrapQty: 5 }],
+        },
         w.kcsA,
       );
       const open = await admin.computeProgress(MfgStage.PHOI, world.piId);

@@ -34,9 +34,10 @@ export class OfficeSuppliesController {
   @RequirePermissions({ module: PERMISSION_MODULES.OFFICE_SUPPLY, action: PermissionAction.CREATE })
   create(
     @Body() dto: CreateOfficeSupplyDto,
+    @CurrentUser('id') userId: string,
     @CurrentUser('warehouseScope') warehouseScope: string | null,
   ) {
-    return this.officeSuppliesService.create(dto, warehouseScope);
+    return this.officeSuppliesService.create(dto, warehouseScope, userId);
   }
 
   @Get()

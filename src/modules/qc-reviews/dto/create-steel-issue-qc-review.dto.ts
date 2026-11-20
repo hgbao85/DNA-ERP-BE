@@ -10,6 +10,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { IsSystemUploadUrl } from '../../../common/validators/system-upload-url.validator';
 
 export class QcReviewSegmentInputDto {
   @ApiProperty()
@@ -68,5 +69,6 @@ export class CreateSteelIssueQcReviewDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @IsSystemUploadUrl()
   photoUrl?: string;
 }

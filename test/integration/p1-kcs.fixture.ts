@@ -63,12 +63,14 @@ export interface P1ReviewDto {
 export interface P1CutReviewInput {
   segments: { segmentSpecId: string; failedQty: number; shortQty?: number; scrapQty?: number }[];
   reason?: string;
+  defectReasonId?: string;
 }
 
 export interface P1QtyReviewInput {
   failedQty: number;
   shortQty?: number;
   reason?: string;
+  defectReasonId?: string;
 }
 
 export interface P1Api {
@@ -466,6 +468,8 @@ export class P1World {
   supplierWhId!: bigint;
   productionWhId!: bigint;
   outWhId!: bigint;
+  /** Lý do lỗi dùng chung (20/11/2026, T4-5: chấm có phần không đạt thì bắt buộc nguyên nhân). */
+  defectReasonId!: bigint;
 
   constructor(
     readonly h: Pick<P1Harness, 'prisma' | 'ledger'>,
@@ -550,6 +554,7 @@ export class P1World {
     this.kcsB = await this.makeUser('kcsb');
     this.qlsx = await this.makeUser('qlsx');
     this.admin = await this.makeUser('admin');
+    this.defectReasonId = (await p.defectReason.create({ data: { label: this.code('LOI') } })).id;
     this.ws = await this.makeWorkshop('A');
     this.supplierWhId = await this.virtualWarehouse('SUPPLIER');
     this.productionWhId = await this.virtualWarehouse('PRODUCTION');
@@ -1170,6 +1175,8 @@ export class P1World {
     if (has(this.createdVirtualCodes)) {
       await p.warehouse.deleteMany({ where: { code: { in: this.createdVirtualCodes } } });
     }
+    if (this.defectReasonId)
+      await p.defectReason.deleteMany({ where: { id: this.defectReasonId } });
     if (has(users)) await p.user.deleteMany({ where: { id: { in: users } } });
     if (has(workshops)) await p.workshop.deleteMany({ where: { id: { in: workshops } } });
     if (has(roles)) await purgeRoleRows(p, roles);

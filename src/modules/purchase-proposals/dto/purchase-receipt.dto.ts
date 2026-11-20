@@ -13,6 +13,7 @@ import {
   ValidateNested,
   IsDateString,
 } from 'class-validator';
+import { IsOnOrAfterField } from '../../../common/validators/strict-type.decorators';
 
 const MAX_FILES = 20;
 
@@ -177,5 +178,6 @@ export class OverReceiptStatsQueryDto {
   @ApiPropertyOptional({ example: '2026-11-30' })
   @IsOptional()
   @IsDateString()
+  @IsOnOrAfterField('from')
   to?: string;
 }

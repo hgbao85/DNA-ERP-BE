@@ -9,6 +9,7 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
+import { IsSystemUploadUrl } from '../../../common/validators/system-upload-url.validator';
 
 export class TransferCheckDefectDto {
   @ApiProperty()
@@ -19,6 +20,7 @@ export class TransferCheckDefectDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @IsSystemUploadUrl()
   imageUrl?: string;
 }
 

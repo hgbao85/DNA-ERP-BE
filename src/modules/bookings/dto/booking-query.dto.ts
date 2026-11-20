@@ -1,8 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Transform } from 'class-transformer';
 import { IsBoolean, IsEnum, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 import { BookingStatus } from '../../../generated/prisma/client';
 import { DATE_ONLY_PATTERN } from './create-booking.dto';
+import { ToStrictBoolean } from '../../../common/validators/strict-type.decorators';
 
 /**
  * Phần A – Đợt 10a: GET /bookings. Không phân trang (vài chục booking/tháng) - tối đa 500 dòng, xếp theo ngày lấy cont.
@@ -39,7 +39,7 @@ export class BookingQueryDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @Transform(({ value }) => value === true || value === 'true' || value === '1')
+  @ToStrictBoolean({ allowNumeric: true })
   @IsBoolean()
   includeCancelled?: boolean;
 }

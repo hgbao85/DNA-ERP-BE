@@ -1,5 +1,4 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Transform } from 'class-transformer';
 import {
   IsArray,
   IsBoolean,
@@ -9,6 +8,7 @@ import {
   Matches,
   MaxLength,
 } from 'class-validator';
+import { ToStrictBoolean } from '../../../../common/validators/strict-type.decorators';
 
 /** Sếp quyết 1 lô: các yêu cầu được duyệt (mảng id dạng chuỗi số); yêu cầu chờ còn lại bị từ chối và cần `rejectReason`. */
 export class DecideDeadlineBatchDto {
@@ -36,7 +36,7 @@ export class ListDeadlineBatchesQueryDto {
 
   @ApiPropertyOptional({ description: 'true = chỉ lô do chính mình gửi.' })
   @IsOptional()
-  @Transform(({ value }: { value: unknown }) => value === true || value === 'true' || value === '1')
+  @ToStrictBoolean({ allowNumeric: true })
   @IsBoolean()
   mine?: boolean;
 }

@@ -443,11 +443,28 @@ export class SkusService {
   /** Xoá SKU (dọn dẹp quản trị, vd tạo nhầm) - hard delete, mirror deletePlanForms() trong mock. */
   async remove(id: string): Promise<void> {
     const pf = await this.findOneOrThrow(id);
-    await this.prisma.$transaction([
-      this.prisma.planFormManhReview.deleteMany({ where: { planFormId: pf.id } }),
-      this.prisma.planFormDetailReview.deleteMany({ where: { planFormId: pf.id } }),
-      this.prisma.planForm.delete({ where: { id: pf.id } }),
-    ]);
+    try {
+      // 20/11/2026: kiểm tham chiếu trong transaction trước khi xoá (mẫu "xoá dữ liệu đang được dùng").
+      // PlanForm không thuộc SOFT_DELETE_MODELS nên dùng tx.planForm.* an toàn.
+      await this.prisma.$transaction(async (tx) => {
+        const inspections = await tx.materialInspectionRequest.count({
+          where: { planFormId: pf.id },
+        });
+        if (inspections > 0) {
+          throw new ConflictException(
+            `SKU "${pf.mfgProduct.factoryCode}" còn ${inspections} lệnh kiểm tra vật tư - không xoá được`,
+          );
+        }
+        await tx.planFormManhReview.deleteMany({ where: { planFormId: pf.id } });
+        await tx.planFormDetailReview.deleteMany({ where: { planFormId: pf.id } });
+        await tx.planForm.delete({ where: { id: pf.id } });
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2003') {
+        throw new ConflictException('SKU đang được dùng ở chứng từ khác - không xoá được');
+      }
+      throw e;
+    }
     if (pf.imageUrl) await this.cloudinaryService.deleteByUrl(pf.imageUrl);
   }
 
@@ -459,6 +476,9 @@ export class SkusService {
     actorUserId?: string,
     actorRoles: string[] = [],
   ): Promise<SkuResponseDto> {
+    // 20/11/2026: chặn mảnh rỗng ngay đầu hàm - trước khi resolveDraftBomRevision kịp tạo bản nháp mồ côi.
+    const pieces = dto.pieces;
+    if (!pieces?.length) throw new BadRequestException('Cần ít nhất 1 mảnh');
     const pf = await this.findOneOrThrow(id);
     const revision = await this.resolveDraftBomRevision(pf, actorRoles);
     // Chỉ cần snapshot "trước" khi Admin ghi đè (đường DRAFT bình thường không audit) - tránh
@@ -475,9 +495,6 @@ export class SkusService {
 
     const updated = await this.prisma.$transaction(
       async (tx) => {
-        if (!dto.pieces) {
-          throw new BadRequestException('manh-quota yêu cầu field "pieces"');
-        }
         // L7 16/11: Admin ghi đè không sửa thẳng bản ACTIVE nữa - ghi lên 1 bản sao mới rồi kích hoạt (cuối transaction),
         // lệnh đang chạy giữ bản cũ. Xem BomRevisionsService.forkForAdminOverride.
         const targetRevisionId = revision.isAdminOverride
@@ -487,12 +504,12 @@ export class SkusService {
               pf.id,
             ))
           : revision.id;
-        await this.assertWireLinesAreTicked(tx, targetRevisionId, dto.pieces, dto.wireOptions);
+        await this.assertWireLinesAreTicked(tx, targetRevisionId, pieces, dto.wireOptions);
         ({ orphanedPhotoUrls } = await this.replacePieces(
           tx,
           targetRevisionId,
           pf.mfgProductId,
-          dto.pieces,
+          pieces,
         ));
         // Tick loại dây Sales được chọn (field bỏ trống = giữ nguyên, [] = xoá hết tick).
         if (dto.wireOptions) {
@@ -588,7 +605,7 @@ export class SkusService {
       });
       await this.recordHistory(pf.id, 'sku.admin_override', 'Định mức mảnh');
     } else {
-      await this.recordHistory(pf.id, 'sku.manh_submitted', `${dto.pieces?.length ?? 0} mảnh`);
+      await this.recordHistory(pf.id, 'sku.manh_submitted', `${pieces.length} mảnh`);
       // Nộp (kể cả nộp lại) đóng cả 2 việc chờ Spec: "SKU mới cần nhập" (lần đầu) và "bị KHSX trả
       // lại" (nộp lại sau reject) - cả 2 resolve() đều an toàn gọi thừa (idempotent, không match
       // thì không làm gì). Rồi báo KHSX vào review.

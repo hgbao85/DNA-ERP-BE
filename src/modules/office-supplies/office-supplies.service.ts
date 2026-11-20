@@ -44,10 +44,13 @@ export class OfficeSuppliesService {
   async create(
     dto: CreateOfficeSupplyDto,
     warehouseScope: string | null,
+    userId: string | null = null,
   ): Promise<OfficeSupplyResponseDto> {
-    if (!dto.name || !dto.unit) {
-      throw new BadRequestException('Thiếu Tên vật tư / Đơn vị tính');
-    }
+    // 20/11/2026: chặn cả tên / đơn vị toàn dấu cách, lưu bản đã trim.
+    const name = dto.name?.trim();
+    const unit = dto.unit?.trim();
+    if (!name) throw new BadRequestException('Tên vật tư không được để trống');
+    if (!unit) throw new BadRequestException('Đơn vị tính không được để trống');
 
     // Có scope (thủ kho bình thường) -> LUÔN tạo trong đúng kho mình phụ trách, bỏ qua
     // dto.warehouseCode nếu có gửi (không cho tạo hộ kho khác). Không scope (Boss/Admin/tổng
@@ -68,25 +71,39 @@ export class OfficeSuppliesService {
       const existing = await this.prisma.officeSupply.findUnique({
         where: { warehouseId_code: { warehouseId: warehouse.id, code: trimmedCode } },
       });
-      if (existing) {
-        throw new ConflictException(`Vật tư văn phòng "${trimmedCode}" đã tồn tại trong kho này`);
-      }
+      if (existing) throw this.duplicateCodeError(existing, trimmedCode);
     }
 
     const openingQty = dto.openingQty && dto.openingQty > 0 ? dto.openingQty : 0;
 
     let supply: OfficeSupplyWithWarehouse;
     try {
-      supply = await this.prisma.officeSupply.create({
-        data: {
-          warehouseId: warehouse.id,
-          code: trimmedCode,
-          name: dto.name,
-          unit: dto.unit,
-          note: dto.note,
-          quantity: openingQty,
-        },
-        include: OFFICE_SUPPLY_INCLUDE,
+      // 20/11/2026: vật tư + dòng sổ INITIAL (kèm người tạo) ghi cùng 1 transaction.
+      supply = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.officeSupply.create({
+          data: {
+            warehouseId: warehouse.id,
+            code: trimmedCode,
+            name,
+            unit,
+            note: dto.note,
+            quantity: openingQty,
+          },
+          include: OFFICE_SUPPLY_INCLUDE,
+        });
+        if (openingQty > 0) {
+          await tx.officeSupplyLedgerEntry.create({
+            data: {
+              officeSupplyId: created.id,
+              changeQty: openingQty,
+              quantityAfter: openingQty,
+              reason: OfficeSupplyLedgerReason.INITIAL,
+              note: 'Tồn ban đầu lúc tạo vật tư',
+              createdByUserId: userId ?? undefined,
+            },
+          });
+        }
+        return created;
       });
     } catch (e) {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
@@ -95,19 +112,20 @@ export class OfficeSuppliesService {
       throw e;
     }
 
-    if (openingQty > 0) {
-      await this.prisma.officeSupplyLedgerEntry.create({
-        data: {
-          officeSupplyId: supply.id,
-          changeQty: openingQty,
-          quantityAfter: openingQty,
-          reason: OfficeSupplyLedgerReason.INITIAL,
-          note: 'Tồn ban đầu lúc tạo vật tư',
-        },
-      });
-    }
-
     return this.toResponseDto(supply);
+  }
+
+  /** 20/11/2026: mã trùng với vật tư đã xoá mềm -> câu rõ, không dùng lại mã (không có chức năng khôi phục). */
+  private duplicateCodeError(
+    existing: { name: string; deletedAt: Date | null },
+    code: string,
+  ): ConflictException {
+    if (existing.deletedAt) {
+      return new ConflictException(
+        `Mã "${code}" đã dùng cho vật tư văn phòng đã xoá "${existing.name}" trong kho này - đặt mã khác`,
+      );
+    }
+    return new ConflictException(`Vật tư văn phòng "${code}" đã tồn tại trong kho này`);
   }
 
   async findAll(
@@ -167,22 +185,30 @@ export class OfficeSuppliesService {
     const previous = await this.findOneOrThrow(id);
     this.assertWarehouseScope(warehouseScope, previous.warehouse.code);
 
+    // 20/11/2026: tên / đơn vị có gửi mà rỗng (hoặc toàn dấu cách) -> 400; lưu bản đã trim.
+    const name = dto.name?.trim();
+    const unit = dto.unit?.trim();
+    if (dto.name !== undefined && !name) {
+      throw new BadRequestException('Tên vật tư không được để trống');
+    }
+    if (dto.unit !== undefined && !unit) {
+      throw new BadRequestException('Đơn vị tính không được để trống');
+    }
+
     const trimmedCode = dto.code?.trim();
     if (trimmedCode) {
       const existing = await this.prisma.officeSupply.findUnique({
         where: { warehouseId_code: { warehouseId: previous.warehouseId, code: trimmedCode } },
       });
-      if (existing && existing.id !== bigId) {
-        throw new ConflictException(`Vật tư văn phòng "${trimmedCode}" đã tồn tại trong kho này`);
-      }
+      if (existing && existing.id !== bigId) throw this.duplicateCodeError(existing, trimmedCode);
     }
 
     const supply = await this.prisma.officeSupply.update({
       where: { id: bigId },
       data: {
         code: dto.code !== undefined ? trimmedCode || null : undefined,
-        name: dto.name,
-        unit: dto.unit,
+        name,
+        unit,
         note: dto.note,
         isActive: dto.isActive,
       },
@@ -209,6 +235,13 @@ export class OfficeSuppliesService {
     const bigId = parseBigIntId(id);
     if (!dto.changeQty) {
       throw new BadRequestException('changeQty không được bằng 0');
+    }
+    // 20/11/2026: dấu số lượng theo loại nghiệp vụ (ADJUST nhận cả hai dấu). Kiểm trước transaction.
+    if (dto.reason === OfficeSupplyLedgerReason.IMPORT && dto.changeQty <= 0) {
+      throw new BadRequestException('Nhập kho: số lượng phải lớn hơn 0');
+    }
+    if (dto.reason === OfficeSupplyLedgerReason.EXPORT && dto.changeQty >= 0) {
+      throw new BadRequestException('Xuất kho: số lượng phải ghi số âm');
     }
     const existing = await this.findOneOrThrow(id);
     this.assertWarehouseScope(warehouseScope, existing.warehouse.code);

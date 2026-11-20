@@ -7,6 +7,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { FLOOR_REPORT_REVERSED_REPLAY_MESSAGE } from '../../common/utils/floor-report.util';
+import {
+  IdempotencyKeyInUseException,
+  IdempotencyKeyReusedException,
+} from '../../common/utils/idempotency.util';
 import { MfgRole, MfgStage, StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { MaterialYieldIssuesService } from '../material-yield-issues/material-yield-issues.service';
@@ -1116,7 +1120,11 @@ describe('ProductionBatchesService', () => {
       prisma.floorReport.findUnique.mockResolvedValue({
         id: 9n,
         kind: 'PIECE',
+        reportedById: 'cn-han-2',
+        workstationId: null,
         productionBatchId: 77n,
+        lines: [{ segmentSpecId: null, pieceId: 40n, qty: 5 }],
+        productionBatch: { stage: MfgStage.HAN, productionOrderId: 1n, pieceId: 40n },
       });
       prisma.productionBatch.findUniqueOrThrow.mockResolvedValue({
         ...batchRow,
@@ -1233,12 +1241,24 @@ describe('ProductionBatchesService', () => {
       expect(res.overPlanWarning).toBeNull();
     });
 
+    // T4-4 (20/11/2026): dòng sổ đã ghi với khoá K - vân tay khớp với recordDto (mảnh 40, 5 cái, HAN, lệnh 1).
+    const prevPiece = (over: Record<string, unknown> = {}) => ({
+      id: 9n,
+      kind: 'PIECE',
+      reportedById: 'cn-han-2',
+      workstationId: null,
+      productionBatchId: 77n,
+      lines: [{ segmentSpecId: null, pieceId: 40n, qty: 5 }],
+      stepBatch: null,
+      cutBundle: null,
+      productionBatch: { stage: MfgStage.HAN, productionOrderId: 1n, pieceId: 40n },
+      ...over,
+    });
+
     it('gửi lại cùng khoá sau khi QLSX hủy hết (dòng sổ không còn gắn đợt) -> 409 câu hủy, không ghi dòng sổ mới', async () => {
-      prisma.floorReport.findUnique.mockResolvedValue({
-        id: 9n,
-        kind: 'PIECE',
-        productionBatchId: null,
-      });
+      prisma.floorReport.findUnique.mockResolvedValue(
+        prevPiece({ productionBatchId: null, productionBatch: null }),
+      );
 
       await expect(
         service.recordProductionBatch('1', recordDto, 'cn-han-2', null, 'key-h'),
@@ -1247,16 +1267,113 @@ describe('ProductionBatchesService', () => {
       expect(prisma.productionBatch.create).not.toHaveBeenCalled();
     });
 
-    it('khoá đã dùng cho loại báo khác -> 409 câu cũ', async () => {
-      prisma.floorReport.findUnique.mockResolvedValue({
-        id: 9n,
-        kind: 'CUT',
-        productionBatchId: null,
+    it('khoá đã dùng cho loại báo khác -> 422 IdempotencyKeyReusedException (trước đây 409)', async () => {
+      prisma.floorReport.findUnique.mockResolvedValue(
+        prevPiece({ kind: 'CUT', productionBatchId: null, productionBatch: null }),
+      );
+
+      const err = await service
+        .recordProductionBatch('1', recordDto, 'cn-han-2', null, 'key-h')
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(IdempotencyKeyReusedException);
+    });
+
+    describe('T4-4: vân tay khi gửi lại cùng khoá', () => {
+      const send = (
+        over: {
+          qty?: number;
+          pieceId?: string;
+          user?: string;
+          ctx?: { workstationId: bigint };
+        } = {},
+      ) =>
+        service.recordProductionBatch(
+          '1',
+          { ...recordDto, qty: over.qty ?? 5, pieceId: over.pieceId ?? '40' },
+          over.user ?? 'cn-han-2',
+          null,
+          'key-h',
+          over.ctx,
+        );
+      const lotRow = { ...batchRow, id: 77n, status: 'OPEN', reportedQty: 8 };
+
+      beforeEach(() => {
+        prisma.productionBatch.findUniqueOrThrow.mockResolvedValue(lotRow);
       });
 
-      await expect(
-        service.recordProductionBatch('1', recordDto, 'cn-han-2', null, 'key-h'),
-      ).rejects.toThrow('Idempotency-Key đã dùng cho một lần báo khác');
+      it('cùng người, mảnh, số lượng -> trả đợt cũ, không cộng lần 2, không ghi sổ', async () => {
+        prisma.floorReport.findUnique.mockResolvedValue(prevPiece());
+        const res = await send();
+        expect(res.id).toBe('77');
+        expect(prisma.floorReport.create).not.toHaveBeenCalled();
+        expect(prisma.productionBatch.update).not.toHaveBeenCalled();
+        expect(realtimeStub.publishEntityChanged).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['khác số lượng', { qty: 3 }],
+        ['khác mảnh', { pieceId: '41' }],
+        ['khác người (tổ Sơn dùng khoá của tổ Hàn)', { user: 'cn-son-1' }],
+        ['khác máy', { ctx: { workstationId: 4n } }],
+      ])('%s -> 422, không trả đợt của người trước, không ghi sổ', async (_l, over) => {
+        prisma.floorReport.findUnique.mockResolvedValue(prevPiece());
+        const err = await send(over).catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(IdempotencyKeyReusedException);
+        expect(prisma.productionBatch.findUniqueOrThrow).not.toHaveBeenCalled();
+        expect(prisma.floorReport.create).not.toHaveBeenCalled();
+      });
+
+      it('đợt cũ thuộc lệnh / tổ khác -> 422', async () => {
+        prisma.floorReport.findUnique.mockResolvedValue(
+          prevPiece({
+            productionBatch: { stage: MfgStage.SON, productionOrderId: 1n, pieceId: 40n },
+          }),
+        );
+        await expect(send()).rejects.toBeInstanceOf(IdempotencyKeyReusedException);
+      });
+
+      it('câu ĐẦU của transaction là try-lock khoá chống trùng, TRƯỚC khoá nghiệp vụ', async () => {
+        prisma.productionBatch.create.mockResolvedValue({ ...lotRow, reportedQty: 5 });
+        await send();
+        const lockCall = prisma.$queryRaw.mock.invocationCallOrder[0];
+        const bizLock = prisma.$executeRaw.mock.invocationCallOrder[0];
+        expect(lockCall).toBeLessThan(bizLock);
+        const [tpl, ...args] = prisma.$queryRaw.mock.calls[0] as unknown as [
+          TemplateStringsArray,
+          ...string[],
+        ];
+        expect(tpl.join('?')).toContain('pg_try_advisory_xact_lock');
+        expect(args).toEqual(['idem:floor_reports', 'key-h']);
+      });
+
+      it('bản trùng đang chạy (try-lock thất bại) -> 409 IdempotencyKeyInUseException, không ghi gì', async () => {
+        prisma.$queryRaw.mockResolvedValueOnce([{ ok: false }]);
+        const err = await send().catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(IdempotencyKeyInUseException);
+        expect(prisma.floorReport.create).not.toHaveBeenCalled();
+        expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+      });
+
+      it('đọc lại trong transaction thấy lần báo vừa commit -> trả đợt cũ, không ghi, không phát realtime', async () => {
+        prisma.floorReport.findUnique
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(prevPiece())
+          .mockResolvedValue(prevPiece());
+        const res = await send();
+        expect(res.id).toBe('77');
+        expect(prisma.productionBatch.create).not.toHaveBeenCalled();
+        expect(prisma.floorReport.create).not.toHaveBeenCalled();
+        expect(realtimeStub.publishEntityChanged).not.toHaveBeenCalled();
+      });
+
+      it('không có khoá thì không khoá chống trùng', async () => {
+        prisma.productionBatch.create.mockResolvedValue({ ...lotRow, reportedQty: 5 });
+        await service.recordProductionBatch('1', recordDto, 'cn-han-2', null);
+        const tpls = (prisma.$queryRaw.mock.calls as unknown as [TemplateStringsArray][]).map(
+          (c) => (Array.isArray(c[0]) ? c[0].join('?') : ''),
+        );
+        expect(tpls.some((t) => t.includes('pg_try_advisory_xact_lock'))).toBe(false);
+      });
     });
 
     it('recordProductionBatch - đã có dòng OPEN - CỘNG DỒN reportedQty vào đúng dòng đó, không tạo mới', async () => {

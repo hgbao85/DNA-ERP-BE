@@ -51,6 +51,9 @@ const RULES: Record<string, Translate> = {
   isUrl: (f) => `${f} phải là đường dẫn (URL) hợp lệ`,
   isObject: (f) => `${f} phải là một đối tượng`,
   isNotEmptyObject: (f) => `${f} không được để trống`,
+  // 20/11/2026 (T1-8 / T4-10): tệp đính kèm phải do hệ thống tải lên (xem system-upload-url.validator.ts).
+  isSystemUploadUrl: (f) =>
+    `${f} phải là tệp đã tải lên hệ thống (bấm nút tải ảnh / tải tệp), không nhận đường dẫn tự gõ hoặc từ trang khác`,
   nestedValidation: (f) => `${f} sai cấu trúc dữ liệu`,
   whitelistValidation: (f) => `Không được gửi ${f} (trường này không dùng ở đây)`,
   unknownValue: () => 'Dữ liệu gửi lên không hợp lệ',
@@ -149,6 +152,7 @@ const PRIORITY = [
   'arrayMaxSize',
   'arrayUnique',
   'matches',
+  'isSystemUploadUrl',
   'nestedValidation',
 ];
 const rank = (key: string): number => {

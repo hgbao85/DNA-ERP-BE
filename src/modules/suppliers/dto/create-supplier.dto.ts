@@ -1,6 +1,7 @@
 import { ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsBoolean, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { KeepRawValue } from '../../../common/validators/strict-type.decorators';
 
 export class CreateSupplierDto {
   // Cắt khoảng trắng đầu/cuối + gộp khoảng trắng thừa; tên toàn dấu cách thành rỗng và bị chặn (test tay 09/11 điểm 19).
@@ -42,6 +43,7 @@ export class CreateSupplierDto {
   // Cho chọn trạng thái ngay lúc thêm; không gửi thì mặc định true (test tay 09/11 điểm 21).
   @ApiPropertyOptional()
   @IsOptional()
+  @KeepRawValue()
   @IsBoolean()
   isActive?: boolean;
 }

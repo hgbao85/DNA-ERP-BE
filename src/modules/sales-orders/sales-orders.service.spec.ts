@@ -53,6 +53,8 @@ describe('SalesOrdersService', () => {
     bookingLine: { findFirst: jest.Mock; deleteMany: jest.Mock };
     packagingIssue: { groupBy: jest.Mock };
     $queryRaw: jest.Mock;
+    $executeRaw: jest.Mock;
+    cuttingProposalItem: { findMany: jest.Mock; deleteMany: jest.Mock };
     auditLog: { create: jest.Mock };
     $transaction: jest.Mock;
   };
@@ -151,6 +153,12 @@ describe('SalesOrdersService', () => {
       },
       packagingIssue: { groupBy: jest.fn().mockResolvedValue([]) },
       $queryRaw: jest.fn(),
+      // 20/11/2026 (T2-2): khoá nghiệp vụ theo từng dòng PI + dòng ghim của lượt tính phương án cắt.
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      cuttingProposalItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
       auditLog: { create: jest.fn() },
       // 10/09: remove() giờ bọc xoá cascade (productionInvoiceItem/salesOrderItem) +
       // salesOrder.delete() trong 1 $transaction - test chạy callback thẳng với `prisma` (đủ vì
@@ -871,6 +879,108 @@ describe('SalesOrdersService', () => {
         );
         expect(prisma.salesOrderItem.update).not.toHaveBeenCalled();
       });
+    });
+  });
+
+  // 20/11/2026 (T2-2): đơn có dòng nằm trong lượt tính phương án cắt chưa dùng thì báo trước + chặn xoá.
+  describe('lượt tính phương án cắt chưa dùng chặn xoá đơn', () => {
+    const openSolveRow = {
+      productionInvoiceItemId: 7n,
+      productionInvoiceItem: { salesOrderId: 10n },
+    };
+
+    it('findOne: deleteBlockedReason nêu lượt tính chưa dùng và màn Tối ưu cắt sắt', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.cuttingProposalItem.findMany.mockResolvedValue([openSolveRow]);
+
+      const result = await service.findOne('10');
+      expect(result.deleteBlockedReason).toContain('lượt tính phương án cắt chưa dùng');
+      expect(result.deleteBlockedReason).toContain('màn Tối ưu cắt sắt');
+      expect(prisma.cuttingProposalItem.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            cuttingProposal: {
+              status: { in: ['CALCULATING', 'DRAFT', 'FAILED'] },
+              productionOrderId: null,
+              productionInvoiceId: null,
+            },
+            productionInvoiceItem: { salesOrderId: { in: [10n] }, productionInvoiceId: null },
+          },
+        }),
+      );
+    });
+
+    it('findAll: 1 truy vấn cho cả trang, chỉ đơn có lượt tính mới bị báo', async () => {
+      prisma.salesOrder.findMany.mockResolvedValue([
+        orderWithItems({ id: 10n }),
+        orderWithItems({ id: 20n }),
+      ]);
+      prisma.salesOrder.count.mockResolvedValue(2);
+      prisma.cuttingProposalItem.findMany.mockResolvedValue([openSolveRow]);
+
+      const result = await service.findAll({ page: 1, limit: 20, sortOrder: 'desc' } as never);
+      expect(result.data.find((o) => o.id === '10')?.deleteBlockedReason).toContain(
+        'lượt tính phương án cắt chưa dùng',
+      );
+      expect(result.data.find((o) => o.id === '20')?.deleteBlockedReason).toBeNull();
+      expect(prisma.cuttingProposalItem.findMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('remove: 409 đúng câu đó, đơn và lượt tính còn nguyên', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.cuttingProposalItem.findMany.mockResolvedValue([openSolveRow]);
+
+      const p = service.remove('10');
+      await expect(p).rejects.toThrow(ConflictException);
+      await expect(p).rejects.toThrow(/lượt tính phương án cắt chưa dùng/);
+      expect(prisma.cuttingProposalItem.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.salesOrder.delete).not.toHaveBeenCalled();
+    });
+
+    it('remove: lượt tính được mở ra giữa chừng (đếm lại trong transaction) vẫn 409', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([{ id: 7n }]);
+      prisma.cuttingProposalItem.findMany
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([openSolveRow]);
+
+      await expect(service.remove('10')).rejects.toThrow(/lượt tính phương án cắt chưa dùng/);
+      expect(prisma.salesOrder.delete).not.toHaveBeenCalled();
+    });
+
+    it('remove: khoá từng dòng PI theo id tăng dần rồi dọn dòng ghim của lượt SUPERSEDED trước khi xoá dòng PI', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.productionInvoiceItem.findMany.mockResolvedValue([{ id: 7n }, { id: 9n }]);
+
+      await service.remove('10');
+
+      expect(prisma.productionInvoiceItem.findMany).toHaveBeenCalledWith({
+        where: { salesOrderId: 10n },
+        select: { id: true },
+        orderBy: { id: 'asc' },
+      });
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(2);
+      expect(prisma.cuttingProposalItem.deleteMany).toHaveBeenCalledWith({
+        where: {
+          productionInvoiceItemId: { in: [7n, 9n] },
+          cuttingProposal: { status: 'SUPERSEDED' },
+        },
+      });
+      expect(prisma.cuttingProposalItem.deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
+        prisma.productionInvoiceItem.deleteMany.mock.invocationCallOrder[0],
+      );
+      expect(prisma.salesOrder.delete).toHaveBeenCalled();
+    });
+
+    it('remove: P2003 lúc xoá -> 409 "đang được dùng ở chứng từ khác"', async () => {
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.salesOrder.delete.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('fk', { code: 'P2003', clientVersion: 'x' }),
+      );
+
+      await expect(service.remove('10')).rejects.toThrow(
+        'Đơn hàng đang được dùng ở chứng từ khác - không xoá được',
+      );
     });
   });
 

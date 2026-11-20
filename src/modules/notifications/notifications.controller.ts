@@ -1,8 +1,19 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PermissionAction } from '../../generated/prisma/client';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
+import { normalizeIdempotencyKey } from '../../common/utils/idempotency.util';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { CreateNotificationDto } from './dto/create-notification.dto';
@@ -24,8 +35,17 @@ export class NotificationsController {
 
   @Post()
   @RequirePermissions({ module: PERMISSION_MODULES.NOTIFICATION, action: PermissionAction.CREATE })
-  create(@Body() dto: CreateNotificationDto, @CurrentUser('id') userId: string) {
-    return this.notificationsService.createAnnouncement(dto, userId);
+  create(
+    @Body() dto: CreateNotificationDto,
+    @CurrentUser('id') userId: string,
+    @Headers('Idempotency-Key') idempotencyKey: string | undefined,
+  ) {
+    // Khoá tuỳ chọn (20/11/2026): FE cũ không gửi vẫn chạy như trước.
+    return this.notificationsService.createAnnouncement(
+      dto,
+      userId,
+      normalizeIdempotencyKey(idempotencyKey, false),
+    );
   }
 
   /** Admin/Sếp xem lại mọi thông báo chung đã phát + tỉ lệ đã đọc - khác GET / (chỉ thấy của

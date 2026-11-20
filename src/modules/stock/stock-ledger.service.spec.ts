@@ -7,10 +7,15 @@ import {
 } from './stock-ledger.service';
 import { StockReservationsService } from './stock-reservations.service';
 import { RealtimeService } from '../../realtime/realtime.service';
+import {
+  IdempotencyKeyInUseException,
+  IdempotencyKeyReusedException,
+} from '../../common/utils/idempotency.util';
 
 describe('StockLedgerService', () => {
   let service: StockLedgerService;
   let reservations: { getReservedQty: jest.Mock };
+  let realtimeStub: { publishEntityChanged: jest.Mock; publishNotificationCreated: jest.Mock };
   let prisma: {
     stockLedger: {
       findUnique: jest.Mock;
@@ -78,7 +83,7 @@ describe('StockLedgerService', () => {
       $queryRaw: jest.fn().mockResolvedValue([{ qty: { toNumber: () => 100 } }]),
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => Promise.resolve(cb(prisma))),
     };
-    const realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
+    realtimeStub = { publishEntityChanged: jest.fn(), publishNotificationCreated: jest.fn() };
     reservations = { getReservedQty: jest.fn().mockResolvedValue(0) };
     service = new StockLedgerService(
       prisma as unknown as PrismaServiceType,
@@ -326,13 +331,14 @@ describe('StockLedgerService', () => {
         );
 
         expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+        // Lệnh đầu của transaction là try-lock khoá chống trùng (T3-9); khoá ô tồn là lệnh thứ 2.
         const sql = (
-          (prisma.$queryRaw.mock.calls as unknown[][])[0][0] as TemplateStringsArray
+          (prisma.$queryRaw.mock.calls as unknown[][])[1][0] as TemplateStringsArray
         ).join('?');
         expect(sql).toContain('FOR UPDATE');
         expect(sql).toContain('"stockLengthMm" = ?');
         expect(sql).toContain('"spec" = ?');
-        expect((prisma.$queryRaw.mock.calls as unknown[][])[0].slice(1)).toEqual([2n, 10n, 0, '']);
+        expect((prisma.$queryRaw.mock.calls as unknown[][])[1].slice(1)).toEqual([2n, 10n, 0, '']);
         expect(prisma.stockLedger.create).toHaveBeenCalled();
       });
 
@@ -426,6 +432,125 @@ describe('StockLedgerService', () => {
       });
     });
 
+    // T3-9 (20/11/2026): gửi lại cùng Idempotency-Key - so vân tay, khác thì 422; đua cùng khoá thì try-lock.
+    describe('T3-9 - chống trùng theo Idempotency-Key', () => {
+      const dto = {
+        fromWarehouseId: '1',
+        toWarehouseId: '2',
+        materialId: '10',
+        qty: 5,
+        note: 'kiểm kê',
+      };
+      // Bút toán đã ghi bằng khoá K: ADJUST, user-1, kho 1 -> 2, vật tư 10, 5, chưa có cây / quy cách.
+      const prevRow = (over: Record<string, unknown> = {}) =>
+        ledgerRow({ qty: new Prisma.Decimal(5), stockLengthMm: 0, spec: '', ...over });
+      const adjust = (over: Record<string, unknown> = {}, user = 'user-1') =>
+        service.adjust({ ...dto, ...over }, 'K', user, null);
+      const lockSql = () =>
+        (prisma.$queryRaw.mock.calls as unknown[][]).map((c) =>
+          (c[0] as TemplateStringsArray).join('?'),
+        );
+
+      it('gửi lại K cùng nội dung -> trả đúng bút toán cũ, không ghi lại, không phát realtime', async () => {
+        prisma.stockLedger.findUnique.mockResolvedValue(prevRow());
+        const res = await adjust();
+        expect(res.id).toBe('100');
+        expect(prisma.stockLedger.create).not.toHaveBeenCalled();
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+        expect(realtimeStub.publishEntityChanged).not.toHaveBeenCalled();
+      });
+
+      it('gửi lại K với ghi chú khác -> vẫn trả bút toán cũ (không so ghi chú)', async () => {
+        prisma.stockLedger.findUnique.mockResolvedValue(prevRow());
+        await expect(adjust({ note: 'ghi chú khác' })).resolves.toBeDefined();
+      });
+
+      it.each([
+        ['khác số lượng', { qty: 6 }],
+        ['khác vật tư', { materialId: '11' }],
+        ['khác kho', { toWarehouseId: '3' }],
+        ['khác chiều dài cây', { stockLengthMm: 6000 }],
+        ['khác quy cách', { spec: 'dày 5cm' }],
+      ])('gửi lại K nhưng %s -> 422, sổ không thêm bút toán', async (_l, over) => {
+        const all = [
+          { id: 1n, code: 'OPENING_BALANCE', name: 'Cân đối', isVirtual: true },
+          { ...toWh, isVirtual: false },
+          { id: 3n, code: 'kho-3', name: 'Kho 3', isVirtual: false },
+        ];
+        prisma.warehouse.findMany.mockImplementation((a: { where: { id: { in: bigint[] } } }) =>
+          Promise.resolve(all.filter((w) => a.where.id.in.includes(w.id))),
+        );
+        prisma.stockLedger.findUnique.mockResolvedValue(prevRow());
+        await expect(adjust(over)).rejects.toBeInstanceOf(IdempotencyKeyReusedException);
+        expect(prisma.stockLedger.create).not.toHaveBeenCalled();
+      });
+
+      it('K đã nằm trên bút toán của người khác -> 422, không trả bút toán của họ', async () => {
+        prisma.stockLedger.findUnique.mockResolvedValue(prevRow());
+        await expect(adjust({}, 'user-2')).rejects.toBeInstanceOf(IdempotencyKeyReusedException);
+      });
+
+      it('K đã nằm trên bút toán không phải ADJUST -> 422', async () => {
+        prisma.stockLedger.findUnique.mockResolvedValue(
+          prevRow({ refType: StockLedgerRefType.WAREHOUSE_TRANSFER }),
+        );
+        await expect(adjust()).rejects.toBeInstanceOf(IdempotencyKeyReusedException);
+      });
+
+      it('câu đầu của transaction là try-lock khoá chống trùng (trước FOR UPDATE ô tồn)', async () => {
+        prisma.stockLedger.findUnique.mockResolvedValue(null);
+        prisma.stockLedger.create.mockResolvedValue(ledgerRow());
+        await adjust();
+        const sqls = lockSql();
+        expect(sqls[0]).toContain('pg_try_advisory_xact_lock');
+        expect((prisma.$queryRaw.mock.calls as unknown[][])[0].slice(1)).toEqual([
+          'idem:stock_ledger',
+          'K',
+        ]);
+        expect(sqls[1]).toContain('FOR UPDATE');
+      });
+
+      it('đua cùng K (try-lock thất bại) -> 409 IdempotencyKeyInUseException, không ghi', async () => {
+        prisma.stockLedger.findUnique.mockResolvedValue(null);
+        prisma.$queryRaw.mockResolvedValueOnce([{ ok: false }]);
+        await expect(adjust()).rejects.toBeInstanceOf(IdempotencyKeyInUseException);
+        expect(prisma.stockLedger.create).not.toHaveBeenCalled();
+      });
+
+      it('đọc lại trong transaction thấy bút toán vừa commit -> trả bút toán cũ, không ghi, không phát realtime', async () => {
+        prisma.stockLedger.findUnique.mockResolvedValueOnce(null).mockResolvedValue(prevRow());
+        const res = await adjust();
+        expect(res.id).toBe('100');
+        expect(prisma.stockLedger.create).not.toHaveBeenCalled();
+        expect(lockSql().some((q) => q.includes('FOR UPDATE'))).toBe(false);
+        expect(realtimeStub.publishEntityChanged).not.toHaveBeenCalled();
+      });
+
+      it('có expectedCurrentQty: gửi lại cùng K thì trả bút toán cũ, không bị 409 "tồn đã đổi"', async () => {
+        prisma.stockLedger.findUnique.mockResolvedValueOnce(null).mockResolvedValue(prevRow());
+        // Lệnh 1: try-lock; các lệnh sau (nếu có): tồn thật 999 khác expectedCurrentQty.
+        prisma.$queryRaw
+          .mockResolvedValueOnce([{ ok: true }])
+          .mockResolvedValue([{ qty: { toNumber: () => 999 } }]);
+        const res = await adjust({ expectedCurrentQty: 100 });
+        expect(res.id).toBe('100');
+        expect(prisma.stockLedger.create).not.toHaveBeenCalled();
+        expect(realtimeStub.publishEntityChanged).not.toHaveBeenCalled();
+      });
+
+      it('có expectedCurrentQty: cũng lấy try-lock chống trùng trước FOR UPDATE', async () => {
+        prisma.stockLedger.findUnique.mockResolvedValue(null);
+        prisma.stockLedger.create.mockResolvedValue(ledgerRow());
+        prisma.$queryRaw
+          .mockResolvedValueOnce([{ ok: true }])
+          .mockResolvedValue([{ qty: { toNumber: () => 100 } }]);
+        await adjust({ expectedCurrentQty: 100 });
+        const sqls = lockSql();
+        expect(sqls[0]).toContain('pg_try_advisory_xact_lock');
+        expect(sqls[1]).toContain('FOR UPDATE');
+      });
+    });
+
     describe('K3 16/11 - chặn âm + báo giữ chỗ', () => {
       // Giảm: kho thật (2) -> kho ảo (1).
       const down = (qty: number, extra: Record<string, unknown> = {}) =>
@@ -490,7 +615,17 @@ describe('StockLedgerService', () => {
       });
 
       it('gọi lại cùng Idempotency-Key -> trả bút toán cũ, không kiểm âm lại (tồn đã trừ theo chính bút toán đó)', async () => {
-        prisma.stockLedger.findUnique.mockResolvedValue(ledgerRow({ idempotencyKey: 'idem-k3' }));
+        // Bút toán cũ khớp vân tay của down(25): ADJUST, user-1, kho 2 -> 1, vật tư 10, 25 (T3-9 so vân tay trước khi trả).
+        prisma.stockLedger.findUnique.mockResolvedValue(
+          ledgerRow({
+            idempotencyKey: 'idem-k3',
+            fromWarehouseId: 2n,
+            toWarehouseId: 1n,
+            qty: new Prisma.Decimal(25),
+            stockLengthMm: 0,
+            spec: '',
+          }),
+        );
         prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 0 } }]);
         await expect(down(25)).resolves.toBeDefined();
         expect(prisma.$transaction).not.toHaveBeenCalled();
@@ -508,7 +643,7 @@ describe('StockLedgerService', () => {
           ),
         ).rejects.toThrow(/tồn sẽ âm/);
         const sql = (
-          (prisma.$queryRaw.mock.calls as unknown[][])[0][0] as TemplateStringsArray
+          (prisma.$queryRaw.mock.calls as unknown[][])[1][0] as TemplateStringsArray
         ).join('?');
         expect(sql).toContain('"pieceId" = ?');
       });

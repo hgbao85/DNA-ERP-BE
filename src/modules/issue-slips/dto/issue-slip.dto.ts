@@ -16,6 +16,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { IssueSlipLineKind, IssueSlipStatus, MfgStage } from '../../../generated/prisma/client';
+import { IsSystemUploadUrl } from '../../../common/validators/system-upload-url.validator';
 
 const MAX_FILES = 20;
 
@@ -123,6 +124,7 @@ export class ConfirmIssueSlipDto {
   @ArrayMinSize(1)
   @ArrayMaxSize(MAX_FILES)
   @IsString({ each: true })
+  @IsSystemUploadUrl({ each: true })
   signedSlipUrls!: string[];
 }
 

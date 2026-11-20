@@ -2255,6 +2255,21 @@ export class CuttingProposalsService {
   async previewBatch(dto: PreviewCuttingBatchDto): Promise<CuttingBatchPreviewDto> {
     const selectedIds = new Set(dto.productionInvoiceItemIds.map((id) => parseBigIntId(id)));
     const ctx = await this.loadBatchContextCached();
+    // 20/11/2026 (T2-6): id không tồn tại -> 404 như requestForBatch (trước đây trả 201 rỗng / bỏ qua im lặng).
+    // Id có thật nhưng không còn chờ tính (đã duyệt, đã gộp...) vẫn bỏ qua, tránh báo oan khi danh sách FE chậm một nhịp.
+    const knownIds = new Set((ctx?.items ?? []).map((i) => i.id));
+    const unknownIds = [...selectedIds].filter((id) => !knownIds.has(id));
+    if (unknownIds.length > 0) {
+      const existing = await this.prisma.productionInvoiceItem.findMany({
+        where: { id: { in: unknownIds } },
+        select: { id: true },
+      });
+      const existingIds = new Set(existing.map((r) => r.id));
+      const missing = unknownIds.filter((id) => !existingIds.has(id));
+      if (missing.length > 0) {
+        throw new NotFoundException(`Không tìm thấy SKU: ${missing.join(', ')}`);
+      }
+    }
     if (ctx === null) {
       return new CuttingBatchPreviewDto({ lines: [], totalBarsSaved: 0, daysCutEarly: null });
     }

@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString } from 'class-validator';
+import { IsSystemUploadUrl } from '../../../common/validators/system-upload-url.validator';
 
 /**
  * Admin-override CHỈ cho `imageUrl` của 1 TransferCheckDefect đã tồn tại - 2026-09-11, cùng lý do/
@@ -11,5 +12,6 @@ export class UpdateTransferCheckDefectPhotoDto {
   @ApiPropertyOptional({ nullable: true })
   @IsOptional()
   @IsString()
+  @IsSystemUploadUrl()
   imageUrl?: string | null;
 }

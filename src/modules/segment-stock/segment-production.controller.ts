@@ -4,6 +4,8 @@ import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
+import { RequireRole } from '../../common/decorators/require-role.decorator';
+import { DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { RecomputeSegmentStockResponseDto } from './dto/recompute-segment-stock-response.dto';
 import { RecomputeSegmentStockDto } from './dto/recompute-segment-stock.dto';
@@ -20,8 +22,10 @@ export class SegmentProductionController {
 
   @Post('recompute')
   @RequirePermissions(UPDATE)
+  // 20/11/2026: công cụ sửa lệch / backfill, chỉ Admin (cả xem thử).
+  @RequireRole(DEFAULT_ROLES.ADMIN)
   @ApiOperation({
-    summary: 'Tính lại tồn đoạn phía cộng của 1 lệnh (dryRun = xem thử, không ghi)',
+    summary: 'Tính lại tồn đoạn phía cộng của 1 lệnh (dryRun = xem thử, không ghi) (chỉ Admin)',
   })
   @ApiCreatedResponse({ type: RecomputeSegmentStockResponseDto })
   async recompute(

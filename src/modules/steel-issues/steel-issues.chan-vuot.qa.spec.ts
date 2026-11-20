@@ -7,6 +7,10 @@ import {
   SteelIssueStatus,
 } from '../../generated/prisma/client';
 import { FLOOR_REPORT_REVERSED_REPLAY_MESSAGE } from '../../common/utils/floor-report.util';
+import {
+  IdempotencyKeyInUseException,
+  IdempotencyKeyReusedException,
+} from '../../common/utils/idempotency.util';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -583,13 +587,34 @@ describe('UB2 steel-issues chặn báo vượt / X3 / gán SKU / gửi lại (QA
   });
 
   describe('AC53: gửi lại cùng Idempotency-Key sau khi QLSX hủy hết', () => {
+    // Dòng sổ đã ghi, vân tay khớp với cutDto(1) / stepDto(1) do 'cn-1' gửi (lô sắt 100, PI 1, SKU 1, vật tư 30, Uốn).
+    const prevCutReport = (over: Record<string, unknown> = {}) => ({
+      kind: FloorReportKind.CUT,
+      reportedById: 'cn-1',
+      workstationId: null,
+      cutBundleId: null,
+      stepBatchId: null,
+      lines: [{ segmentSpecId: SPEC, pieceId: null, qty: 1 }],
+      stepBatch: null,
+      cutBundle: null,
+      productionBatch: null,
+      ...over,
+    });
+    const prevStepReport = (over: Record<string, unknown> = {}) => ({
+      ...prevCutReport(),
+      kind: FloorReportKind.STEP,
+      stepBatch: {
+        productionInvoiceId: PI,
+        materialId: MAT,
+        step: ProcessStep.UON,
+        productionOrderId: SKU_A,
+      },
+      ...over,
+    });
+
     it('báo Uốn: khoá thuộc lần báo đã bị hủy (stepBatchId null) -> 409 FLOOR_REPORT_REVERSED_REPLAY_MESSAGE, không ghi dòng sổ mới', async () => {
       const { prisma, service } = build(newWorld({ cut: [{ spec: SPEC, qty: 10, order: SKU_A }] }));
-      prisma.floorReport.findUnique.mockResolvedValue({
-        kind: FloorReportKind.STEP,
-        stepBatchId: null,
-        cutBundleId: null,
-      });
+      prisma.floorReport.findUnique.mockResolvedValue(prevStepReport({ stepBatch: null }));
       const err = await errOf(service.recordStepBatch('1', stepDto(1), 'cn-1', 'K-1'));
       expect(err).toBeInstanceOf(ConflictException);
       expect(err.message).toBe(FLOOR_REPORT_REVERSED_REPLAY_MESSAGE);
@@ -599,11 +624,7 @@ describe('UB2 steel-issues chặn báo vượt / X3 / gán SKU / gửi lại (QA
 
     it('báo cắt: khoá thuộc lần báo đã bị hủy (cutBundleId null) -> 409 cùng câu, không ghi gì', async () => {
       const { prisma, service } = build(newWorld());
-      prisma.floorReport.findUnique.mockResolvedValue({
-        kind: FloorReportKind.CUT,
-        cutBundleId: null,
-        stepBatchId: null,
-      });
+      prisma.floorReport.findUnique.mockResolvedValue(prevCutReport());
       const err = await errOf(service.recordCutBatch('100', cutDto(1), 'cn-1', 'K-2'));
       expect(err).toBeInstanceOf(ConflictException);
       expect(err.message).toBe(FLOOR_REPORT_REVERSED_REPLAY_MESSAGE);
@@ -611,27 +632,21 @@ describe('UB2 steel-issues chặn báo vượt / X3 / gán SKU / gửi lại (QA
       expect(prisma.floorReport.create).not.toHaveBeenCalled();
     });
 
-    it('khoá đã dùng cho loại báo khác giữ 409 cũ (không phải câu "đã bị hủy")', async () => {
+    it('khoá đã dùng cho loại báo khác -> 422 IdempotencyKeyReusedException (T4-4: trước đây 409), không phải câu "đã bị hủy"', async () => {
       const { prisma, service } = build(newWorld());
-      prisma.floorReport.findUnique.mockResolvedValue({
-        kind: FloorReportKind.STEP,
-        stepBatchId: 5n,
-        cutBundleId: null,
-      });
+      prisma.floorReport.findUnique.mockResolvedValue(prevStepReport({ stepBatchId: 5n }));
       const err = await errOf(service.recordCutBatch('100', cutDto(1), 'cn-1', 'K-3'));
-      expect(err).toBeInstanceOf(ConflictException);
-      expect(err.message).toContain('Idempotency-Key đã dùng cho một lần báo khác');
+      expect(err).toBeInstanceOf(IdempotencyKeyReusedException);
       expect(err.message).not.toBe(FLOOR_REPORT_REVERSED_REPLAY_MESSAGE);
     });
 
     it('đua khoá (P2002 ở lần ghi), lần đọc lại thấy lần báo đã bị hủy -> 409 câu hủy, không 500', async () => {
       const { Prisma } = await import('../../generated/prisma/client');
       const { prisma, service } = build(newWorld({ cut: [{ spec: SPEC, qty: 10, order: SKU_A }] }));
-      prisma.floorReport.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce({
-        kind: FloorReportKind.STEP,
-        stepBatchId: null,
-        cutBundleId: null,
-      });
+      prisma.floorReport.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null) // đọc lại trong transaction (sau try-lock): chưa có
+        .mockResolvedValueOnce(prevStepReport({ stepBatch: null }));
       prisma.floorReport.create.mockRejectedValueOnce(
         new Prisma.PrismaClientKnownRequestError('dup', {
           code: 'P2002',
@@ -643,6 +658,91 @@ describe('UB2 steel-issues chặn báo vượt / X3 / gán SKU / gửi lại (QA
       expect(err).toBeInstanceOf(ConflictException);
       expect(err.message).toBe(FLOOR_REPORT_REVERSED_REPLAY_MESSAGE);
     });
+  });
+
+  describe('QA 20/11/2026: try-lock khoá chống trùng là câu ĐẦU transaction của báo cắt / báo công đoạn', () => {
+    const tryLockOrder = (prisma: FakePrisma): number => {
+      const idx = (prisma.$queryRaw.mock.calls as unknown[][]).findIndex((c) =>
+        (c[0] as TemplateStringsArray).join('').includes('pg_try_advisory_xact_lock'),
+      );
+      expect(idx).toBeGreaterThanOrEqual(0);
+      return prisma.$queryRaw.mock.invocationCallOrder[idx];
+    };
+
+    it('báo cắt có khoá: try-lock chạy TRƯỚC khoá cut-cap (lockBusinessKey)', async () => {
+      const { prisma, service } = build(newWorld());
+      await service.recordCutBatch('100', cutDto(1), 'cn-1', 'K-10');
+      expect(tryLockOrder(prisma)).toBeLessThan(prisma.$executeRaw.mock.invocationCallOrder[0]);
+    });
+
+    it('báo công đoạn có khoá: try-lock chạy TRƯỚC khoá step-batch', async () => {
+      const { prisma, service } = build(newWorld({ cut: [{ spec: SPEC, qty: 10, order: SKU_A }] }));
+      await service.recordStepBatch('1', stepDto(1), 'cn-1', 'K-11');
+      expect(tryLockOrder(prisma)).toBeLessThan(prisma.$executeRaw.mock.invocationCallOrder[0]);
+    });
+
+    it.each([
+      ['báo cắt', 'cut'],
+      ['báo công đoạn', 'step'],
+    ])(
+      '%s: bản trùng đang chạy (try-lock thất bại) -> 409 IdempotencyKeyInUseException, không ghi',
+      async (_l, kind) => {
+        const { prisma, service } = build(
+          newWorld({ cut: [{ spec: SPEC, qty: 10, order: SKU_A }] }),
+        );
+        const orig = prisma.$queryRaw.getMockImplementation() as (
+          s: TemplateStringsArray,
+        ) => Promise<unknown>;
+        prisma.$queryRaw.mockImplementation((strings: TemplateStringsArray) =>
+          strings.join('').includes('pg_try_advisory_xact_lock')
+            ? Promise.resolve([{ ok: false }])
+            : orig(strings),
+        );
+        const call =
+          kind === 'cut'
+            ? service.recordCutBatch('100', cutDto(1), 'cn-1', 'K-12')
+            : service.recordStepBatch('1', stepDto(1), 'cn-1', 'K-12');
+        const err = await errOf(call);
+        expect(err).toBeInstanceOf(IdempotencyKeyInUseException);
+        expect(prisma.floorReport.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ['báo cắt', 'cut'],
+      ['báo công đoạn', 'step'],
+    ])(
+      '%s: đọc lại trong khoá thấy lần báo vừa commit (đã bị hủy) -> trả câu 409 hủy, không ghi',
+      async (_l, kind) => {
+        const { prisma, service } = build(
+          newWorld({ cut: [{ spec: SPEC, qty: 10, order: SKU_A }] }),
+        );
+        const prev = {
+          kind: kind === 'cut' ? FloorReportKind.CUT : FloorReportKind.STEP,
+          reportedById: 'cn-1',
+          workstationId: null,
+          cutBundleId: null,
+          stepBatchId: null,
+          lines: [{ segmentSpecId: SPEC, pieceId: null, qty: 1 }],
+          stepBatch: null,
+          cutBundle: null,
+          productionBatch: null,
+        };
+        prisma.floorReport.findUnique
+          .mockResolvedValueOnce(null) // đọc nhanh ngoài transaction
+          .mockResolvedValue(prev); // trong khoá và lần so vân tay sau transaction
+        const call =
+          kind === 'cut'
+            ? service.recordCutBatch('100', cutDto(1), 'cn-1', 'K-13')
+            : service.recordStepBatch('1', stepDto(1), 'cn-1', 'K-13');
+        const err = await errOf(call);
+        expect(err).toBeInstanceOf(ConflictException);
+        expect(err.message).toBe(FLOOR_REPORT_REVERSED_REPLAY_MESSAGE);
+        expect(prisma.floorReport.create).not.toHaveBeenCalled();
+        expect(prisma.cutBundle.create).not.toHaveBeenCalled();
+        expect(prisma.stepBatch.create).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('AC33: X3 hủy lần báo cắt (assertStepsWithinCutAfterReduceInTx)', () => {

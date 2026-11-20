@@ -1,6 +1,10 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { Prisma, PurchaseProposalStatus, SupplierOrderStatus } from '../../generated/prisma/client';
 import { PrismaServiceType } from '../../prisma/prisma.service';
+import {
+  IdempotencyKeyInUseException,
+  IdempotencyKeyReusedException,
+} from '../../common/utils/idempotency.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PurchaseProposalsService, ReceiveLine } from './purchase-proposals.service';
 import { PurchaseReceiptsService } from './purchase-receipts.service';
@@ -425,35 +429,161 @@ describe('PurchaseReceiptsService', () => {
       expect(prisma.purchaseReceipt.create).not.toHaveBeenCalled();
     });
 
-    it('gửi lại cùng Idempotency-Key: trả phiếu đã có, không nhập lần 2', async () => {
-      prisma.purchaseReceipt.findUnique.mockResolvedValue({
-        id: 900n,
-        createdById: 'kho-1',
-        status: 'RECEIVED',
-        receivedQty: dec(150),
-        overQty: dec(0),
-        allocation: [],
-        allocationAdjusted: false,
-      });
-      const res = await service.receive(base, 'kho-1', 'key-1', null);
-      expect(res.id).toBe('900');
-      expect(proposals.loadReceiveLines).not.toHaveBeenCalled();
-      expect(prisma.$transaction).not.toHaveBeenCalled();
+    // T3-9 (20/11/2026): phiếu đã nhập bằng khoá K - vân tay khớp với `base` (NK-261106-001, 150, giao 150, 3 lệnh).
+    // allocation đã bị thủ kho chỉnh tay; autoAllocation luôn đủ mọi dòng của nhóm nên vân tay lấy từ đó.
+    const storedReceipt = (over: Record<string, unknown> = {}) => ({
+      id: 900n,
+      createdById: 'kho-1',
+      status: 'RECEIVED',
+      code: 'NK-261106-001',
+      unitRateQty: dec(150),
+      supplierUnitQty: dec(1),
+      deliveredQty: dec(150),
+      receivedQty: dec(150),
+      overQty: dec(0),
+      rejectReason: null,
+      autoAllocation: [
+        { itemId: '1', qty: 120 },
+        { itemId: '2', qty: 30 },
+        { itemId: '3', qty: 0 },
+      ],
+      allocation: [{ itemId: '1', qty: 150 }],
+      allocationAdjusted: true,
+      ...over,
     });
 
-    it('MH8 14/11: người khác gửi trùng khoá -> 409, không trả phiếu của người kia', async () => {
-      prisma.purchaseReceipt.findUnique.mockResolvedValue({
-        id: 900n,
-        createdById: 'kho-khac',
-        status: 'RECEIVED',
-        receivedQty: dec(150),
-        overQty: dec(0),
-        allocation: [],
-        allocationAdjusted: false,
-      });
-      await expect(service.receive(base, 'kho-1', 'key-1', null)).rejects.toThrow(
-        'Khoá chống trùng',
+    it('gửi lại cùng Idempotency-Key, cùng nội dung: trả phiếu đã có, không nhập lần 2, không chạy việc phụ', async () => {
+      prisma.purchaseReceipt.findUnique.mockResolvedValue(storedReceipt());
+      proposals.loadReceiveLines.mockResolvedValue(group());
+      const res = await service.receive(base, 'kho-1', 'key-1', null);
+      expect(res.id).toBe('900');
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.purchaseReceipt.create).not.toHaveBeenCalled();
+      expect(proposals.afterItemReceipt).not.toHaveBeenCalled();
+      expect(proposals.resolveReceiptRejected).not.toHaveBeenCalled();
+      expect(notifications.emit).not.toHaveBeenCalled();
+    });
+
+    it('gửi lại cùng khoá khi phiếu đã nhập hết dòng (dòng không còn chờ nhận) vẫn trả phiếu cũ', async () => {
+      prisma.purchaseReceipt.findUnique.mockResolvedValue(storedReceipt());
+      proposals.loadReceiveLines.mockResolvedValue(
+        group().map((l) => ({
+          ...l,
+          item: { ...l.item, status: PurchaseProposalStatus.PURCHASED },
+        })),
       );
+      const res = await service.receive(base, 'kho-1', 'key-1', null);
+      expect(res.id).toBe('900');
+    });
+
+    it.each([
+      ['khác số thực nhận', { unitRateQty: 151, deliveredQty: 151 }],
+      ['khác số phiếu giao', { deliveredQty: 149 }],
+      ['khác số phiếu nhập NK', { slipCode: 'NK-261106-002' }],
+      ['khác nhóm dòng (thiếu 1 lệnh)', { itemIds: ['3', '1'] }],
+      ['khác nhóm dòng (thêm 1 lệnh)', { itemIds: ['3', '1', '2', '9'] }],
+      ['khác Ô2', { supplierUnitQty: 2 }],
+    ])('gửi lại cùng khoá nhưng %s -> 422, không ghi gì', async (_l, over) => {
+      prisma.purchaseReceipt.findUnique.mockResolvedValue(storedReceipt());
+      await expect(service.receive({ ...base, ...over }, 'kho-1', 'key-1', null)).rejects.toThrow(
+        IdempotencyKeyReusedException,
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.purchaseReceipt.create).not.toHaveBeenCalled();
+    });
+
+    it('ghi chú / ảnh khác nhau không làm khác vân tay (chỉ so các trường nghiệp vụ)', async () => {
+      prisma.purchaseReceipt.findUnique.mockResolvedValue(storedReceipt());
+      proposals.loadReceiveLines.mockResolvedValue(group());
+      const res = await service.receive(
+        { ...base, receiptSlipUrls: ['https://cdn/khac.jpg'], overFileUrls: ['https://cdn/x.jpg'] },
+        'kho-1',
+        'key-1',
+        null,
+      );
+      expect(res.id).toBe('900');
+    });
+
+    it('T3-9 (trước đây MH8 14/11 trả 409): người khác gửi trùng khoá -> 422, không trả phiếu của người kia', async () => {
+      prisma.purchaseReceipt.findUnique.mockResolvedValue(
+        storedReceipt({ createdById: 'kho-khac' }),
+      );
+      const err = await service.receive(base, 'kho-1', 'key-1', null).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(IdempotencyKeyReusedException);
+      expect((err as Error).message).toContain('Mã chống trùng');
+    });
+
+    it('khoá của lần "Từ chối nhận" dùng để nhập kho -> 422', async () => {
+      prisma.purchaseReceipt.findUnique.mockResolvedValue(
+        storedReceipt({
+          status: 'REJECTED',
+          code: null,
+          rejectReason: 'Cân lại thiếu',
+          autoAllocation: [],
+          allocation: [],
+        }),
+      );
+      await expect(service.receive(base, 'kho-1', 'key-1', null)).rejects.toThrow(
+        IdempotencyKeyReusedException,
+      );
+    });
+
+    it('câu ĐẦU của transaction là try-lock khoá chống trùng, TRƯỚC các khoá đề xuất (lockBusinessKey)', async () => {
+      const lines = group();
+      proposals.loadReceiveLines.mockResolvedValue(lines);
+      freshFrom(lines);
+      await service.receive(base, 'kho-1', 'key-1', null);
+      const [tpl, ...args] = prisma.$queryRaw.mock.calls[0] as unknown as [
+        TemplateStringsArray,
+        ...string[],
+      ];
+      expect(tpl.join('?')).toContain('pg_try_advisory_xact_lock');
+      expect(args).toEqual(['idem:purchase_receipts', 'key-1']);
+      expect(prisma.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+        prisma.$executeRaw.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('bản trùng đang chạy (try-lock thất bại) -> 409 IdempotencyKeyInUseException, không ghi, không báo lỗi số phiếu', async () => {
+      const lines = group();
+      proposals.loadReceiveLines.mockResolvedValue(lines);
+      freshFrom(lines);
+      prisma.$queryRaw.mockResolvedValueOnce([{ ok: false }]);
+      const err = await service.receive(base, 'kho-1', 'key-1', null).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(IdempotencyKeyInUseException);
+      expect(prisma.reservedSlipCode.updateMany).not.toHaveBeenCalled();
+      expect(prisma.purchaseReceipt.create).not.toHaveBeenCalled();
+    });
+
+    it('đọc lại trong transaction thấy phiếu vừa commit -> trả phiếu đó, không ghi, không chạy việc phụ (không nhận 400 số phiếu)', async () => {
+      const lines = group();
+      proposals.loadReceiveLines.mockResolvedValue(lines);
+      freshFrom(lines);
+      prisma.purchaseReceipt.findUnique
+        .mockResolvedValueOnce(null) // đọc nhanh ngoài transaction
+        .mockResolvedValue(storedReceipt({ overQty: dec(10) }));
+      const res = await service.receive(base, 'kho-1', 'key-1', null);
+      expect(res.id).toBe('900');
+      expect(prisma.reservedSlipCode.updateMany).not.toHaveBeenCalled();
+      expect(prisma.purchaseReceipt.create).not.toHaveBeenCalled();
+      expect(proposals.applyItemReceipt).not.toHaveBeenCalled();
+      expect(proposals.afterItemReceipt).not.toHaveBeenCalled();
+      expect(proposals.resolveReceiptRejected).not.toHaveBeenCalled();
+      expect(notifications.emit).not.toHaveBeenCalled();
+    });
+
+    it('bản thua đọc dòng sau khi bản thắng đã commit (dòng không còn chờ nhận) -> trả phiếu của bản thắng, không 409 "không còn chờ nhận"', async () => {
+      prisma.purchaseReceipt.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue(storedReceipt());
+      proposals.loadReceiveLines.mockResolvedValue(
+        group().map((l) => ({
+          ...l,
+          item: { ...l.item, status: PurchaseProposalStatus.PURCHASED },
+        })),
+      );
+      const res = await service.receive(base, 'kho-1', 'key-1', null);
+      expect(res.id).toBe('900');
     });
   });
 
@@ -657,7 +787,6 @@ describe('PurchaseReceiptsService', () => {
         }) as unknown,
       });
       expect(proposals.applyItemReceipt).not.toHaveBeenCalled();
-      expect(prisma.$transaction).not.toHaveBeenCalled();
       expect(notifications.emit).toHaveBeenCalledWith(
         'PURCHASE_RECEIPT_REJECTED',
         expect.objectContaining({
@@ -668,6 +797,120 @@ describe('PurchaseReceiptsService', () => {
           }) as unknown,
         }),
       );
+    });
+  });
+
+  describe('T3-9 - Từ chối nhận: chống trùng theo Idempotency-Key', () => {
+    const rejectDto = {
+      itemIds: ['1'],
+      deliveredQty: 12,
+      reason: '  Cân lại thiếu 2 kg  ',
+      fileUrls: ['https://cdn/x.jpg'],
+    };
+    const storedReject = (over: Record<string, unknown> = {}) => ({
+      id: 901n,
+      createdById: 'kho-1',
+      status: 'REJECTED',
+      code: null,
+      unitRateQty: dec(12),
+      supplierUnitQty: dec(1),
+      deliveredQty: dec(12),
+      receivedQty: dec(0),
+      overQty: dec(0),
+      rejectReason: 'Cân lại thiếu 2 kg',
+      autoAllocation: [{ itemId: '1', qty: 0 }],
+      allocation: [],
+      allocationAdjusted: false,
+      ...over,
+    });
+
+    it('gửi lại cùng khoá, cùng nội dung: trả phiếu từ chối cũ, không ghi, không báo người mua lần 2', async () => {
+      prisma.purchaseReceipt.findUnique.mockResolvedValue(storedReject());
+      const res = await service.reject(rejectDto, 'kho-1', 'key-r', null);
+      expect(res.id).toBe('901');
+      expect(res.status).toBe('REJECTED');
+      expect(prisma.purchaseReceipt.create).not.toHaveBeenCalled();
+      expect(notifications.emit).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['khác lý do', { reason: 'Hàng gãy' }],
+      ['khác số phiếu giao', { deliveredQty: 13 }],
+    ])('gửi lại cùng khoá nhưng %s -> 422', async (_l, over) => {
+      prisma.purchaseReceipt.findUnique.mockResolvedValue(storedReject());
+      await expect(
+        service.reject({ ...rejectDto, ...over }, 'kho-1', 'key-r', null),
+      ).rejects.toThrow(IdempotencyKeyReusedException);
+      expect(prisma.purchaseReceipt.create).not.toHaveBeenCalled();
+    });
+
+    it('QA 20/11: gửi lại cùng khoá nhưng khác nhóm dòng -> 422; phiếu từ chối cũ chưa lưu nhóm dòng thì không 422 oan', async () => {
+      prisma.purchaseReceipt.findUnique.mockResolvedValue(storedReject());
+      await expect(
+        service.reject({ ...rejectDto, itemIds: ['1', '2'] }, 'kho-1', 'key-r', null),
+      ).rejects.toThrow(IdempotencyKeyReusedException);
+      expect(prisma.purchaseReceipt.create).not.toHaveBeenCalled();
+      prisma.purchaseReceipt.findUnique.mockResolvedValue(storedReject({ autoAllocation: [] }));
+      const res = await service.reject(rejectDto, 'kho-1', 'key-r', null);
+      expect(res.id).toBe('901');
+    });
+
+    it('ghi phiếu từ chối lưu nhóm dòng vào autoAllocation (qty 0) để so vân tay', async () => {
+      proposals.loadReceiveLines.mockResolvedValue([line({ itemId: 1n, buyQty: 10 })]);
+      await service.reject(rejectDto, 'kho-1', 'key-r', null);
+      expect(prisma.purchaseReceipt.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          autoAllocation: [{ itemId: '1', qty: 0 }],
+          allocation: [],
+        }) as unknown,
+      });
+    });
+
+    it('người khác dùng khoá này, hoặc khoá của lần nhận kho -> 422', async () => {
+      prisma.purchaseReceipt.findUnique.mockResolvedValue(storedReject({ createdById: 'kho-2' }));
+      await expect(service.reject(rejectDto, 'kho-1', 'key-r', null)).rejects.toThrow(
+        IdempotencyKeyReusedException,
+      );
+      prisma.purchaseReceipt.findUnique.mockResolvedValue(
+        storedReject({ status: 'RECEIVED', code: 'NK-1', rejectReason: null }),
+      );
+      await expect(service.reject(rejectDto, 'kho-1', 'key-r', null)).rejects.toThrow(
+        IdempotencyKeyReusedException,
+      );
+    });
+
+    it('ghi phiếu trong transaction, câu đầu là try-lock khoá chống trùng', async () => {
+      proposals.loadReceiveLines.mockResolvedValue([line({ itemId: 1n, buyQty: 10 })]);
+      await service.reject(rejectDto, 'kho-1', 'key-r', null);
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      const [tpl, ...args] = prisma.$queryRaw.mock.calls[0] as unknown as [
+        TemplateStringsArray,
+        ...string[],
+      ];
+      expect(tpl.join('?')).toContain('pg_try_advisory_xact_lock');
+      expect(args).toEqual(['idem:purchase_receipts', 'key-r']);
+      expect(prisma.purchaseReceipt.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('bản trùng đang chạy -> 409 IdempotencyKeyInUseException, không ghi', async () => {
+      proposals.loadReceiveLines.mockResolvedValue([line({ itemId: 1n, buyQty: 10 })]);
+      prisma.$queryRaw.mockResolvedValueOnce([{ ok: false }]);
+      await expect(service.reject(rejectDto, 'kho-1', 'key-r', null)).rejects.toThrow(
+        IdempotencyKeyInUseException,
+      );
+      expect(prisma.purchaseReceipt.create).not.toHaveBeenCalled();
+      expect(notifications.emit).not.toHaveBeenCalled();
+    });
+
+    it('đọc lại trong transaction thấy phiếu vừa commit -> trả phiếu đó, không ghi, không báo người mua', async () => {
+      proposals.loadReceiveLines.mockResolvedValue([line({ itemId: 1n, buyQty: 10 })]);
+      prisma.purchaseReceipt.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue(storedReject());
+      const res = await service.reject(rejectDto, 'kho-1', 'key-r', null);
+      expect(res.id).toBe('901');
+      expect(prisma.purchaseReceipt.create).not.toHaveBeenCalled();
+      expect(notifications.emit).not.toHaveBeenCalled();
     });
   });
 
@@ -699,7 +942,10 @@ describe('PurchaseReceiptsService', () => {
       const lines = [line({ itemId: 1n, buyQty: 10 })];
       proposals.loadReceiveLines.mockResolvedValue(lines);
       freshFrom(lines);
-      prisma.$queryRaw.mockResolvedValueOnce([{ status: 'DRAFT', seq: 52, year: 2026 }]);
+      // Lệnh $queryRaw đầu của transaction là try-lock khoá chống trùng (T3-9); lệnh thứ 2 mới là kiểm đơn đặt hàng.
+      prisma.$queryRaw
+        .mockResolvedValueOnce([{ ok: true }])
+        .mockResolvedValueOnce([{ status: 'DRAFT', seq: 52, year: 2026 }]);
       await expect(service.receive(base, 'kho-1', 'key-1', null)).rejects.toThrow(
         /đang thay phiếu/,
       );
