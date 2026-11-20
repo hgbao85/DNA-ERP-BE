@@ -267,6 +267,14 @@ export class WarehouseTransfersService {
         `Không được chuyển kho tự do tới "${toWarehouse.name}" - kho Phôi Sơn Hàn chỉ nhận vật tư qua mua hàng/nhập kho`,
       );
     }
+    // Test toàn hệ thống 19/11 (việc Bảo nhận từ Sang): chiều ngược lại - kho Phôi CHỈ được chuyển tự do sang kho Hàn cùng xưởng
+    // (Đợt 7, anh Nhân 07/11). Trước đây chỉ màn ChuyenKhoTuDoPage lọc, gọi thẳng API thì kho Phôi gửi được sang Phụ kiện /
+    // Thành phẩm.
+    if (fromWarehouse.kind === WarehouseKind.PHOI && !phoiToHanSameWorkshop) {
+      throw new BadRequestException(
+        `Kho Phôi "${fromWarehouse.name}" chỉ được chuyển kho tự do sang kho Hàn cùng xưởng - không chuyển tới "${toWarehouse.name}"`,
+      );
+    }
 
     const planFormId = dto.planFormId ? parseBigIntId(dto.planFormId) : undefined;
 
@@ -288,6 +296,7 @@ export class WarehouseTransfersService {
         note?: string;
         spec: string;
       }[] = [];
+      const shortages: string[] = [];
 
       // Gộp các dòng CÙNG materialId TRƯỚC khi tính khả dụng (2026-09-15, phát hiện qua live-test:
       // 1 request với 2 dòng cùng materialId, mỗi dòng xin 2000/2788 tồn thật - cả 2 dòng đều đọc
@@ -383,23 +392,33 @@ export class WarehouseTransfersService {
           undefined,
           item.spec,
         );
-        const quantity = Math.max(0, Math.min(item.quantity, available));
-        if (quantity > 0) {
+        // Test toàn hệ thống 19/11 (việc Bảo nhận từ Sang): xin vượt khả dụng thì BÁO, không âm thầm cắt bớt - trước đây phiếu
+        // tạo ra ít hơn số đã nhập (FE chỉ đối chiếu được dòng đầu), thủ kho tưởng đã chuyển đủ.
+        if (item.quantity > available) {
+          shortages.push(
+            `${catalogMaterial.name}${item.spec ? ` (${item.spec})` : ''}: xin ${item.quantity} ${catalogMaterial.unit}, chỉ còn khả dụng ${Math.max(0, available)}`,
+          );
+          continue;
+        }
+        if (item.quantity > 0) {
           clampedItems.push({
             materialId,
             materialName: catalogMaterial.name,
             unit: catalogMaterial.unit,
-            quantity,
+            quantity: item.quantity,
             note: item.note,
             spec: item.spec,
           });
         }
       }
 
-      if (clampedItems.length === 0) {
+      if (shortages.length > 0) {
         throw new BadRequestException(
-          'Không đủ tồn kho khả dụng để tạo phiếu chuyển kho cho (các) vật tư đã chọn',
+          `Không đủ tồn kho khả dụng ở "${fromWarehouse.name}" (đã trừ phần phiếu khác đang giữ) - chưa lập phiếu:\n${shortages.join('\n')}`,
         );
+      }
+      if (clampedItems.length === 0) {
+        throw new BadRequestException('Phiếu chuyển kho phải có ít nhất 1 dòng số lượng lớn hơn 0');
       }
 
       const transfer = await tx.warehouseTransfer.create({
@@ -522,15 +541,29 @@ export class WarehouseTransfersService {
         quantity: number;
         note?: string;
       }[] = [];
+      // Test toàn hệ thống 19/11 (việc Bảo nhận từ Sang): xin vượt số được chuyển thì BÁO, không âm thầm cắt bớt (cả 2 trần: số
+      // đã qua KCS dưới đây và tồn mảnh thật ở kho gửi bên dưới).
+      const shortages: string[] = [];
+      const labelOf = (orderId: string, pieceId: string) => {
+        const p = planByKey.get(`${orderId}:${pieceId}`);
+        return p
+          ? `${p.poNumber} · ${p.pieceCode} ${p.pieceName}`
+          : `Lệnh ${orderId} · mảnh ${pieceId}`;
+      };
       for (const item of dto.pieceItems) {
         const planItem = planByKey.get(`${item.productionOrderId}:${item.pieceId}`);
         const suggestedQty = planItem?.suggestedQty ?? 0;
-        const quantity = Math.max(0, Math.min(item.quantity, suggestedQty));
-        if (quantity > 0) {
+        if (item.quantity > suggestedQty) {
+          shortages.push(
+            `${labelOf(item.productionOrderId, item.pieceId)}: xin ${item.quantity}, chỉ còn ${Math.max(0, suggestedQty)} mảnh đã qua KCS chưa chuyển`,
+          );
+          continue;
+        }
+        if (item.quantity > 0) {
           rows.push({
             productionOrderId: parseBigIntId(item.productionOrderId),
             pieceId: parseBigIntId(item.pieceId),
-            quantity,
+            quantity: item.quantity,
             note: item.note,
           });
         }
@@ -562,10 +595,16 @@ export class WarehouseTransfersService {
       }
       for (const r of rows) {
         const left = Math.max(0, Math.floor(stockLeft.get(r.pieceId.toString()) ?? 0));
-        r.quantity = Math.min(r.quantity, left);
+        if (r.quantity > left) {
+          shortages.push(
+            `${labelOf(r.productionOrderId.toString(), r.pieceId.toString())}: xin ${r.quantity}, kho "${fromWarehouse.name}" chỉ còn ${left} mảnh (đã trừ phiếu chuyển chờ nhận khác)`,
+          );
+        }
         stockLeft.set(r.pieceId.toString(), left - r.quantity);
       }
-      rows.splice(0, rows.length, ...rows.filter((r) => r.quantity > 0));
+      if (shortages.length > 0) {
+        throw new BadRequestException(`Chưa lập phiếu chuyển mảnh:\n${shortages.join('\n')}`);
+      }
 
       if (rows.length === 0) {
         throw new BadRequestException(

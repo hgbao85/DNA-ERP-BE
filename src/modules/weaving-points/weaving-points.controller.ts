@@ -15,6 +15,7 @@ import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CreateWeavingPointDto } from './dto/create-weaving-point.dto';
 import { UpdateWeavingPointDto } from './dto/update-weaving-point.dto';
 import { WeavingPointsService } from './weaving-points.service';
@@ -27,8 +28,12 @@ export class WeavingPointsController {
 
   @Post()
   @RequirePermissions({ module: PERMISSION_MODULES.WEAVING_POINT, action: PermissionAction.CREATE })
-  create(@Body() dto: CreateWeavingPointDto) {
-    return this.weavingPointsService.create(dto);
+  create(
+    @Body() dto: CreateWeavingPointDto,
+    @CurrentUser('roles') roles: string[],
+    @CurrentUser('warehouseScope') warehouseScope: string | null,
+  ) {
+    return this.weavingPointsService.create(dto, { roles: roles ?? [], warehouseScope });
   }
 
   @Get()
@@ -45,14 +50,23 @@ export class WeavingPointsController {
 
   @Patch(':id')
   @RequirePermissions({ module: PERMISSION_MODULES.WEAVING_POINT, action: PermissionAction.UPDATE })
-  update(@Param('id') id: string, @Body() dto: UpdateWeavingPointDto) {
-    return this.weavingPointsService.update(id, dto);
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateWeavingPointDto,
+    @CurrentUser('roles') roles: string[],
+    @CurrentUser('warehouseScope') warehouseScope: string | null,
+  ) {
+    return this.weavingPointsService.update(id, dto, { roles: roles ?? [], warehouseScope });
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequirePermissions({ module: PERMISSION_MODULES.WEAVING_POINT, action: PermissionAction.DELETE })
-  remove(@Param('id') id: string) {
-    return this.weavingPointsService.remove(id);
+  remove(
+    @Param('id') id: string,
+    @CurrentUser('roles') roles: string[],
+    @CurrentUser('warehouseScope') warehouseScope: string | null,
+  ) {
+    return this.weavingPointsService.remove(id, { roles: roles ?? [], warehouseScope });
   }
 }

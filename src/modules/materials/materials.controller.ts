@@ -15,6 +15,7 @@ import { PermissionAction } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { BulkUpdateWasteDto } from './dto/bulk-update-waste.dto';
 import { CreateMaterialDto } from './dto/create-material.dto';
 import { CreateMaterialSupplierDto } from './dto/create-material-supplier.dto';
@@ -30,8 +31,13 @@ export class MaterialsController {
 
   @Post()
   @RequirePermissions({ module: PERMISSION_MODULES.MATERIAL, action: PermissionAction.CREATE })
-  create(@Body() dto: CreateMaterialDto) {
-    return this.materialsService.create(dto);
+  create(
+    @Body() dto: CreateMaterialDto,
+    @CurrentUser('roles') roles: string[],
+    @CurrentUser('warehouseScope') warehouseScope: string | null,
+  ) {
+    // 19/11: tồn kho ban đầu chỉ ghi được vào kho mình phụ trách (Admin / Giám đốc mọi kho) - xem MaterialsService.
+    return this.materialsService.create(dto, { roles: roles ?? [], warehouseScope });
   }
 
   @Get()
