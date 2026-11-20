@@ -1,4 +1,5 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import {
   MaterialYieldIssueStatus,
   MfgStage,
@@ -6,6 +7,7 @@ import {
   ProductionBatchStatus,
   FloorReportKind,
 } from '../../src/generated/prisma/client';
+import { IdempotencyKeyInUseException } from '../../src/common/utils/idempotency.util';
 import { MaterialYieldRecipeProductionService } from '../../src/modules/material-yield-recipes/material-yield-recipe-production.service';
 import {
   P1Harness,
@@ -137,6 +139,45 @@ describe('P1 IT1: chặn báo vượt khi nhiều người cùng báo (integrati
       },
     );
 
+    // 20/11/2026 (QA R7): chống trùng chạy TRƯỚC khoá cut-cap -> bản trùng song song nhận 409, không còn 400 "tối đa N".
+    it('cùng khoá chống trùng, sát số cần (cần 10, gửi 8): giữ cut-cap -> 1 lần ghi, bản trùng 409 InUse; gửi lại trả đúng đợt cũ, tổng = 8', async () => {
+      const world = await w.newInvoice({ quantities: [10] });
+      const [order] = world.orderIds;
+      const issue = await w.newIssue(world.piId);
+      const key = randomUUID();
+      const call = () =>
+        h.steel.recordCutBatch(
+          issue.toString(),
+          {
+            productionOrderId: order.toString(),
+            segments: [{ segmentSpecId: w.spec441.toString(), qty: 8 }],
+          },
+          w.workerA,
+          key,
+        );
+
+      const out = await raceWith(h.prisma, [lockSql(capKey(world, order))], [call, call], {
+        ordered: true,
+        minWaiting: 1, // chỉ bản đi trước chờ cut-cap; bản trùng bị try-lock chặn nên trả 409 ngay, không chờ
+      });
+
+      expect(out[0].waited).toBe(true);
+      expect(out[0].doneBeforeRelease).toBe(false); // bản thắng bị cut-cap giữ tới khi nhả
+      expect(out[1].doneBeforeRelease).toBe(true); // bản trùng không chờ khoá nghiệp vụ
+      const { winner, loser } = oneWinner(out);
+      expect(winner).toBe(out[0]);
+      expect(loser.error).toBeInstanceOf(IdempotencyKeyInUseException);
+      expect(loser.error).toBeInstanceOf(ConflictException);
+      expect(msg(loser.error)).not.toContain('tối đa');
+      expect(await sumCut(world.piId, w.spec441)).toBe(8);
+      expect(await reportsOf(world.piId, FloorReportKind.CUT)).toBe(1);
+
+      const again = await call();
+      expect((again as { id: string }).id).toBe((winner.value as { id: string }).id);
+      expect(await sumCut(world.piId, w.spec441)).toBe(8);
+      expect(await reportsOf(world.piId, FloorReportKind.CUT)).toBe(1);
+    });
+
     it('đối chứng: khác SKU thì không chờ nhau (chỉ lời gọi của SKU đang bị giữ khoá phải chờ), cả 2 qua', async () => {
       const world = await w.newInvoice({ quantities: [10, 10] });
       const [order1, order2] = world.orderIds;
@@ -225,6 +266,49 @@ describe('P1 IT1: chặn báo vượt khi nhiều người cùng báo (integrati
         expect(await reportsOf(world.piId, FloorReportKind.STEP)).toBe(1);
       },
     );
+
+    // 20/11/2026 (QA R8): chống trùng chạy TRƯỚC khoá step-batch -> bản trùng song song nhận 409, không còn 400 "tối đa N".
+    it('cùng khoá chống trùng, sát số cần (cần 5, báo Uốn 4 hai lần): giữ step-batch -> 1 lần ghi, bản trùng 409 InUse; gửi lại trả đúng đợt cũ, tổng = 4', async () => {
+      const world = await w.newInvoice({ quantities: [5] });
+      const [order] = world.orderIds;
+      const issue = await w.newIssue(world.piId);
+      await w.seedCutDone(issue, world, w.spec355, 5);
+      const key = randomUUID();
+      const call = () =>
+        h.steel.recordStepBatch(
+          world.piId.toString(),
+          {
+            materialId: w.steelId.toString(),
+            step: ProcessStep.UON,
+            productionOrderId: order.toString(),
+            segments: [{ segmentSpecId: w.spec355.toString(), qty: 4 }],
+          },
+          w.workerA,
+          key,
+        );
+
+      const out = await raceWith(
+        h.prisma,
+        [lockSql(`step-batch:${world.piId}:${w.steelId}:${ProcessStep.UON}:${order}`)],
+        [call, call],
+        { ordered: true, minWaiting: 1 },
+      );
+
+      expect(out[0].waited).toBe(true);
+      expect(out[0].doneBeforeRelease).toBe(false);
+      expect(out[1].doneBeforeRelease).toBe(true);
+      const { winner, loser } = oneWinner(out);
+      expect(winner).toBe(out[0]);
+      expect(loser.error).toBeInstanceOf(IdempotencyKeyInUseException);
+      expect(msg(loser.error)).not.toContain('tối đa');
+      expect(await sumStep(world.piId, ProcessStep.UON)).toBe(4);
+      expect(await reportsOf(world.piId, FloorReportKind.STEP)).toBe(1);
+
+      const again = await call();
+      expect((again as { id: string }).id).toBe((winner.value as { id: string }).id);
+      expect(await sumStep(world.piId, ProcessStep.UON)).toBe(4);
+      expect(await reportsOf(world.piId, FloorReportKind.STEP)).toBe(1);
+    });
 
     it('đã đủ: cần Uốn 6, đã tính 6 -> báo thêm 1 bị 400 "cần Uốn 6 ... tối đa 0", không ghi gì', async () => {
       const world = await w.newInvoice({ quantities: [6] });
@@ -357,7 +441,11 @@ describe('P1 IT1: chặn báo vượt khi nhiều người cùng báo (integrati
 
       // KCS ghi lỗi 12 (mảnh tính được = 11). Công tắc tồn đoạn bật: kho trống thì ghi sổ báo vượt, không chặn chấm.
       await withSegmentStock(true, () =>
-        h.api.reviewProductionBatch(batchId.toString(), { failedQty: 12 }, w.kcsA),
+        h.api.reviewProductionBatch(
+          batchId.toString(),
+          { defectReasonId: w.defectReasonId.toString(), failedQty: 12 },
+          w.kcsA,
+        ),
       );
 
       const ok = await recordHan(world, 13, w.workerA);

@@ -21,6 +21,7 @@ import {
   flattenValidationErrors,
   validationExceptionFactory,
 } from './validation-exception.factory';
+import { IsSystemUploadUrl } from '../validators/system-upload-url.validator';
 import { FIELD_LABELS } from './validation-field-labels';
 
 enum Color {
@@ -297,5 +298,29 @@ describe('validationExceptionFactory - đợt sửa 19/11', () => {
     expect(FIELD_LABELS.partId).toBe('chi tiết');
     expect(FIELD_LABELS.qtyPerPiece).toBe('số lượng trên một mảnh');
     expect(FIELD_LABELS.qtyPerPart).toBe('số lượng trên một chi tiết');
+  });
+
+  // 20/11/2026 (T1-8 / T4-10): câu tiếng Việt cho bộ kiểm tệp đã tải lên hệ thống.
+  it('isSystemUploadUrl: câu tiếng Việt, có "Mỗi giá trị trong" khi each và "Dòng N:" khi lồng', async () => {
+    class UrlLine {
+      @IsSystemUploadUrl()
+      imageUrl!: string;
+    }
+    class UrlDto {
+      @IsSystemUploadUrl({ each: true })
+      signedSlipUrls!: string[];
+
+      @ValidateNested({ each: true })
+      @Type(() => UrlLine)
+      lines!: UrlLine[];
+    }
+    const dto = plainToInstance(UrlDto, {
+      signedSlipUrls: ['javascript:alert(1)'],
+      lines: [{ imageUrl: '' }, { imageUrl: 'javascript:alert(1)' }],
+    });
+    const out = flattenValidationErrors(await validate(dto));
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatch(/^Mỗi giá trị trong ảnh phiếu đã ký phải là tệp đã tải lên hệ thống/);
+    expect(out[1]).toMatch(/^Dòng 2: ảnh phải là tệp đã tải lên hệ thống/);
   });
 });

@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaServiceType } from '../../prisma/prisma.service';
 import { AppConfig } from '../../config/configuration';
@@ -786,10 +787,50 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       expect(res.daysCutEarly).toBeNull(); // 1 đơn thì không có chuyện cắt sớm
     });
 
-    it('bỏ qua id không nằm trong danh sách ứng viên thay vì tính sai', async () => {
-      build(twoSkuSharingMaterial());
+    /** Mock findMany: lần nạp ứng viên trả `all`, lần tra id lạ (có where.id) trả `existing`. */
+    const withIdLookup = (
+      base: ReturnType<typeof twoSkuSharingMaterial>,
+      all: unknown[],
+      existing: { id: bigint }[],
+    ) => ({
+      ...base,
+      productionInvoiceItem: {
+        findMany: jest.fn((a: { where: { id?: unknown } }) =>
+          Promise.resolve(a.where.id ? existing : all),
+        ),
+      },
+    });
+
+    // 20/11/2026 (T2-6): id không tồn tại -> 404 như route anh em; id có thật nhưng không còn chờ tính -> bỏ qua.
+    it('id có thật nhưng không còn chờ tính thì bỏ qua thay vì tính sai', async () => {
+      const base = twoSkuSharingMaterial();
+      const all = (await base.productionInvoiceItem.findMany()) as unknown[];
+      build(withIdLookup(base, all, [{ id: 999n }]));
       const res = await service.previewBatch({ productionInvoiceItemIds: ['1', '999'] });
       expect(res.lines[0].contributingSkus).toEqual(['J55']);
+    });
+
+    it('id không tồn tại -> 404, câu chỉ nêu id không tồn tại', async () => {
+      const base = twoSkuSharingMaterial();
+      const all = (await base.productionInvoiceItem.findMany()) as unknown[];
+      build(withIdLookup(base, all, []));
+      const p = service.previewBatch({ productionInvoiceItemIds: ['1', '2', '999'] });
+      await expect(p).rejects.toThrow(NotFoundException);
+      await expect(p).rejects.toThrow('Không tìm thấy SKU: 999');
+    });
+
+    it('không có SKU nào đang chờ tính, kèm id không tồn tại -> 404 (trước đây 201 rỗng)', async () => {
+      build();
+      await expect(
+        service.previewBatch({ productionInvoiceItemIds: ['99999999'] }),
+      ).rejects.toThrow('Không tìm thấy SKU: 99999999');
+    });
+
+    it('mọi id đều có trong danh sách chờ tính thì không tra thêm productionInvoiceItem', async () => {
+      build(twoSkuSharingMaterial());
+      await service.previewBatch({ productionInvoiceItemIds: ['1', '2'] });
+      const calls = (prisma.productionInvoiceItem as { findMany: jest.Mock }).findMany.mock.calls;
+      expect(calls).toHaveLength(1);
     });
 
     // ── chiều dài cây theo từng quy cách KHSX chọn (2026-09-16) ────────────────────────

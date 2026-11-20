@@ -60,6 +60,7 @@ describe('SkusService', () => {
     bomOption: { deleteMany: jest.Mock; createMany: jest.Mock; findMany: jest.Mock };
     planForm: {
       create: jest.Mock;
+      delete: jest.Mock;
       findUnique: jest.Mock;
       findFirst: jest.Mock;
       findMany: jest.Mock;
@@ -73,6 +74,7 @@ describe('SkusService', () => {
     productionInvoice: { create: jest.Mock; update: jest.Mock; findMany: jest.Mock };
     productionInvoiceItem: { create: jest.Mock; count: jest.Mock };
     productionOrder: { count: jest.Mock };
+    materialInspectionRequest: { count: jest.Mock };
     productVariant: { count: jest.Mock };
     bomRevision: { findFirst: jest.Mock; findMany: jest.Mock; count: jest.Mock };
     piece: { findMany: jest.Mock; create: jest.Mock; update: jest.Mock };
@@ -137,6 +139,7 @@ describe('SkusService', () => {
       },
       planForm: {
         create: jest.fn(),
+        delete: jest.fn(),
         findUnique: jest.fn(),
         findFirst: jest.fn(),
         findMany: jest.fn(),
@@ -154,6 +157,7 @@ describe('SkusService', () => {
       },
       productionInvoiceItem: { create: jest.fn(), count: jest.fn().mockResolvedValue(0) },
       productionOrder: { count: jest.fn().mockResolvedValue(0) },
+      materialInspectionRequest: { count: jest.fn().mockResolvedValue(0) },
       productVariant: { count: jest.fn().mockResolvedValue(0) },
       // Mặc định "chưa có BomRevision nào" (reconstructQuotaBatch trả manhData/detailQuota
       // null nhanh, không chạm tới các bảng dòng con) - test nào cần dữ liệu thật sẽ override.
@@ -404,6 +408,73 @@ describe('SkusService', () => {
     });
   });
 
+  // 20/11/2026 (T4-7): mảnh rỗng bị chặn từ đầu hàm, trước khi tạo bản nháp.
+  describe('updateManhQuota - pieces rỗng (T4-7)', () => {
+    it.each([[{ pieces: [] }], [{}]])(
+      '400 "Cần ít nhất 1 mảnh" và không tạo bản nháp: %j',
+      async (extra) => {
+        prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+        prisma.bomRevision.findFirst.mockResolvedValue(null);
+
+        await expect(service.updateManhQuota('5', { enteredBy: 'x', ...extra })).rejects.toThrow(
+          new BadRequestException('Cần ít nhất 1 mảnh'),
+        );
+        expect(bomRevisionsService.create).not.toHaveBeenCalled();
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+      },
+    );
+
+    it('Admin ghi đè trên SKU APPROVED mà gửi rỗng: 400, không fork bản mới', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'APPROVED' }));
+      prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'ACTIVE' });
+
+      await expect(
+        service.updateManhQuota('5', { pieces: [], enteredBy: 'a' }, 'admin-1', ['ADMIN']),
+      ).rejects.toThrow('Cần ít nhất 1 mảnh');
+      expect(bomRevisionsService.forkForAdminOverride).not.toHaveBeenCalled();
+    });
+  });
+
+  // 20/11/2026 (XOA-SKU phần A): xoá SKU kiểm tham chiếu trong transaction, câu 409 rõ ràng.
+  describe('remove (XOA-SKU)', () => {
+    it('409 "lệnh kiểm tra vật tư" khi SKU còn lệnh kiểm tra; không xoá gì', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm());
+      prisma.materialInspectionRequest.count.mockResolvedValue(1);
+
+      const p = service.remove('5');
+      await expect(p).rejects.toThrow(ConflictException);
+      await expect(p).rejects.toThrow(/1 lệnh kiểm tra vật tư.*không xoá được/);
+      expect(prisma.planForm.delete).not.toHaveBeenCalled();
+      expect(prisma.planFormManhReview.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('xoá được khi không có tham chiếu: dọn review + planForm rồi xoá ảnh', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm({ imageUrl: 'https://x/y.png' }));
+
+      await service.remove('5');
+      expect(prisma.planFormManhReview.deleteMany).toHaveBeenCalledWith({
+        where: { planFormId: 5n },
+      });
+      expect(prisma.planFormDetailReview.deleteMany).toHaveBeenCalledWith({
+        where: { planFormId: 5n },
+      });
+      expect(prisma.planForm.delete).toHaveBeenCalledWith({ where: { id: 5n } });
+      expect(cloudinaryService.deleteByUrl).toHaveBeenCalledWith('https://x/y.png');
+    });
+
+    it('P2003 lúc xoá -> 409 "đang được dùng ở chứng từ khác"', async () => {
+      prisma.planForm.findUnique.mockResolvedValue(planForm());
+      prisma.planForm.delete.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('fk', { code: 'P2003', clientVersion: 'x' }),
+      );
+
+      const p = service.remove('5');
+      await expect(p).rejects.toThrow(ConflictException);
+      await expect(p).rejects.toThrow('SKU đang được dùng ở chứng từ khác - không xoá được');
+      expect(cloudinaryService.deleteByUrl).not.toHaveBeenCalled();
+    });
+  });
+
   describe('updateManhQuota (segments Sắt)', () => {
     it('resolves-or-creates Piece + SegmentSpec and writes BomPiece/PieceBom on a lazily-created DRAFT revision', async () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
@@ -556,7 +627,10 @@ describe('SkusService', () => {
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'ACTIVE' });
 
       await expect(
-        service.updateManhQuota('5', { pieces: [], enteredBy: 'NV Sat' }),
+        service.updateManhQuota('5', {
+          pieces: [{ name: 'Manh tua', qtyPerUnit: 1, segments: [] }],
+          enteredBy: 'NV Sat',
+        }),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -1165,9 +1239,12 @@ describe('SkusService', () => {
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'ACTIVE' });
 
       await expect(
-        service.updateManhQuota('5', { pieces: [], enteredBy: 'NV Sat' }, 'user-1', [
-          'PRODUCTION_PLANNER',
-        ]),
+        service.updateManhQuota(
+          '5',
+          { pieces: [{ name: 'Manh tua', qtyPerUnit: 1, segments: [] }], enteredBy: 'NV Sat' },
+          'user-1',
+          ['PRODUCTION_PLANNER'],
+        ),
       ).rejects.toThrow(ConflictException);
       expect(prisma.bomPiece.deleteMany).not.toHaveBeenCalled();
       expect(bomRevisionsService.forkForAdminOverride).not.toHaveBeenCalled();
@@ -1178,7 +1255,11 @@ describe('SkusService', () => {
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'ACTIVE' });
 
       await expect(
-        service.updateManhQuota('5', { pieces: [], enteredBy: 'NV Sat' }, 'user-1'),
+        service.updateManhQuota(
+          '5',
+          { pieces: [{ name: 'Manh tua', qtyPerUnit: 1, segments: [] }], enteredBy: 'NV Sat' },
+          'user-1',
+        ),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -1891,7 +1972,10 @@ describe('SkusService', () => {
       prisma.materialGroup.findUnique.mockResolvedValue(null);
 
       await expect(
-        service.updateManhQuota('5', { pieces: [], enteredBy: 'NV Day' }),
+        service.updateManhQuota('5', {
+          pieces: [{ name: 'Manh tua', qtyPerUnit: 1, segments: [] }],
+          enteredBy: 'NV Day',
+        }),
       ).rejects.toThrow(InternalServerErrorException);
     });
   });
@@ -2431,8 +2515,13 @@ describe('SkusService', () => {
       prisma.planForm.findUnique.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
       prisma.bomRevision.findFirst.mockResolvedValue({ id: 10n, status: 'DRAFT' });
       prisma.planForm.update.mockResolvedValue(planForm({ status: 'IN_PROGRESS' }));
+      prisma.piece.create.mockResolvedValue({ id: 20n });
 
-      await service.updateManhQuota('5', { pieces: [], enteredBy: 'NV Sat' }, 'user-spec-steel');
+      await service.updateManhQuota(
+        '5',
+        { pieces: [{ name: 'Manh tua', qtyPerUnit: 1, segments: [] }], enteredBy: 'NV Sat' },
+        'user-spec-steel',
+      );
 
       expect(notificationsService.resolve).toHaveBeenCalledWith(
         expect.objectContaining({

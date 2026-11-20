@@ -278,33 +278,35 @@ model AuditLog {
 /// cho category=ANNOUNCEMENT (admin phát cho cả nhóm role, tương thích ngược với model cũ). Thay
 /// thế mô hình broadcast-4-audience trước đây - xem changelog 2026-09-25.
 model Notification {
-  id         String                @id @default(uuid())
+  id             String                @id @default(uuid())
   /// Khoá vào NOTIFICATION_TYPES (notification-types.ts) - null cho ANNOUNCEMENT tự do của admin.
-  type       String?
-  category   NotificationCategory  @default(ANNOUNCEMENT)
-  severity   NotificationSeverity  @default(INFO)
-  title      String
-  message    String
+  type           String?
+  category       NotificationCategory  @default(ANNOUNCEMENT)
+  severity       NotificationSeverity  @default(INFO)
+  title          String
+  message        String
   /// Đối tượng nghiệp vụ liên quan, vd entityType="CUTTING_PROPOSAL" entityId="123" - dùng để
   /// resolve() tự đóng thông báo ACTION_REQUIRED khi đối tượng rời trạng thái cần xử lý.
-  entityType String?
-  entityId   String?
+  entityType     String?
+  entityId       String?
   /// { module, page, params } - FE tự dựng URL từ đây (BE không biết cấu trúc route FE, mục 6.2
   /// changelog 2026-09-25). null cho ANNOUNCEMENT không link tới đâu cả.
-  link       Json?
+  link           Json?
   /// Payload thô (mã PO, lý do từ chối...) để FE hiển thị thêm ngoài title/message nếu cần.
-  data       Json?
+  data           Json?
   /// Người gây ra sự kiện - loại khỏi danh sách người nhận trừ khi type khai notifyActor. null =
   /// hệ thống (vd solver cắt sắt).
-  actorId    String?
+  actorId        String?
   /// "{type}:{entityId}" - NotificationsService.emit() gộp vào dòng này thay vì tạo dòng mới khi
   /// cùng sự kiện lặp lại (chống spam khi 1 đối tượng được tính/thử lại nhiều lần).
-  dedupeKey  String?
+  dedupeKey      String?
+  /// Khoá chống trùng do client gửi (header Idempotency-Key) khi admin phát thông báo chung (20/11/2026). Tuỳ chọn.
+  idempotencyKey String?               @unique
   /// Chỉ có giá trị cho category=ANNOUNCEMENT.
-  audience   NotificationAudience?
-  createdBy  String?
-  createdAt  DateTime              @default(now())
-  updatedAt  DateTime              @updatedAt
+  audience       NotificationAudience?
+  createdBy      String?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
 
   creator    User?                   @relation("NotificationCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
   actor      User?                   @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)

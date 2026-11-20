@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString } from 'class-validator';
+import { IsSystemUploadUrl } from '../../../common/validators/system-upload-url.validator';
 
 /**
  * Admin-override CHỈ cho `photoUrl` (bằng chứng đính kèm) - 2026-09-11, theo yêu cầu người dùng
@@ -15,5 +16,6 @@ export class UpdateQcReviewPhotoDto {
   @ApiPropertyOptional({ nullable: true })
   @IsOptional()
   @IsString()
+  @IsSystemUploadUrl()
   photoUrl?: string | null;
 }

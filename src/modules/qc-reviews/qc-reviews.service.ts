@@ -133,6 +133,14 @@ export class QcReviewsService {
     }
   }
 
+  /** 20/11/2026 (T4-5): có phần không đạt thì bắt buộc chọn nguyên nhân (chuẩn ERP: ghi lỗi phải kèm mã nguyên nhân).
+   *  Không đọc DB; chỉ ghi thiếu hoặc đạt hết thì không đòi. Gọi sau khi đã tính tổng lỗi, trước $transaction. */
+  private assertDefectReasonForFailed(failedQty: number, defectReasonId: bigint | undefined): void {
+    if (failedQty > 0 && defectReasonId === undefined) {
+      throw new BadRequestException('Có số lượng không đạt - phải chọn nguyên nhân không đạt');
+    }
+  }
+
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). `parentId` (2026-10-17,
    *  xem EntityChangedPayload.parentId) - id của lệnh sản xuất/PI mà bản ghi này thuộc về, để FE lọc
    *  đúng màn chi tiết đang xem (vd core.tsx/VatTuTpDetail.tsx/ChanNhomDetail.tsx). Chỉ 3/6 nhánh
@@ -417,6 +425,7 @@ export class QcReviewsService {
     }
 
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
+    this.assertDefectReasonForFailed(totalFailed, defectReasonId);
 
     const created = await this.prisma.$transaction(async (tx) => {
       await this.assertDefectReasonExists(tx, defectReasonId);
@@ -536,6 +545,7 @@ export class QcReviewsService {
     }
 
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
+    this.assertDefectReasonForFailed(totalFailed, defectReasonId);
 
     const created = await this.prisma.$transaction(async (tx) => {
       await this.assertDefectReasonExists(tx, defectReasonId);
@@ -792,6 +802,7 @@ export class QcReviewsService {
     }
 
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
+    this.assertDefectReasonForFailed(totalFailed, defectReasonId);
 
     const created = await this.prisma.$transaction(async (tx) => {
       await this.assertDefectReasonExists(tx, defectReasonId);
@@ -893,6 +904,7 @@ export class QcReviewsService {
     const passedQty = batch.reportedQty - dto.failedQty - shortQty;
     const consumedQty = batch.reportedQty - shortQty;
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
+    this.assertDefectReasonForFailed(dto.failedQty, defectReasonId);
 
     const created = await this.prisma.$transaction(
       async (tx) => {
@@ -1037,6 +1049,7 @@ export class QcReviewsService {
       );
     }
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
+    this.assertDefectReasonForFailed(dto.failedQty, defectReasonId);
 
     const created = await this.prisma.$transaction(async (tx) => {
       await this.assertDefectReasonExists(tx, defectReasonId);
@@ -1126,6 +1139,7 @@ export class QcReviewsService {
       );
     }
     const defectReasonId = dto.defectReasonId ? parseBigIntId(dto.defectReasonId) : undefined;
+    this.assertDefectReasonForFailed(dto.failedQty, defectReasonId);
 
     const created = await this.prisma.$transaction(async (tx) => {
       await this.assertDefectReasonExists(tx, defectReasonId);

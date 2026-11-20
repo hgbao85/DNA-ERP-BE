@@ -8,6 +8,7 @@ import {
 } from '../../../common/validators/stock-lengths-by-material.validator';
 import { ProdApprovalStatus, SolverMachine } from '../../../generated/prisma/client';
 import { MaterialChoiceRefDto } from '../../../common/utils/material-choice-ref.util';
+import { ToStrictBoolean } from '../../../common/validators/strict-type.decorators';
 
 /** Một loại sắt của MỘT SKU, kèm hao hụt khi SKU đó cắt một mình. */
 @Exclude()
@@ -173,9 +174,7 @@ export class BatchStockLengthsQueryDto {
   /// lần đầu chưa kịp (lâu hơn, tới 12 cỡ đoạn). Kết quả đã có được nhớ nên không giải lại. Bỏ trống = lượt nhanh như cũ.
   @ApiPropertyOptional({ type: Boolean })
   @IsOptional()
-  @Transform(({ value }: { value: unknown }) =>
-    value === 'true' || value === true ? true : value === 'false' ? false : value,
-  )
+  @ToStrictBoolean()
   @IsBoolean()
   deepVerify?: boolean;
 }

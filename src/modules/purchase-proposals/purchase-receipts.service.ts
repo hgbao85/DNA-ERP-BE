@@ -14,6 +14,11 @@ import {
 } from '../../generated/prisma/client';
 import { MATERIAL_GROUP_SYSTEM_KEYS } from '../../common/constants/material-group-system-keys.constant';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
+import {
+  IdempotencyKeyInUseException,
+  assertSameIdempotentRequest,
+  lockIdempotencyKey,
+} from '../../common/utils/idempotency.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -96,12 +101,30 @@ export class PurchaseReceiptsService {
     idempotencyKey: string,
     warehouseScope: string | null,
   ): Promise<PurchaseReceiptResult> {
-    const existing = await this.findByKey(idempotencyKey, userId);
+    // T3-9 (20/11/2026): gửi lại cùng khoá -> so vân tay (người, loại, số phiếu NK, số lượng, nhóm dòng) rồi mới trả phiếu cũ;
+    // khác thì 422 (IdempotencyKeyReusedException). Phải làm TRƯỚC loadGroup vì phiếu cũ có thể đã nhận đủ các dòng.
+    const supplierUnitQty = dto.supplierUnitQty ?? 1;
+    const slipCode = dto.slipCode.trim();
+    const expected: ReceiptFingerprint = {
+      status: PurchaseReceiptStatus.RECEIVED,
+      createdById: userId,
+      code: slipCode,
+      unitRateQty: dto.unitRateQty,
+      supplierUnitQty,
+      deliveredQty: dto.deliveredQty,
+      itemIds: itemIdsOf(dto.itemIds),
+    };
+    const existing = await this.findByKey(idempotencyKey, userId, expected);
     if (existing) return existing;
 
-    const lines = await this.loadGroup(dto.itemIds, warehouseScope, true);
+    const lines = await this.loadGroup(dto.itemIds, warehouseScope, true).catch(async (error) => {
+      // Bản thắng vừa commit giữa lúc đọc nhanh và lúc đọc dòng (dòng không còn chờ nhận) -> trả phiếu của bản thắng.
+      const won = await this.findByKey(idempotencyKey, userId, expected);
+      if (won) return won;
+      throw error;
+    });
+    if (!Array.isArray(lines)) return lines;
     const first = lines[0];
-    const supplierUnitQty = dto.supplierUnitQty ?? 1;
     const total = round4(dto.unitRateQty * supplierUnitQty);
     // 4.5: không dung sai, kể cả hàng cân/đo - cân lại lệch phiếu giao thì NCC sửa phiếu rồi mới nhận.
     const checked = dto.supplierUnitQty != null ? dto.supplierUnitQty : dto.unitRateQty;
@@ -117,7 +140,6 @@ export class PurchaseReceiptsService {
     const receiptSlipUrls = cleanUrls(dto.receiptSlipUrls);
     const weighSlipUrls = cleanUrls(dto.weighSlipUrls);
     const overReason = dto.overReason?.trim() || undefined;
-    const slipCode = dto.slipCode.trim();
     const overFileUrls = cleanUrls(dto.overFileUrls);
     const missing: string[] = [];
     if (supplierSlipUrls.length === 0) missing.push('phiếu giao hàng của NCC');
@@ -139,6 +161,14 @@ export class PurchaseReceiptsService {
     try {
       outcome = await this.prisma.$transaction(
         async (tx) => {
+          // T3-9: câu ĐẦU là try-lock khoá chống trùng (bản trùng đang chạy -> 409 ngay), TRƯỚC khoá đề xuất và số phiếu;
+          // rồi đọc lại theo khoá - bản thắng vừa commit thì không ghi nữa, không vấp kiểm số phiếu NK (400).
+          await lockIdempotencyKey(tx, 'purchase_receipts', idempotencyKey);
+          const dup = await tx.purchaseReceipt.findUnique({ where: { idempotencyKey } });
+          if (dup) {
+            assertSameReceipt(dup, expected);
+            return null;
+          }
           // Khoá mọi đề xuất liên quan theo thứ tự id cố định - 2 phiếu cùng chạm 2 lệnh không khoá chéo nhau.
           const proposalIds = [...new Set(lines.map((l) => l.proposal.id))].sort((a, b) =>
             a < b ? -1 : a > b ? 1 : 0,
@@ -271,10 +301,17 @@ export class PurchaseReceiptsService {
     } catch (error) {
       // Cùng Idempotency-Key gửi 2 lần gần nhau: lần sau đụng unique idempotencyKey -> trả phiếu lần đầu đã ghi.
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        const again = await this.findByKey(idempotencyKey, userId);
+        const again = await this.findByKey(idempotencyKey, userId, expected);
         if (again) return again;
       }
       throw error;
+    }
+    if (!outcome) {
+      // Phiếu cùng khoá vừa commit ở request khác: trả phiếu đó, KHÔNG chạy việc phụ (cộng dòng, đóng "từ chối nhận",
+      // báo nhận vượt) - bản thắng đã làm rồi.
+      const won = await this.findByKey(idempotencyKey, userId, expected);
+      if (won) return won;
+      throw new IdempotencyKeyInUseException();
     }
     const { receiptId, overQty, applied, auto, finalAllocation, adjusted } = outcome;
 
@@ -310,10 +347,24 @@ export class PurchaseReceiptsService {
     idempotencyKey: string,
     warehouseScope: string | null,
   ): Promise<PurchaseReceiptResult> {
-    const existing = await this.findByKey(idempotencyKey, userId);
+    // T3-9 (20/11/2026): so vân tay {loại REJECTED, người, SL phiếu giao, lý do} trước khi trả phiếu cũ.
+    const expected: ReceiptFingerprint = {
+      status: PurchaseReceiptStatus.REJECTED,
+      createdById: userId,
+      deliveredQty: dto.deliveredQty,
+      rejectReason: dto.reason.trim(),
+      // 20/11/2026 (QA): thêm nhóm dòng vào vân tay để cùng khoá mà khác dòng không bị trả nhầm phiếu cũ.
+      itemIds: itemIdsOf(dto.itemIds),
+    };
+    const existing = await this.findByKey(idempotencyKey, userId, expected);
     if (existing) return existing;
 
-    const lines = await this.loadGroup(dto.itemIds, warehouseScope);
+    const lines = await this.loadGroup(dto.itemIds, warehouseScope).catch(async (error) => {
+      const won = await this.findByKey(idempotencyKey, userId, expected);
+      if (won) return won;
+      throw error;
+    });
+    if (!Array.isArray(lines)) return lines;
     const first = lines[0];
     const fileUrls = cleanUrls(dto.fileUrls);
     if (fileUrls.length === 0)
@@ -328,39 +379,55 @@ export class PurchaseReceiptsService {
       throw new ConflictException('Có dòng vừa được nhận đủ hoặc đóng ở nơi khác - tải lại trang');
     }
 
-    let receipt: { id: bigint };
+    let receipt: { id: bigint } | null;
     try {
-      receipt = await this.prisma.purchaseReceipt.create({
-        data: {
-          supplierOrderId: first.item.supplierOrderId,
-          materialId: first.item.materialId,
-          warehouseCode: first.warehouseCode,
-          spec: first.item.spec ?? '',
-          stockLengthMm: first.item.stockLengthMm,
-          status: PurchaseReceiptStatus.REJECTED,
-          unitRateQty: dto.deliveredQty,
-          supplierUnitQty: 1,
-          deliveredQty: dto.deliveredQty,
-          receivedQty: 0,
-          supplierSlipUrls: [],
-          approvalFileUrls: [],
-          receiptSlipUrls: [],
-          weighSlipUrls: [],
-          rejectReason: dto.reason.trim(),
-          rejectFileUrls: fileUrls,
-          autoAllocation: [],
-          allocation: [],
-          idempotencyKey,
-          createdById: userId,
-        },
+      receipt = await this.prisma.$transaction(async (tx) => {
+        // T3-9: try-lock khoá chống trùng là câu đầu; bản thắng vừa commit thì không ghi nữa.
+        await lockIdempotencyKey(tx, 'purchase_receipts', idempotencyKey);
+        const dup = await tx.purchaseReceipt.findUnique({ where: { idempotencyKey } });
+        if (dup) {
+          assertSameReceipt(dup, expected);
+          return null;
+        }
+        return tx.purchaseReceipt.create({
+          data: {
+            supplierOrderId: first.item.supplierOrderId,
+            materialId: first.item.materialId,
+            warehouseCode: first.warehouseCode,
+            spec: first.item.spec ?? '',
+            stockLengthMm: first.item.stockLengthMm,
+            status: PurchaseReceiptStatus.REJECTED,
+            unitRateQty: dto.deliveredQty,
+            supplierUnitQty: 1,
+            deliveredQty: dto.deliveredQty,
+            receivedQty: 0,
+            supplierSlipUrls: [],
+            approvalFileUrls: [],
+            receiptSlipUrls: [],
+            weighSlipUrls: [],
+            rejectReason: dto.reason.trim(),
+            rejectFileUrls: fileUrls,
+            // Phiếu từ chối không phân bổ số; chỉ lưu nhóm dòng (qty 0) để so vân tay khi gửi lại (20/11/2026).
+            autoAllocation: lines.map((l) => ({ itemId: l.item.id.toString(), qty: 0 })),
+            allocation: [],
+            idempotencyKey,
+            createdById: userId,
+          },
+        });
       });
     } catch (error) {
       // MH8: bấm đúp cùng Idempotency-Key - lần sau đụng unique, trả phiếu lần đầu thay vì lỗi 500 (giống nhận hàng).
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        const again = await this.findByKey(idempotencyKey, userId);
+        const again = await this.findByKey(idempotencyKey, userId, expected);
         if (again) return again;
       }
       throw error;
+    }
+    if (!receipt) {
+      // Bản thắng vừa commit: trả phiếu của nó, không báo người mua lần 2.
+      const won = await this.findByKey(idempotencyKey, userId, expected);
+      if (won) return won;
+      throw new IdempotencyKeyInUseException();
     }
 
     const order = first.item.supplierOrder;
@@ -688,16 +755,18 @@ export class PurchaseReceiptsService {
     });
   }
 
-  /** MH8: khoá chống trùng thuộc NGƯỜI tạo - người khác gửi trùng khoá không được nhận lại phiếu của người kia. */
+  /**
+   * MH8: khoá chống trùng thuộc NGƯỜI tạo. T3-9 (20/11/2026): so vân tay với lần gửi lại - khác người / loại / nội dung thì
+   * 422 (IdempotencyKeyReusedException; trước đây khác người trả 409 và không so nội dung).
+   */
   private async findByKey(
     idempotencyKey: string,
     userId: string,
+    expected: ReceiptFingerprint,
   ): Promise<PurchaseReceiptResult | null> {
     const r = await this.prisma.purchaseReceipt.findUnique({ where: { idempotencyKey } });
     if (!r) return null;
-    if (r.createdById !== userId) {
-      throw new ConflictException('Khoá chống trùng (Idempotency-Key) đã được dùng cho phiếu khác');
-    }
+    assertSameReceipt(r, expected);
     const allocation = (r.allocation as unknown as AllocationResult[]) ?? [];
     let preview: PreviewLine[] = [];
     if (allocation.length > 0) {
@@ -735,4 +804,71 @@ function allocationLineOf(l: ReceiveLine) {
 function sameAllocation(a: AllocationResult[], b: AllocationResult[]): boolean {
   const m = new Map(a.map((x) => [x.itemId, x.qty]));
   return b.length === a.length && b.every((x) => m.get(x.itemId) === x.qty);
+}
+
+/** Vân tay của 1 lần nhận / từ chối nhận (T3-9) - chỉ các trường nghiệp vụ, không so ảnh, ghi chú, phân bổ chỉnh tay. */
+interface ReceiptFingerprint {
+  status: PurchaseReceiptStatus;
+  createdById: string;
+  code?: string | null;
+  unitRateQty?: number | Prisma.Decimal;
+  supplierUnitQty?: number | Prisma.Decimal;
+  deliveredQty: number | Prisma.Decimal;
+  itemIds?: string[];
+  rejectReason?: string;
+}
+
+/** Nhóm dòng của 1 lần gửi: bỏ trùng, về dạng chuỗi số (giống loadGroup). */
+function itemIdsOf(rawIds: string[]): string[] {
+  return [...new Set(rawIds)].map((id) => parseBigIntId(id).toString());
+}
+
+/**
+ * Vân tay đã lưu trên phiếu. Nhóm dòng lấy từ autoAllocation (autoAllocate luôn trả đủ mọi dòng của nhóm), KHÔNG lấy từ
+ * allocation - thủ kho có thể đã chỉnh tay, lấy từ đó sẽ báo 422 oan cho 1 lần gửi lại hợp lệ.
+ */
+function receiptFingerprint(r: {
+  status: PurchaseReceiptStatus;
+  createdById: string;
+  code: string | null;
+  unitRateQty: Prisma.Decimal;
+  supplierUnitQty: Prisma.Decimal;
+  deliveredQty: Prisma.Decimal;
+  rejectReason: string | null;
+  autoAllocation: unknown;
+}): ReceiptFingerprint {
+  if (r.status === PurchaseReceiptStatus.REJECTED) {
+    return {
+      status: r.status,
+      createdById: r.createdById,
+      deliveredQty: r.deliveredQty,
+      rejectReason: r.rejectReason ?? '',
+      itemIds: ((r.autoAllocation as AllocationResult[] | null) ?? []).map((a) => String(a.itemId)),
+    };
+  }
+  return {
+    status: r.status,
+    createdById: r.createdById,
+    code: r.code,
+    unitRateQty: r.unitRateQty,
+    supplierUnitQty: r.supplierUnitQty,
+    deliveredQty: r.deliveredQty,
+    itemIds: ((r.autoAllocation as AllocationResult[] | null) ?? []).map((a) => String(a.itemId)),
+  };
+}
+
+/**
+ * So vân tay đã lưu với lần gửi lại. Phiếu từ chối CŨ (trước 20/11/2026) chưa lưu nhóm dòng (autoAllocation rỗng) thì bỏ
+ * qua phần itemIds - không có gì để so, không báo 422 oan.
+ */
+function assertSameReceipt(
+  stored: Parameters<typeof receiptFingerprint>[0],
+  expected: ReceiptFingerprint,
+): void {
+  const fp = receiptFingerprint(stored);
+  if (expected.status === PurchaseReceiptStatus.REJECTED && (fp.itemIds?.length ?? 0) === 0) {
+    assertSameIdempotentRequest({ ...fp, itemIds: undefined }, { ...expected, itemIds: undefined });
+    return;
+  }
+  assertSameIdempotentRequest(fp, expected);
 }

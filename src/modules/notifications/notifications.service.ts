@@ -8,6 +8,11 @@ import {
 import { PaginationMetaDto, Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
+import {
+  assertSameIdempotentRequest,
+  IdempotencyKeyInUseException,
+  lockIdempotencyKey,
+} from '../../common/utils/idempotency.util';
 import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { AnnouncementResponseDto } from './dto/announcement-response.dto';
@@ -408,33 +413,93 @@ export class NotificationsService {
 
   // ─── Announcement (admin phát cho cả nhóm) ────────────────────────────────────────────────────
 
+  /**
+   * Phát thông báo chung. `idempotencyKey` tuỳ chọn (20/11/2026, T1-9): có khoá thì bấm Gửi lại không tạo
+   * bản thứ 2 và không phát realtime lại. create + createMany luôn cùng 1 transaction; realtime chỉ phát
+   * sau commit và chỉ khi vừa tạo mới.
+   */
   async createAnnouncement(
     dto: CreateNotificationDto,
     createdBy: string,
+    idempotencyKey?: string,
   ): Promise<NotificationResponseDto> {
+    const incoming = {
+      category: NotificationCategory.ANNOUNCEMENT,
+      title: dto.title,
+      message: dto.message,
+      audience: dto.audience,
+      createdBy,
+    };
+    if (idempotencyKey) {
+      const prev = await this.prisma.notification.findUnique({ where: { idempotencyKey } });
+      if (prev) {
+        assertSameIdempotentRequest(this.announcementFingerprint(prev), incoming);
+        return this.toResponseDto(prev, null);
+      }
+    }
     const criteria =
       dto.audience === NotificationAudience.ALL
         ? { allActiveUsers: true }
         : { roles: [dto.audience as string] };
     const recipientIds = await this.recipientResolver.resolve(criteria, []);
 
-    const notification = await this.prisma.notification.create({
-      data: {
-        category: NotificationCategory.ANNOUNCEMENT,
-        severity: NotificationSeverity.INFO,
-        title: dto.title,
-        message: dto.message,
-        audience: dto.audience,
-        createdBy,
-      },
-    });
-    if (recipientIds.length > 0) {
-      await this.prisma.notificationRecipient.createMany({
-        data: recipientIds.map((userId) => ({ notificationId: notification.id, userId })),
-      });
-      this.publishCreated(notification, recipientIds, false);
+    let created: { notification: NotificationRow; isNew: boolean };
+    try {
+      created = await this.prisma.$transaction(
+        async (tx) => {
+          if (idempotencyKey) {
+            await lockIdempotencyKey(tx, 'notifications', idempotencyKey);
+            const again = await tx.notification.findUnique({ where: { idempotencyKey } });
+            if (again) {
+              assertSameIdempotentRequest(this.announcementFingerprint(again), incoming);
+              return { notification: again, isNew: false };
+            }
+          }
+          const notification = await tx.notification.create({
+            data: {
+              category: NotificationCategory.ANNOUNCEMENT,
+              severity: NotificationSeverity.INFO,
+              title: dto.title,
+              message: dto.message,
+              audience: dto.audience,
+              createdBy,
+              ...(idempotencyKey ? { idempotencyKey } : {}),
+            },
+          });
+          if (recipientIds.length > 0) {
+            await tx.notificationRecipient.createMany({
+              data: recipientIds.map((userId) => ({ notificationId: notification.id, userId })),
+            });
+          }
+          return { notification, isNew: true };
+        },
+        { timeout: 20000 },
+      );
+    } catch (e) {
+      // Chốt cuối: unique index thắng khi 2 bản trùng lọt qua try-lock.
+      if (
+        idempotencyKey &&
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      ) {
+        throw new IdempotencyKeyInUseException();
+      }
+      throw e;
     }
-    return this.toResponseDto(notification, null);
+    if (created.isNew && recipientIds.length > 0) {
+      this.publishCreated(created.notification, recipientIds, false);
+    }
+    return this.toResponseDto(created.notification, null);
+  }
+
+  private announcementFingerprint(n: NotificationRow) {
+    return {
+      category: n.category,
+      title: n.title,
+      message: n.message,
+      audience: n.audience,
+      createdBy: n.createdBy,
+    };
   }
 
   /** Admin xem lại mọi thông báo chung đã phát + tỉ lệ đã đọc - KHÔNG lọc theo audience của người

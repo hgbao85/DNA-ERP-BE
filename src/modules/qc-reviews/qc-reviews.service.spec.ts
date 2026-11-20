@@ -324,7 +324,7 @@ describe('QcReviewsService', () => {
     it('chấm lỗi 1 cỡ đoạn - tạo QcReviewSegment, failedQty tổng = đúng cỡ đó', async () => {
       await service.review(
         '100',
-        { segments: [{ segmentSpecId: '30', failedQty: 3 }] },
+        { defectReasonId: '9', segments: [{ segmentSpecId: '30', failedQty: 3 }] },
         'user-kcs',
       );
 
@@ -349,7 +349,10 @@ describe('QcReviewsService', () => {
     it('P1: route lô cũ bỏ qua shortQty / scrapQty client gửi, lưu 0 (không cộng vào lỗi)', async () => {
       await service.review(
         '100',
-        { segments: [{ segmentSpecId: '30', failedQty: 2, shortQty: 5, scrapQty: 2 }] },
+        {
+          defectReasonId: '9',
+          segments: [{ segmentSpecId: '30', failedQty: 2, shortQty: 5, scrapQty: 2 }],
+        },
         'user-kcs',
       );
 
@@ -378,7 +381,11 @@ describe('QcReviewsService', () => {
     it('ném BadRequestException nếu failedQty của 1 cỡ vượt số đã cắt CHÍNH ĐỢT này', async () => {
       // đã cắt 8 đoạn cỡ 745mm (mock cutPatternSegment.groupBy), chấm lỗi 9 là vượt
       await expect(
-        service.review('100', { segments: [{ segmentSpecId: '30', failedQty: 9 }] }, 'user-kcs'),
+        service.review(
+          '100',
+          { defectReasonId: '9', segments: [{ segmentSpecId: '30', failedQty: 9 }] },
+          'user-kcs',
+        ),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -386,7 +393,11 @@ describe('QcReviewsService', () => {
       prisma.segmentSpec.findMany.mockResolvedValue([{ ...segmentSpecRow, materialId: 999n }]);
 
       await expect(
-        service.review('100', { segments: [{ segmentSpecId: '30', failedQty: 1 }] }, 'user-kcs'),
+        service.review(
+          '100',
+          { defectReasonId: '9', segments: [{ segmentSpecId: '30', failedQty: 1 }] },
+          'user-kcs',
+        ),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -394,7 +405,11 @@ describe('QcReviewsService', () => {
       prisma.segmentSpec.findMany.mockResolvedValue([]);
 
       await expect(
-        service.review('100', { segments: [{ segmentSpecId: '999', failedQty: 1 }] }, 'user-kcs'),
+        service.review(
+          '100',
+          { defectReasonId: '9', segments: [{ segmentSpecId: '999', failedQty: 1 }] },
+          'user-kcs',
+        ),
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -504,7 +519,7 @@ describe('QcReviewsService', () => {
 
       await service.reviewCutBundle(
         '1',
-        { segments: [{ segmentSpecId: '30', failedQty: 2 }] },
+        { defectReasonId: '9', segments: [{ segmentSpecId: '30', failedQty: 2 }] },
         'user-kcs',
       );
 
@@ -538,7 +553,10 @@ describe('QcReviewsService', () => {
       it('lưu shortQty theo dòng + tổng; failedQty CHỈ là lỗi; scrapQty luôn 0 dù client gửi', async () => {
         await service.reviewCutBundle(
           '1',
-          { segments: [{ segmentSpecId: '30', failedQty: 2, shortQty: 3, scrapQty: 2 }] },
+          {
+            defectReasonId: '9',
+            segments: [{ segmentSpecId: '30', failedQty: 2, shortQty: 3, scrapQty: 2 }],
+          },
           'user-kcs',
         );
 
@@ -555,7 +573,7 @@ describe('QcReviewsService', () => {
         await expect(
           service.reviewCutBundle(
             '1',
-            { segments: [{ segmentSpecId: '30', failedQty: 5, shortQty: 4 }] },
+            { defectReasonId: '9', segments: [{ segmentSpecId: '30', failedQty: 5, shortQty: 4 }] },
             'user-kcs',
           ),
         ).rejects.toThrow(BadRequestException);
@@ -631,7 +649,7 @@ describe('QcReviewsService', () => {
 
         const result = await service.reviewCutBundle(
           '1',
-          { segments: [{ segmentSpecId: '30', failedQty: 1, shortQty: 2 }] },
+          { defectReasonId: '9', segments: [{ segmentSpecId: '30', failedQty: 1, shortQty: 2 }] },
           'user-kcs',
         );
 
@@ -682,7 +700,7 @@ describe('QcReviewsService', () => {
 
         const result = await service.reviewCutBundle(
           '1',
-          { segments: [{ segmentSpecId: '30', failedQty: 1, shortQty: 2 }] },
+          { defectReasonId: '9', segments: [{ segmentSpecId: '30', failedQty: 1, shortQty: 2 }] },
           'user-kcs',
         );
 
@@ -711,7 +729,7 @@ describe('QcReviewsService', () => {
       await expect(
         service.reviewCutBundle(
           '1',
-          { segments: [{ segmentSpecId: '30', failedQty: 9 }] },
+          { defectReasonId: '9', segments: [{ segmentSpecId: '30', failedQty: 9 }] },
           'user-kcs',
         ),
       ).rejects.toThrow(BadRequestException);
@@ -729,7 +747,7 @@ describe('QcReviewsService', () => {
 
       await service.reviewCutBundle(
         '1',
-        { segments: [{ segmentSpecId: '30', failedQty: 2 }] },
+        { defectReasonId: '9', segments: [{ segmentSpecId: '30', failedQty: 2 }] },
         'user-kcs',
       );
 
@@ -831,7 +849,7 @@ describe('QcReviewsService', () => {
       await expect(
         service.reviewStepBundle(
           '800',
-          { segments: [{ segmentSpecId: '30', failedQty: 6 }] },
+          { defectReasonId: '9', segments: [{ segmentSpecId: '30', failedQty: 6 }] },
           'user-kcs',
         ),
       ).rejects.toThrow(BadRequestException);
@@ -852,7 +870,7 @@ describe('QcReviewsService', () => {
       it('có lỗi mà thiếu scrapQty -> 400 "chọn số đoạn lỗi phải bỏ ... tải lại trang", không ghi gì', async () => {
         const run = service.reviewStepBundle(
           '800',
-          { segments: [{ segmentSpecId: '30', failedQty: 2 }] },
+          { defectReasonId: '9', segments: [{ segmentSpecId: '30', failedQty: 2 }] },
           'user-kcs',
         );
         await expect(run).rejects.toThrow(BadRequestException);
@@ -866,7 +884,7 @@ describe('QcReviewsService', () => {
         await expect(
           service.reviewStepBundle(
             '800',
-            { segments: [{ segmentSpecId: '30', failedQty: 2, scrapQty: 3 }] },
+            { defectReasonId: '9', segments: [{ segmentSpecId: '30', failedQty: 2, scrapQty: 3 }] },
             'user-kcs',
           ),
         ).rejects.toThrow('Cỡ 745mm: số bỏ (3) lớn hơn số lỗi (2).');
@@ -876,7 +894,10 @@ describe('QcReviewsService', () => {
       it('scrapQty = 0 là hợp lệ (chỉ làm lại); lưu short / scrap, tổng shortQty lên qc_reviews', async () => {
         await service.reviewStepBundle(
           '800',
-          { segments: [{ segmentSpecId: '30', failedQty: 2, shortQty: 1, scrapQty: 0 }] },
+          {
+            defectReasonId: '9',
+            segments: [{ segmentSpecId: '30', failedQty: 2, shortQty: 1, scrapQty: 0 }],
+          },
           'user-kcs',
         );
 
@@ -905,7 +926,10 @@ describe('QcReviewsService', () => {
         await expect(
           service.reviewStepBundle(
             '800',
-            { segments: [{ segmentSpecId: '30', failedQty: 4, shortQty: 5, scrapQty: 1 }] },
+            {
+              defectReasonId: '9',
+              segments: [{ segmentSpecId: '30', failedQty: 4, shortQty: 5, scrapQty: 1 }],
+            },
             'user-kcs',
           ),
         ).rejects.toThrow(BadRequestException);
@@ -1016,7 +1040,7 @@ describe('QcReviewsService', () => {
     });
 
     it('duyệt có lỗi (failedQty > 0, stage HAN) - emit QC_FAILED cho Hàn + QLSX', async () => {
-      await service.reviewProductionBatch('700', { failedQty: 5 }, 'user-kcs');
+      await service.reviewProductionBatch('700', { defectReasonId: '9', failedQty: 5 }, 'user-kcs');
 
       expect(notificationsService.emit).toHaveBeenCalledWith(
         'QC_FAILED',
@@ -1032,7 +1056,7 @@ describe('QcReviewsService', () => {
         stage: 'SON',
       });
 
-      await service.reviewProductionBatch('700', { failedQty: 3 }, 'user-kcs');
+      await service.reviewProductionBatch('700', { defectReasonId: '9', failedQty: 3 }, 'user-kcs');
 
       expect(notificationsService.emit).toHaveBeenCalledWith(
         'QC_FAILED',
@@ -1050,7 +1074,7 @@ describe('QcReviewsService', () => {
       });
       (queueWorkshopIdOfPi as jest.Mock).mockResolvedValue(1n);
 
-      await service.reviewProductionBatch('700', { failedQty: 3 }, 'user-kcs');
+      await service.reviewProductionBatch('700', { defectReasonId: '9', failedQty: 3 }, 'user-kcs');
       await service.reviewProductionBatch('700', { failedQty: 0 }, 'user-kcs');
       const failedParams = { piCode: 'PI-2026-700', failedQty: 3, senderRole: 'SON_STAFF' };
 
@@ -1102,7 +1126,7 @@ describe('QcReviewsService', () => {
     });
 
     it('có failedQty - reportedQty ghi đè = phần ĐẠT, KHÔNG tạo lô rework mới (2026-09-08: bỏ hẳn phân loại Sửa được/Phế, mirror reviewPieceStep)', async () => {
-      await service.reviewProductionBatch('700', { failedQty: 5 }, 'user-kcs');
+      await service.reviewProductionBatch('700', { defectReasonId: '9', failedQty: 5 }, 'user-kcs');
 
       // P1: updateMany ghi báo - thiếu = 20 (đoạn dùng thật), rồi update hạ về passed = 20 - 5 = 15
       expect(prisma.productionBatch.updateMany).toHaveBeenCalledWith(
@@ -1133,7 +1157,7 @@ describe('QcReviewsService', () => {
 
     it('ném BadRequestException nếu failedQty vượt reportedQty', async () => {
       await expect(
-        service.reviewProductionBatch('700', { failedQty: 999 }, 'user-kcs'),
+        service.reviewProductionBatch('700', { defectReasonId: '9', failedQty: 999 }, 'user-kcs'),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -1166,7 +1190,7 @@ describe('QcReviewsService', () => {
       prisma.productionBatch.updateMany.mockResolvedValue({ count: 0 });
 
       await expect(
-        service.reviewProductionBatch('700', { failedQty: 5 }, 'user-kcs'),
+        service.reviewProductionBatch('700', { defectReasonId: '9', failedQty: 5 }, 'user-kcs'),
       ).rejects.toThrow(ConflictException);
       expect(prisma.qcReview.create).not.toHaveBeenCalled();
     });
@@ -1185,7 +1209,11 @@ describe('QcReviewsService', () => {
     });
 
     it('báo 20, lỗi 3, thiếu 2: trừ đoạn theo 18 (báo - thiếu), reportedQty cuối 15, review có shortQty', async () => {
-      await service.reviewProductionBatch('700', { failedQty: 3, shortQty: 2 }, 'user-kcs');
+      await service.reviewProductionBatch(
+        '700',
+        { defectReasonId: '9', failedQty: 3, shortQty: 2 },
+        'user-kcs',
+      );
 
       expect(productionBatchesService.consumeSegmentsAtReviewInTx).toHaveBeenCalledWith(
         prisma,
@@ -1217,13 +1245,21 @@ describe('QcReviewsService', () => {
 
     it('thiếu + không đạt > số đã báo -> 400, chưa mở transaction', async () => {
       await expect(
-        service.reviewProductionBatch('700', { failedQty: 15, shortQty: 6 }, 'user-kcs'),
+        service.reviewProductionBatch(
+          '700',
+          { defectReasonId: '9', failedQty: 15, shortQty: 6 },
+          'user-kcs',
+        ),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
     it('đúng thứ tự trong transaction: khoá -> updateMany -> trừ đoạn -> update -> mảnh vào kho -> tạo review', async () => {
-      await service.reviewProductionBatch('700', { failedQty: 3, shortQty: 2 }, 'user-kcs');
+      await service.reviewProductionBatch(
+        '700',
+        { defectReasonId: '9', failedQty: 3, shortQty: 2 },
+        'user-kcs',
+      );
 
       const order = [
         productionBatchesService.lockBatchKeysInTx.mock.invocationCallOrder[0],
@@ -1303,7 +1339,11 @@ describe('QcReviewsService', () => {
     });
 
     it('lô HAN có lỗi + thiếu: QC_FAILED KHÔNG có todo (câu mặc định), detail có câu thiếu', async () => {
-      await service.reviewProductionBatch('700', { failedQty: 3, shortQty: 2 }, 'user-kcs');
+      await service.reviewProductionBatch(
+        '700',
+        { defectReasonId: '9', failedQty: 3, shortQty: 2 },
+        'user-kcs',
+      );
 
       expect(notificationsService.emit).toHaveBeenCalledWith('QC_FAILED', {
         params: {
@@ -1363,7 +1403,7 @@ describe('QcReviewsService', () => {
     });
 
     it('có failedQty - vẫn chuyển QC_PASSED (mirror Phôi/Sắt - không có khái niệm phế)', async () => {
-      await service.reviewPieceStep('800', { failedQty: 5 }, 'user-kcs');
+      await service.reviewPieceStep('800', { defectReasonId: '9', failedQty: 5 }, 'user-kcs');
 
       expect(prisma.pieceStepBundle.updateMany).toHaveBeenCalledWith({
         where: { id: 800n, status: 'AWAITING_QC' },
@@ -1383,9 +1423,9 @@ describe('QcReviewsService', () => {
     });
 
     it('ném BadRequestException nếu failedQty vượt qty đã gửi', async () => {
-      await expect(service.reviewPieceStep('800', { failedQty: 999 }, 'user-kcs')).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(
+        service.reviewPieceStep('800', { defectReasonId: '9', failedQty: 999 }, 'user-kcs'),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('ném ConflictException khi PI của order chưa có SKU nào ACTIVE', async () => {
@@ -1404,9 +1444,9 @@ describe('QcReviewsService', () => {
     it('CHẶN (409, rollback) nếu bundle đã bị 1 yêu cầu khác duyệt trong lúc đang xử lý - không cộng trùng failedQty vào sản lượng', async () => {
       prisma.pieceStepBundle.updateMany.mockResolvedValue({ count: 0 });
 
-      await expect(service.reviewPieceStep('800', { failedQty: 5 }, 'user-kcs')).rejects.toThrow(
-        ConflictException,
-      );
+      await expect(
+        service.reviewPieceStep('800', { defectReasonId: '9', failedQty: 5 }, 'user-kcs'),
+      ).rejects.toThrow(ConflictException);
       expect(prisma.qcReview.create).not.toHaveBeenCalled();
       expect(
         productionBatchesService.autoFinalizePieceOutputIfLastStepComplete,
@@ -1463,7 +1503,7 @@ describe('QcReviewsService', () => {
 
     it('failedQty vượt số lượng đã gửi (bundle.qty) -> 400, không ghi gì', async () => {
       await expect(
-        service.reviewMaterialYieldStep('850', { failedQty: 11 }, 'user-kcs'),
+        service.reviewMaterialYieldStep('850', { defectReasonId: '9', failedQty: 11 }, 'user-kcs'),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.qcReview.create).not.toHaveBeenCalled();
     });
@@ -1514,7 +1554,11 @@ describe('QcReviewsService', () => {
     it('reviewPieceStep: lưu shortQty, tạo review TRƯỚC rồi mới autoFinalize; tin có câu thiếu (mảnh)', async () => {
       prisma.qcReview.create.mockResolvedValue(bundleQcReview);
 
-      await service.reviewPieceStep('800', { failedQty: 1, shortQty: 3 }, 'user-kcs');
+      await service.reviewPieceStep(
+        '800',
+        { defectReasonId: '9', failedQty: 1, shortQty: 3 },
+        'user-kcs',
+      );
 
       expect(prisma.qcReview.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1539,7 +1583,11 @@ describe('QcReviewsService', () => {
 
     it('reviewPieceStep: thiếu + lỗi > số đã gửi (10) -> 400', async () => {
       await expect(
-        service.reviewPieceStep('800', { failedQty: 6, shortQty: 5 }, 'user-kcs'),
+        service.reviewPieceStep(
+          '800',
+          { defectReasonId: '9', failedQty: 6, shortQty: 5 },
+          'user-kcs',
+        ),
       ).rejects.toThrow(BadRequestException);
       expect(prisma.pieceStepBundle.updateMany).not.toHaveBeenCalled();
     });
@@ -1579,7 +1627,11 @@ describe('QcReviewsService', () => {
       });
 
       it('lỗi 1 + thiếu 3: finalize nhận 4', async () => {
-        await service.reviewMaterialYieldStep('850', { failedQty: 1, shortQty: 3 }, 'user-kcs');
+        await service.reviewMaterialYieldStep(
+          '850',
+          { defectReasonId: '9', failedQty: 1, shortQty: 3 },
+          'user-kcs',
+        );
 
         expect(
           materialYieldRecipeProductionService.finalizeRecipeOutputIfLastStepComplete,
@@ -1588,7 +1640,11 @@ describe('QcReviewsService', () => {
 
       it('thiếu + lỗi > số đã gửi -> 400', async () => {
         await expect(
-          service.reviewMaterialYieldStep('850', { failedQty: 6, shortQty: 5 }, 'user-kcs'),
+          service.reviewMaterialYieldStep(
+            '850',
+            { defectReasonId: '9', failedQty: 6, shortQty: 5 },
+            'user-kcs',
+          ),
         ).rejects.toThrow(BadRequestException);
       });
     });
@@ -1629,6 +1685,7 @@ describe('QcReviewsService', () => {
           service.reviewStepBundle(
             '800',
             {
+              defectReasonId: '9',
               segments: failed > 0 ? [{ segmentSpecId: '30', failedQty: failed, scrapQty: 1 }] : [],
             },
             'user-kcs',
@@ -1647,7 +1704,8 @@ describe('QcReviewsService', () => {
         setup: () => {
           prisma.qcReview.create.mockResolvedValue(bundleQcReview);
         },
-        run: (failed) => service.reviewPieceStep('800', { failedQty: failed }, 'user-kcs'),
+        run: (failed) =>
+          service.reviewPieceStep('800', { defectReasonId: '9', failedQty: failed }, 'user-kcs'),
         updateMany: () => prisma.pieceStepBundle.updateMany,
         looksUpPi: false,
       },
@@ -1666,7 +1724,12 @@ describe('QcReviewsService', () => {
             materialYieldStepBundleId: 850n,
           });
         },
-        run: (failed) => service.reviewMaterialYieldStep('850', { failedQty: failed }, 'user-kcs'),
+        run: (failed) =>
+          service.reviewMaterialYieldStep(
+            '850',
+            { defectReasonId: '9', failedQty: failed },
+            'user-kcs',
+          ),
         updateMany: () => prisma.materialYieldStepBundle.updateMany,
         looksUpPi: true,
       },
@@ -1810,6 +1873,114 @@ describe('QcReviewsService', () => {
     it('không gửi defectReasonId -> không tra bảng lý do lỗi', async () => {
       await service.review('100', { segments: [] }, 'u');
       expect(prisma.defectReason.findUnique).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('T4-5 (20/11/2026): có phần không đạt thì bắt buộc nguyên nhân (6 đường chấm)', () => {
+    const MSG = 'Có số lượng không đạt - phải chọn nguyên nhân không đạt';
+    const cutBundleRow = {
+      id: 1n,
+      steelIssueId: 100n,
+      status: 'AWAITING_QC',
+      steelIssue: {
+        productionInvoiceId: 900n,
+        materialId: 30n,
+        material: { code: 'SAT-30', name: 'Sắt phi 10' },
+      },
+    };
+    const stepBundleRow = {
+      id: 800n,
+      productionInvoiceId: 900n,
+      materialId: 30n,
+      step: 'UON',
+      status: 'AWAITING_QC',
+      material: { code: 'SAT-30', name: 'Sắt hộp', spec: '25x50' },
+    };
+    const myBundleRow = { id: 850n, productionInvoiceId: 900n, qty: 10, status: 'AWAITING_QC' };
+
+    beforeEach(() => {
+      prisma.cutBundle.findUnique.mockResolvedValue(cutBundleRow);
+      prisma.stepBundle.findUnique.mockResolvedValue(stepBundleRow);
+      materialYieldRecipeProductionService.findOneBundleRowOrThrow.mockResolvedValue(myBundleRow);
+    });
+
+    const segFail = [{ segmentSpecId: '30', failedQty: 2, scrapQty: 1 }];
+    const cases: [string, (reasonId?: string) => Promise<unknown>][] = [
+      ['review', (r) => service.review('100', { segments: segFail, defectReasonId: r }, 'u')],
+      [
+        'reviewCutBundle',
+        (r) => service.reviewCutBundle('1', { segments: segFail, defectReasonId: r }, 'u'),
+      ],
+      [
+        'reviewStepBundle',
+        (r) => service.reviewStepBundle('800', { segments: segFail, defectReasonId: r }, 'u'),
+      ],
+      [
+        'reviewProductionBatch',
+        (r) => service.reviewProductionBatch('700', { failedQty: 1, defectReasonId: r }, 'u'),
+      ],
+      [
+        'reviewPieceStep',
+        (r) => service.reviewPieceStep('800', { failedQty: 1, defectReasonId: r }, 'u'),
+      ],
+      [
+        'reviewMaterialYieldStep',
+        (r) => service.reviewMaterialYieldStep('850', { failedQty: 1, defectReasonId: r }, 'u'),
+      ],
+    ];
+
+    it.each(cases)('%s: có lỗi mà không có nguyên nhân -> 400, không ghi gì', async (_n, call) => {
+      await expect(call()).rejects.toThrow(new BadRequestException(MSG));
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.qcReview.create).not.toHaveBeenCalled();
+    });
+
+    it.each(cases)(
+      '%s: có lỗi kèm nguyên nhân có thật -> chấm được, lưu đúng id',
+      async (_n, call) => {
+        await call('9');
+        const arg = (prisma.qcReview.create.mock.calls as unknown[][])[0][0] as {
+          data: { defectReasonId?: bigint };
+        };
+        expect(arg.data.defectReasonId).toBe(9n);
+      },
+    );
+
+    it.each([
+      [
+        'reviewCutBundle',
+        () =>
+          service.reviewCutBundle(
+            '1',
+            { segments: [{ segmentSpecId: '30', failedQty: 0, shortQty: 2 }] },
+            'u',
+          ),
+      ],
+      [
+        'reviewStepBundle',
+        () =>
+          service.reviewStepBundle(
+            '800',
+            { segments: [{ segmentSpecId: '30', failedQty: 0, shortQty: 2 }] },
+            'u',
+          ),
+      ],
+      [
+        'reviewProductionBatch',
+        () => service.reviewProductionBatch('700', { failedQty: 0, shortQty: 2 }, 'u'),
+      ],
+      ['reviewPieceStep', () => service.reviewPieceStep('800', { failedQty: 0, shortQty: 2 }, 'u')],
+      [
+        'reviewMaterialYieldStep',
+        () => service.reviewMaterialYieldStep('850', { failedQty: 0, shortQty: 2 }, 'u'),
+      ],
+      [
+        'reviewProductionBatch đạt hết',
+        () => service.reviewProductionBatch('700', { failedQty: 0 }, 'u'),
+      ],
+    ])('%s: chỉ thiếu / đạt hết, không có nguyên nhân -> vẫn chấm được', async (_n, call) => {
+      await expect(call()).resolves.toBeDefined();
+      expect(prisma.qcReview.create).toHaveBeenCalled();
     });
   });
 

@@ -92,6 +92,8 @@ function build() {
         });
       }),
     },
+    // 20/11/2026 (T4-5): lý do lỗi dùng chung cho mọi lần chấm có phần không đạt.
+    defectReason: { findUnique: jest.fn().mockResolvedValue({ id: 9n }) },
     segmentSpec: { findMany: jest.fn().mockResolvedValue(SPECS) },
     cutPatternSegment: { groupBy: jest.fn(() => Promise.resolve(doneRows())) },
     stepBatchSegment: { groupBy: jest.fn(() => Promise.resolve(doneRows())) },
@@ -294,7 +296,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
   describe('AC27: chấm Cắt - Thực có 115 / Đã báo 120, lỗi 3', () => {
     it('AC27: lưu failedQty 3 + shortQty 5 + scrapQty 0 ở cả dòng cỡ và tổng; response trả đúng', async () => {
       const c = build();
-      const res = await c.service.reviewCutBundle('1', { segments: [seg('30', 3, 5)] }, 'kcs-1');
+      const res = await c.service.reviewCutBundle(
+        '1',
+        { defectReasonId: '9', segments: [seg('30', 3, 5)] },
+        'kcs-1',
+      );
       expect(c.state.reviews).toHaveLength(1);
       expect(c.state.reviews[0]).toMatchObject({ failedQty: 3, shortQty: 5 });
       expect(c.state.reviews[0].segments?.create).toEqual([
@@ -312,7 +318,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
 
     it('AC27: tin QC_FAILED nêu "3 đoạn 441mm lỗi" và câu thiếu 5 đoạn; failedQty của tin = 3 (thiếu KHÔNG cộng vào lỗi, không phải 8)', async () => {
       const c = build();
-      await c.service.reviewCutBundle('1', { segments: [seg('30', 3, 5)] }, 'kcs-1');
+      await c.service.reviewCutBundle(
+        '1',
+        { defectReasonId: '9', segments: [seg('30', 3, 5)] },
+        'kcs-1',
+      );
       const p = emitted(c, 'QC_FAILED')!;
       expect(p.failedQty).toBe(3);
       expect(p.piCode).toBe('PI-900');
@@ -326,11 +336,19 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
     it('AC27 biên: thiếu = đúng 120 đoạn của đợt qua; 121 bị 400; không ghi gì', async () => {
       const ok = build();
       await expect(
-        ok.service.reviewCutBundle('1', { segments: [seg('30', 0, 120)] }, 'kcs-1'),
+        ok.service.reviewCutBundle(
+          '1',
+          { defectReasonId: '9', segments: [seg('30', 0, 120)] },
+          'kcs-1',
+        ),
       ).resolves.toBeDefined();
       const bad = build();
       const err = await errOf(
-        bad.service.reviewCutBundle('1', { segments: [seg('30', 0, 121)] }, 'kcs-1'),
+        bad.service.reviewCutBundle(
+          '1',
+          { defectReasonId: '9', segments: [seg('30', 0, 121)] },
+          'kcs-1',
+        ),
       );
       expect(err).toBeInstanceOf(BadRequestException);
       expect(bad.prisma.qcReview.create).not.toHaveBeenCalled();
@@ -340,17 +358,29 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
     it('AC27 biên: lỗi + thiếu cộng đúng bằng số đoạn (115 + 5 = 120) qua; 116 + 5 bị chặn', async () => {
       const ok = build();
       await expect(
-        ok.service.reviewCutBundle('1', { segments: [seg('30', 115, 5)] }, 'kcs-1'),
+        ok.service.reviewCutBundle(
+          '1',
+          { defectReasonId: '9', segments: [seg('30', 115, 5)] },
+          'kcs-1',
+        ),
       ).resolves.toBeDefined();
       const bad = build();
       await expect(
-        bad.service.reviewCutBundle('1', { segments: [seg('30', 116, 5)] }, 'kcs-1'),
+        bad.service.reviewCutBundle(
+          '1',
+          { defectReasonId: '9', segments: [seg('30', 116, 5)] },
+          'kcs-1',
+        ),
       ).rejects.toThrow(BadRequestException);
     });
 
     it('AC27 / tin Cắt: việc cho lỗi Cắt luôn là cắt lại, không có ý "Làm lại" của công đoạn phụ', async () => {
       const c = build();
-      await c.service.reviewCutBundle('1', { segments: [seg('30', 3, 5)] }, 'kcs-1');
+      await c.service.reviewCutBundle(
+        '1',
+        { defectReasonId: '9', segments: [seg('30', 3, 5)] },
+        'kcs-1',
+      );
       const todo = String(emitted(c, 'QC_FAILED')!.todo);
       expect(todo).toContain('cắt lại 3 đoạn 441mm');
       expect(todo).not.toContain('Làm lại');
@@ -361,7 +391,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
     it('AC29: đợt công đoạn có cỡ 441mm báo 120, thiếu 5 + lỗi 118 -> 400 "Cỡ 441mm: thiếu 5 + lỗi 118 vượt số đã báo trong đợt (120)"', async () => {
       const c = build();
       const err = await errOf(
-        c.service.reviewStepBundle('2', { segments: [seg('30', 118, 5, 0)] }, 'kcs-1'),
+        c.service.reviewStepBundle(
+          '2',
+          { defectReasonId: '9', segments: [seg('30', 118, 5, 0)] },
+          'kcs-1',
+        ),
       );
       expect(err).toBeInstanceOf(BadRequestException);
       expect(err.message).toContain('Cỡ 441mm: thiếu 5 + lỗi 118 vượt số đã báo trong đợt (120)');
@@ -371,7 +405,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
     it('AC29: lô Hàn báo 60, thiếu 10 + không đạt 55 -> 400 "Thiếu (10) + không đạt (55) vượt số đã báo (60)"', async () => {
       const c = build();
       const err = await errOf(
-        c.service.reviewProductionBatch('700', { failedQty: 55, shortQty: 10 }, 'kcs-1'),
+        c.service.reviewProductionBatch(
+          '700',
+          { defectReasonId: '9', failedQty: 55, shortQty: 10 },
+          'kcs-1',
+        ),
       );
       expect(err).toBeInstanceOf(BadRequestException);
       expect(err.message).toContain('Thiếu (10) + không đạt (55) vượt số đã báo (60)');
@@ -382,14 +420,22 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
     it('AC29 biên: lô Hàn báo 60, thiếu 10 + không đạt 50 = đúng 60 qua (không câu lỗi)', async () => {
       const c = build();
       await expect(
-        c.service.reviewProductionBatch('700', { failedQty: 50, shortQty: 10 }, 'kcs-1'),
+        c.service.reviewProductionBatch(
+          '700',
+          { defectReasonId: '9', failedQty: 50, shortQty: 10 },
+          'kcs-1',
+        ),
       ).resolves.toBeDefined();
     });
 
     it('AC29 biên: đợt công đoạn thiếu 5 + lỗi 115 (scrap 0) = đúng 120 qua', async () => {
       const c = build();
       await expect(
-        c.service.reviewStepBundle('2', { segments: [seg('30', 115, 5, 0)] }, 'kcs-1'),
+        c.service.reviewStepBundle(
+          '2',
+          { defectReasonId: '9', segments: [seg('30', 115, 5, 0)] },
+          'kcs-1',
+        ),
       ).resolves.toBeDefined();
     });
   });
@@ -397,7 +443,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
   describe('AC30 / Câu 1 B: tin QC_FAILED công đoạn phụ tách "Bỏ" và "Làm lại"', () => {
     it('AC30: Uốn 355mm lỗi 8 (bỏ 5, làm lại 3): lưu failed 8 / scrap 5; tin failedQty 8, hai ý tách riêng', async () => {
       const c = build();
-      await c.service.reviewStepBundle('2', { segments: [seg('31', 8, 0, 5)] }, 'kcs-1');
+      await c.service.reviewStepBundle(
+        '2',
+        { defectReasonId: '9', segments: [seg('31', 8, 0, 5)] },
+        'kcs-1',
+      );
       expect(c.state.reviews[0].segments?.create).toEqual([
         { segmentSpecId: 31n, failedQty: 8, shortQty: 0, scrapQty: 5 },
       ]);
@@ -411,7 +461,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
 
     it('Câu 1 B: scrapQty 0 + lỗi > 0 (kiểu phiếu cũ) được hiểu là làm lại - qua, lưu scrap 0, tin chỉ có ý "Làm lại"', async () => {
       const c = build();
-      await c.service.reviewStepBundle('2', { segments: [seg('31', 5, 0, 0)] }, 'kcs-1');
+      await c.service.reviewStepBundle(
+        '2',
+        { defectReasonId: '9', segments: [seg('31', 5, 0, 0)] },
+        'kcs-1',
+      );
       expect(c.state.reviews[0].segments?.create?.[0]).toMatchObject({ scrapQty: 0 });
       const todo = String(emitted(c, 'QC_FAILED')!.todo);
       expect(todo).toContain('Làm lại 5 đoạn 355mm');
@@ -420,7 +474,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
 
     it('AC30 biên: bỏ = lỗi (5 / 5) -> tin chỉ có ý "Bỏ", không có "Làm lại"', async () => {
       const c = build();
-      await c.service.reviewStepBundle('2', { segments: [seg('31', 5, 0, 5)] }, 'kcs-1');
+      await c.service.reviewStepBundle(
+        '2',
+        { defectReasonId: '9', segments: [seg('31', 5, 0, 5)] },
+        'kcs-1',
+      );
       const todo = String(emitted(c, 'QC_FAILED')!.todo);
       expect(todo).toContain('Bỏ 5 đoạn 355mm');
       expect(todo).not.toContain('Làm lại');
@@ -430,7 +488,7 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
       const c = build();
       await c.service.reviewStepBundle(
         '2',
-        { segments: [seg('31', 8, 0, 5), seg('30', 2, 0, 0)] },
+        { defectReasonId: '9', segments: [seg('31', 8, 0, 5), seg('30', 2, 0, 0)] },
         'kcs-1',
       );
       const p = emitted(c, 'QC_FAILED')!;
@@ -446,7 +504,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
     it('AC32: lỗi > 0 mà không gửi scrapQty -> 400 "Cỡ 441mm: chọn số đoạn lỗi phải bỏ (cắt lại)..." kèm "tải lại trang"; không ghi gì', async () => {
       const c = build();
       const err = await errOf(
-        c.service.reviewStepBundle('2', { segments: [seg('30', 5, 0)] }, 'kcs-1'),
+        c.service.reviewStepBundle(
+          '2',
+          { defectReasonId: '9', segments: [seg('30', 5, 0)] },
+          'kcs-1',
+        ),
       );
       expect(err).toBeInstanceOf(BadRequestException);
       expect(err.message).toContain('Cỡ 441mm: chọn số đoạn lỗi phải bỏ (cắt lại)');
@@ -459,7 +521,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
     it('AC32: scrapQty 6 > lỗi 5 -> 400 "số bỏ (6) lớn hơn số lỗi (5)"', async () => {
       const c = build();
       const err = await errOf(
-        c.service.reviewStepBundle('2', { segments: [seg('30', 5, 0, 6)] }, 'kcs-1'),
+        c.service.reviewStepBundle(
+          '2',
+          { defectReasonId: '9', segments: [seg('30', 5, 0, 6)] },
+          'kcs-1',
+        ),
       );
       expect(err.message).toContain('số bỏ (6) lớn hơn số lỗi (5)');
       expect(c.prisma.qcReview.create).not.toHaveBeenCalled();
@@ -468,13 +534,21 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
     it('AC32 biên: chỉ thiếu (lỗi 0) mà có scrapQty 2 -> 400 (bỏ không thể lớn hơn lỗi 0)', async () => {
       const c = build();
       await expect(
-        c.service.reviewStepBundle('2', { segments: [seg('30', 0, 3, 2)] }, 'kcs-1'),
+        c.service.reviewStepBundle(
+          '2',
+          { defectReasonId: '9', segments: [seg('30', 0, 3, 2)] },
+          'kcs-1',
+        ),
       ).rejects.toThrow(/lớn hơn số lỗi \(0\)/);
     });
 
     it('AC32: chấm Cắt kèm scrapQty (kể cả lớn hơn lỗi) -> bỏ qua, lưu 0, không 400', async () => {
       const c = build();
-      await c.service.reviewCutBundle('1', { segments: [seg('30', 2, 0, 9)] }, 'kcs-1');
+      await c.service.reviewCutBundle(
+        '1',
+        { defectReasonId: '9', segments: [seg('30', 2, 0, 9)] },
+        'kcs-1',
+      );
       expect(c.state.reviews[0].segments?.create?.[0]).toMatchObject({
         failedQty: 2,
         scrapQty: 0,
@@ -491,7 +565,7 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
       ]);
       const res = await c.service.reviewCutBundle(
         '1',
-        { segments: [seg('31', 1, 4), seg('30', 2, 0), seg('32', 0, 6)] },
+        { defectReasonId: '9', segments: [seg('31', 1, 4), seg('30', 2, 0), seg('32', 0, 6)] },
         'kcs-1',
       );
       expect(c.steel.stepOveruseAfterCutShortage).toHaveBeenCalledTimes(1);
@@ -516,7 +590,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
           }).map((o) => ({ ...o, cutLengthMm: 355 })),
         ),
       );
-      const res = await c.service.reviewCutBundle('1', { segments: [seg('31', 0, 5)] }, 'kcs-1');
+      const res = await c.service.reviewCutBundle(
+        '1',
+        { defectReasonId: '9', segments: [seg('31', 0, 5)] },
+        'kcs-1',
+      );
       const note =
         'Uốn cỡ 355mm đã báo nhiều hơn số đoạn cắt thực có (1175) 5 đoạn - Uốn sẽ bị chặn tới khi cắt thêm hoặc KCS Uốn ghi thiếu';
       expect(res.notes).toEqual([note]);
@@ -532,7 +610,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
 
     it('MF8: hàm trả [] -> notes = [] và tin không thêm chữ nào ngoài câu thiếu', async () => {
       const c = build();
-      const res = await c.service.reviewCutBundle('1', { segments: [seg('31', 0, 5)] }, 'kcs-1');
+      const res = await c.service.reviewCutBundle(
+        '1',
+        { defectReasonId: '9', segments: [seg('31', 0, 5)] },
+        'kcs-1',
+      );
       expect(res.notes).toEqual([]);
       expect(emitted(c, 'QC_PASSED')!.note).toBe(
         `KCS ghi thiếu 5 đoạn so với số báo (${SHORT_SENTENCE}).`,
@@ -542,16 +624,28 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
     it('MF8: đợt cắt cũ chưa gắn lệnh (productionOrderId null) -> truyền null cho hàm', async () => {
       const c = build();
       c.rows.cut.productionOrderId = null as unknown as bigint;
-      await c.service.reviewCutBundle('1', { segments: [seg('31', 0, 5)] }, 'kcs-1');
+      await c.service.reviewCutBundle(
+        '1',
+        { defectReasonId: '9', segments: [seg('31', 0, 5)] },
+        'kcs-1',
+      );
       expect(c.steel.stepOveruseAfterCutShortage).toHaveBeenCalledWith(900n, 30n, null, [31n]);
     });
 
     it('MF8: notes chỉ trả khi chấm Cắt - chấm công đoạn phụ, lô, pat, chân nhôm trả notes = [] và không gọi hàm', async () => {
       const c = build();
-      const a = await c.service.reviewStepBundle('2', { segments: [seg('31', 0, 5)] }, 'kcs-1');
+      const a = await c.service.reviewStepBundle(
+        '2',
+        { defectReasonId: '9', segments: [seg('31', 0, 5)] },
+        'kcs-1',
+      );
       expect(a.notes).toEqual([]);
       const b = build();
-      const r2 = await b.service.reviewProductionBatch('700', { failedQty: 0, shortQty: 5 }, 'k');
+      const r2 = await b.service.reviewProductionBatch(
+        '700',
+        { defectReasonId: '9', failedQty: 0, shortQty: 5 },
+        'k',
+      );
       expect(r2.notes).toEqual([]);
       expect(c.steel.stepOveruseAfterCutShortage).not.toHaveBeenCalled();
       expect(b.steel.stepOveruseAfterCutShortage).not.toHaveBeenCalled();
@@ -563,7 +657,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
 
     it('AC35: báo 60, Thực có 56 (thiếu 4), không đạt 1 -> khoá, ghi báo-thiếu 56, trừ đoạn 56 (lúc đó lô đang ghi 56), hạ về 55, mảnh vào kho 55, rồi tạo review; sau commit theo thứ tự', async () => {
       const c = build();
-      await c.service.reviewProductionBatch('700', { failedQty: 1, shortQty: 4 }, 'kcs-1');
+      await c.service.reviewProductionBatch(
+        '700',
+        { defectReasonId: '9', failedQty: 1, shortQty: 4 },
+        'kcs-1',
+      );
       expect(c.calls).toEqual([
         'lock',
         'claim:56',
@@ -582,7 +680,7 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
 
     it('AC35 biên: Thực có = Đã báo (thiếu 0), không lỗi -> trừ đoạn 60, KHÔNG ghi lần 2, mảnh vào kho 60', async () => {
       const c = build();
-      await c.service.reviewProductionBatch('700', { failedQty: 0 }, 'kcs-1');
+      await c.service.reviewProductionBatch('700', { defectReasonId: '9', failedQty: 0 }, 'kcs-1');
       expect(c.calls.slice(0, 5)).toEqual([
         'lock',
         'claim:60',
@@ -596,7 +694,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
 
     it('AC35 biên: chỉ thiếu 4 (không lỗi) -> lô chốt 56, trừ đoạn 56, không update lần 2', async () => {
       const c = build();
-      await c.service.reviewProductionBatch('700', { failedQty: 0, shortQty: 4 }, 'kcs-1');
+      await c.service.reviewProductionBatch(
+        '700',
+        { defectReasonId: '9', failedQty: 0, shortQty: 4 },
+        'kcs-1',
+      );
       expect(c.calls.slice(0, 5)).toEqual([
         'lock',
         'claim:56',
@@ -608,7 +710,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
 
     it('AC35 biên: thiếu hết 60 (Thực có 0) -> trừ đoạn 0, lô chốt 0, vẫn tạo review thiếu 60', async () => {
       const c = build();
-      await c.service.reviewProductionBatch('700', { failedQty: 0, shortQty: 60 }, 'kcs-1');
+      await c.service.reviewProductionBatch(
+        '700',
+        { defectReasonId: '9', failedQty: 0, shortQty: 60 },
+        'kcs-1',
+      );
       expect(c.calls.slice(0, 3)).toEqual(['lock', 'claim:0', 'consume:0:seen0']);
       expect(c.state.batchReported).toBe(0);
       expect(c.state.reviews[0]).toMatchObject({ failedQty: 0, shortQty: 60 });
@@ -616,7 +722,7 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
 
     it('AC35 biên: không đạt hết 60 (thiếu 0) -> trừ đoạn 60 (đoạn đã dùng), mảnh đạt hạ về 0', async () => {
       const c = build();
-      await c.service.reviewProductionBatch('700', { failedQty: 60 }, 'kcs-1');
+      await c.service.reviewProductionBatch('700', { defectReasonId: '9', failedQty: 60 }, 'kcs-1');
       expect(c.calls.slice(0, 5)).toEqual([
         'lock',
         'claim:60',
@@ -628,7 +734,9 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
 
     it('AC35 biên: không đạt 61 trên báo 60 (thiếu 0) -> 400 câu cũ, chưa mở transaction', async () => {
       const c = build();
-      const err = await errOf(c.service.reviewProductionBatch('700', { failedQty: 61 }, 'kcs-1'));
+      const err = await errOf(
+        c.service.reviewProductionBatch('700', { defectReasonId: '9', failedQty: 61 }, 'kcs-1'),
+      );
       expect(err).toBeInstanceOf(BadRequestException);
       expect(err.message).toBe('Số không đạt (61) không được vượt số lượng đã báo (60)');
       expect(c.prisma.$transaction).not.toHaveBeenCalled();
@@ -638,7 +746,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
       const c = build();
       c.pb.consumeSegmentsAtReviewInTx.mockRejectedValue(new Error('kho lỗi'));
       await expect(
-        c.service.reviewProductionBatch('700', { failedQty: 1, shortQty: 4 }, 'kcs-1'),
+        c.service.reviewProductionBatch(
+          '700',
+          { defectReasonId: '9', failedQty: 1, shortQty: 4 },
+          'kcs-1',
+        ),
       ).rejects.toThrow('kho lỗi');
       expect(c.prisma.qcReview.create).not.toHaveBeenCalled();
       expect(c.pb.postPieceOutputIfFinal).not.toHaveBeenCalled();
@@ -657,7 +769,7 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
       const c = build();
       c.pb.postPieceOutputIfFinal.mockRejectedValue(new Error('ghi kho mảnh lỗi'));
       await expect(
-        c.service.reviewProductionBatch('700', { failedQty: 0 }, 'kcs-1'),
+        c.service.reviewProductionBatch('700', { defectReasonId: '9', failedQty: 0 }, 'kcs-1'),
       ).rejects.toThrow('ghi kho mảnh lỗi');
       expect(c.prisma.qcReview.create).not.toHaveBeenCalled();
       expect(c.notif.emit).not.toHaveBeenCalled();
@@ -667,7 +779,7 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
     it('AC40: mọi lần chấm lô (có / không thiếu, Hàn / Sơn) đều chạy trong transaction có timeout 20 giây, không dùng timeout mặc định', async () => {
       for (const [stage, o] of [
         ['HAN', { failedQty: 0, shortQty: 6 }],
-        ['SON', { failedQty: 2 }],
+        ['SON', { failedQty: 2, defectReasonId: '9' }],
       ] as const) {
         const c = build();
         c.rows.batch.stage = stage;
@@ -681,14 +793,22 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
   describe('AC37: pat / chân nhôm', () => {
     it('AC37: pat thiếu 3 + lỗi 1: review tạo TRƯỚC rồi mới autoFinalize (cùng transaction); autoFinalize ném lỗi thì không tin / realtime', async () => {
       const c = build();
-      await c.service.reviewPieceStep('800', { failedQty: 1, shortQty: 3 }, 'kcs-1');
+      await c.service.reviewPieceStep(
+        '800',
+        { defectReasonId: '9', failedQty: 1, shortQty: 3 },
+        'kcs-1',
+      );
       expect(c.calls.slice(0, 2)).toEqual(['create', 'autoFinalize']);
       expect(c.state.reviews[0]).toMatchObject({ failedQty: 1, shortQty: 3 });
 
       const bad = build();
       bad.pb.autoFinalizePieceOutputIfLastStepComplete.mockRejectedValue(new Error('lỗi sinh lô'));
       await expect(
-        bad.service.reviewPieceStep('800', { failedQty: 1, shortQty: 3 }, 'kcs-1'),
+        bad.service.reviewPieceStep(
+          '800',
+          { defectReasonId: '9', failedQty: 1, shortQty: 3 },
+          'kcs-1',
+        ),
       ).rejects.toThrow('lỗi sinh lô');
       expect(bad.notif.emit).not.toHaveBeenCalled();
       expect(bad.realtime.publishEntityChanged).not.toHaveBeenCalled();
@@ -696,7 +816,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
 
     it('AC37: chân nhôm thiếu 3 + lỗi 1 -> finalize nhận 4 (lỗi + thiếu), không phải 1 hay 3; tin báo thiếu theo đơn vị "cái"', async () => {
       const c = build();
-      await c.service.reviewMaterialYieldStep('900', { failedQty: 1, shortQty: 3 }, 'kcs-1');
+      await c.service.reviewMaterialYieldStep(
+        '900',
+        { defectReasonId: '9', failedQty: 1, shortQty: 3 },
+        'kcs-1',
+      );
       expect(c.my.finalizeRecipeOutputIfLastStepComplete).toHaveBeenCalledWith(
         expect.anything(),
         expect.anything(),
@@ -709,7 +833,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
     it('AC37 biên: pat lỗi + thiếu vượt 50 đã gửi -> 400, không ghi', async () => {
       const c = build();
       await expect(
-        c.service.reviewPieceStep('800', { failedQty: 48, shortQty: 3 }, 'kcs-1'),
+        c.service.reviewPieceStep(
+          '800',
+          { defectReasonId: '9', failedQty: 48, shortQty: 3 },
+          'kcs-1',
+        ),
       ).rejects.toThrow(BadRequestException);
       expect(c.prisma.qcReview.create).not.toHaveBeenCalled();
     });
@@ -717,11 +845,27 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
 
   describe('AC43: chấm trùng - 1 người 201, người kia 409 lời thường, chỉ 1 qc_review', () => {
     const kinds: [string, (c: Ctx, who: string) => Promise<unknown>][] = [
-      ['đợt cắt', (c, w) => c.service.reviewCutBundle('1', { segments: [] }, w)],
-      ['đợt công đoạn phụ', (c, w) => c.service.reviewStepBundle('2', { segments: [] }, w)],
-      ['lô mảnh', (c, w) => c.service.reviewProductionBatch('700', { failedQty: 0 }, w)],
-      ['nhóm pat', (c, w) => c.service.reviewPieceStep('800', { failedQty: 0 }, w)],
-      ['nhóm chân nhôm', (c, w) => c.service.reviewMaterialYieldStep('900', { failedQty: 0 }, w)],
+      [
+        'đợt cắt',
+        (c, w) => c.service.reviewCutBundle('1', { defectReasonId: '9', segments: [] }, w),
+      ],
+      [
+        'đợt công đoạn phụ',
+        (c, w) => c.service.reviewStepBundle('2', { defectReasonId: '9', segments: [] }, w),
+      ],
+      [
+        'lô mảnh',
+        (c, w) => c.service.reviewProductionBatch('700', { defectReasonId: '9', failedQty: 0 }, w),
+      ],
+      [
+        'nhóm pat',
+        (c, w) => c.service.reviewPieceStep('800', { defectReasonId: '9', failedQty: 0 }, w),
+      ],
+      [
+        'nhóm chân nhôm',
+        (c, w) =>
+          c.service.reviewMaterialYieldStep('900', { defectReasonId: '9', failedQty: 0 }, w),
+      ],
     ];
 
     it.each(kinds)(
@@ -755,8 +899,16 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
     it('AC43: lô mảnh - người thua không trừ đoạn lần 2 (consume chỉ chạy ở người thắng)', async () => {
       const c = build();
       await Promise.allSettled([
-        c.service.reviewProductionBatch('700', { failedQty: 0, shortQty: 4 }, 'kcs-1'),
-        c.service.reviewProductionBatch('700', { failedQty: 0, shortQty: 4 }, 'kcs-2'),
+        c.service.reviewProductionBatch(
+          '700',
+          { defectReasonId: '9', failedQty: 0, shortQty: 4 },
+          'kcs-1',
+        ),
+        c.service.reviewProductionBatch(
+          '700',
+          { defectReasonId: '9', failedQty: 0, shortQty: 4 },
+          'kcs-2',
+        ),
       ]);
       expect(c.pb.consumeSegmentsAtReviewInTx).toHaveBeenCalledTimes(1);
       expect(c.pb.postPieceOutputIfFinal).toHaveBeenCalledTimes(1);
@@ -765,24 +917,28 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
     it('AC43: đợt đã ở trạng thái chấm xong khi đọc (QC_PASSED / QC_DONE) -> cùng câu 409 lời thường', async () => {
       const cut = build();
       cut.rows.cut.status = 'QC_PASSED';
-      await expect(cut.service.reviewCutBundle('1', { segments: [] }, 'k')).rejects.toThrow(DUP);
+      await expect(
+        cut.service.reviewCutBundle('1', { defectReasonId: '9', segments: [] }, 'k'),
+      ).rejects.toThrow(DUP);
       const step = build();
       step.rows.step.status = 'QC_PASSED';
-      await expect(step.service.reviewStepBundle('2', { segments: [] }, 'k')).rejects.toThrow(DUP);
+      await expect(
+        step.service.reviewStepBundle('2', { defectReasonId: '9', segments: [] }, 'k'),
+      ).rejects.toThrow(DUP);
       const batch = build();
       batch.rows.batch.status = 'QC_DONE';
       await expect(
-        batch.service.reviewProductionBatch('700', { failedQty: 0 }, 'k'),
+        batch.service.reviewProductionBatch('700', { defectReasonId: '9', failedQty: 0 }, 'k'),
       ).rejects.toThrow(DUP);
       const piece = build();
       piece.rows.piece.status = 'QC_PASSED';
-      await expect(piece.service.reviewPieceStep('800', { failedQty: 0 }, 'k')).rejects.toThrow(
-        DUP,
-      );
+      await expect(
+        piece.service.reviewPieceStep('800', { defectReasonId: '9', failedQty: 0 }, 'k'),
+      ).rejects.toThrow(DUP);
       const my = build();
       my.rows.my.status = 'QC_PASSED';
       await expect(
-        my.service.reviewMaterialYieldStep('900', { failedQty: 0 }, 'k'),
+        my.service.reviewMaterialYieldStep('900', { defectReasonId: '9', failedQty: 0 }, 'k'),
       ).rejects.toThrow(DUP);
     });
   });
@@ -792,7 +948,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
       const c = build();
       c.rows.batch.stage = 'SON';
       (queueWorkshopIdOfPi as jest.Mock).mockResolvedValue(2n);
-      await c.service.reviewProductionBatch('700', { failedQty: 2, shortQty: 3 }, 'kcs-1');
+      await c.service.reviewProductionBatch(
+        '700',
+        { defectReasonId: '9', failedQty: 2, shortQty: 3 },
+        'kcs-1',
+      );
       expect(queueWorkshopIdOfPi).toHaveBeenCalledWith(expect.anything(), 'SON', 30n);
       const p = emitted(c, 'QC_FAILED')!;
       expect(p).toMatchObject({ workshopId: '2', failedQty: 2, senderRole: 'SON_STAFF' });
@@ -803,19 +963,23 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
     it('R1: lô Sơn nhưng không suy ra được xưởng sơn -> tin KHÔNG có khoá workshopId (không ghi null)', async () => {
       const c = build();
       c.rows.batch.stage = 'SON';
-      await c.service.reviewProductionBatch('700', { failedQty: 0 }, 'kcs-1');
+      await c.service.reviewProductionBatch('700', { defectReasonId: '9', failedQty: 0 }, 'kcs-1');
       expect(emitted(c, 'QC_PASSED')).not.toHaveProperty('workshopId');
     });
 
     it('R1: lô Hàn không tra xưởng sơn, tin không có workshopId', async () => {
       const c = build();
-      await c.service.reviewProductionBatch('700', { failedQty: 1 }, 'kcs-1');
+      await c.service.reviewProductionBatch('700', { defectReasonId: '9', failedQty: 1 }, 'kcs-1');
       expect(queueWorkshopIdOfPi).not.toHaveBeenCalled();
       expect(emitted(c, 'QC_FAILED')).not.toHaveProperty('workshopId');
     });
 
     it('D6: lô Hàn - luôn gọi paintReminder.refreshForOrder(id lệnh) sau commit, ở cả 3 kiểu chấm (đạt / thiếu / lỗi); refresh ném lỗi thì vẫn phát realtime và trả kết quả', async () => {
-      for (const o of [{ failedQty: 0 }, { failedQty: 0, shortQty: 5 }, { failedQty: 3 }]) {
+      for (const o of [
+        { failedQty: 0 },
+        { failedQty: 0, shortQty: 5 },
+        { failedQty: 3, defectReasonId: '9' },
+      ]) {
         const c = build();
         await c.service.reviewProductionBatch('700', o, 'kcs-1');
         expect(c.paint.refreshForOrder).toHaveBeenCalledTimes(1);
@@ -824,7 +988,11 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
       }
       const bad = build();
       bad.paint.refreshForOrder.mockRejectedValue(new Error('nhắc lỗi'));
-      const res = await bad.service.reviewProductionBatch('700', { failedQty: 0 }, 'kcs-1');
+      const res = await bad.service.reviewProductionBatch(
+        '700',
+        { defectReasonId: '9', failedQty: 0 },
+        'kcs-1',
+      );
       expect(res.id).toBe('501');
       expect(bad.realtime.publishEntityChanged).toHaveBeenCalledTimes(1);
     });
@@ -832,9 +1000,9 @@ describe('UB7 qc-reviews: KCS ghi Thực có / thiếu (QA)', () => {
     it('D6: lượt chấm bị 409 (chấm trùng) thì KHÔNG nhắc chuyển mảnh', async () => {
       const c = build();
       c.state.claimed = true;
-      await expect(c.service.reviewProductionBatch('700', { failedQty: 0 }, 'k')).rejects.toThrow(
-        DUP,
-      );
+      await expect(
+        c.service.reviewProductionBatch('700', { defectReasonId: '9', failedQty: 0 }, 'k'),
+      ).rejects.toThrow(DUP);
       expect(c.paint.refreshForOrder).not.toHaveBeenCalled();
     });
   });

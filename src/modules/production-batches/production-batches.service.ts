@@ -27,10 +27,16 @@ import { lockBusinessKey, lockBusinessKeyShared } from '../../common/utils/advis
 import {
   FLOOR_REPORT_REVERSED_REPLAY_MESSAGE,
   FloorReportContext,
+  FloorReportReplayExpected,
+  assertFloorReportReplayMatches,
   findFloorReportByKey,
   isIdempotencyConflict,
   writeFloorReport,
 } from '../../common/utils/floor-report.util';
+import {
+  IdempotencyKeyInUseException,
+  lockIdempotencyKey,
+} from '../../common/utils/idempotency.util';
 import { ProcessStepValue, sortProcessSteps } from '../../common/constants/process-steps.constant';
 import {
   assertItemPiHasActiveFloor,
@@ -277,7 +283,8 @@ export class ProductionBatchesService {
     await this.assertPieceInBom(order.bomRevisionId, pieceBigId, dto.stage);
     await this.assertMaterialYieldReceived(order.bomRevisionId, pieceBigId, order.id, dto.stage);
 
-    // P1 (MF3): khoá advisory production-batch-open là câu ĐẦU TIÊN của transaction (cùng thứ tự recordProductionBatch) -
+    // P1 (MF3): khoá advisory production-batch-open là khoá nghiệp vụ ĐẦU TIÊN của transaction (cùng thứ tự recordProductionBatch;
+    // ở đó khoá chống trùng, nếu có khoá, còn đi trước nó) -
     // FOR UPDATE production_orders của assertItemPiHasActiveFloorLocked lấy SAU, nên không khoá chéo với báo QR / KCS chấm.
     // Timeout 20 giây giữ như trước (DB pooled ở xa, transaction mặc định 5 giây dễ hết hạn - lỗi 500 "Database error").
     const created = await this.prisma.$transaction(
@@ -339,7 +346,20 @@ export class ProductionBatchesService {
     // Gửi lại cùng khoá (mạng chập chờn, bấm Lưu 2 lần) -> trả đợt đã cộng, KHÔNG cộng lần 2
     // (2026-10-12; trước đây cố ý không dedup vì "chỉ cộng dư, dễ nhận ra" - nay công nhân tự báo
     // trên điện thoại ở xưởng nên trùng là chuyện thường, xem FloorReport).
-    const replay = await this.replayRecordedBatch(idempotencyKey);
+    // Gửi lại: so vân tay (người, máy, mảnh, số, lệnh, tổ) trước khi trả - khác thì 422, không trả đợt của người khác (T4-4, 20/11/2026).
+    const pieceBigId = parseBigIntId(dto.pieceId);
+    const expected: FloorReportReplayExpected = {
+      kind: FloorReportKind.PIECE,
+      reportedById,
+      workstationId: ctx?.workstationId,
+      lines: [{ pieceId: pieceBigId, qty: dto.qty }],
+      batch: {
+        stage: dto.stage,
+        productionOrderId: parseBigIntId(productionOrderId),
+        pieceId: pieceBigId,
+      },
+    };
+    const replay = await this.replayRecordedBatch(this.prisma, idempotencyKey, expected);
     if (replay) return replay;
     const order = await this.findOrderOrThrow(productionOrderId);
     await assertItemPiHasActiveFloor(
@@ -347,7 +367,6 @@ export class ProductionBatchesService {
       order.productionInvoiceItemId,
       'ghi nhận sản lượng',
     );
-    const pieceBigId = parseBigIntId(dto.pieceId);
     await this.assertPieceInBom(order.bomRevisionId, pieceBigId, dto.stage);
     await this.assertMaterialYieldReceived(order.bomRevisionId, pieceBigId, order.id, dto.stage);
     const piItem = await this.prisma.productionInvoiceItem.findUniqueOrThrow({
@@ -357,8 +376,15 @@ export class ProductionBatchesService {
 
     let updated: ProductionBatchRow;
     try {
-      updated = await this.prisma.$transaction(
+      const outcome = await this.prisma.$transaction(
         async (tx) => {
+          // Thứ tự khoá (T4-4): try-lock khoá chống trùng TRƯỚC (bản trùng đang chạy -> 409 ngay, không xếp hàng rồi
+          // vấp "vượt"), rồi mới khoá nghiệp vụ production-batch-open (P1). Đọc lại theo khoá trong khoá: lần báo vừa
+          // commit thì không ghi nữa.
+          if (idempotencyKey) {
+            await lockIdempotencyKey(tx, 'floor_reports', idempotencyKey);
+            if (await findFloorReportByKey(tx, idempotencyKey)) return null;
+          }
           await lockBusinessKey(tx, `production-batch-open:${order.id}:${pieceBigId}:${dto.stage}`);
           await assertItemPiHasActiveFloorLocked(
             tx,
@@ -410,9 +436,20 @@ export class ProductionBatchesService {
         },
         { maxWait: 10_000, timeout: 20_000 },
       );
+      if (!outcome) {
+        // Lần báo cùng khoá vừa commit ở request khác: trả kết quả đó, không phát realtime / việc phụ.
+        const replayInTx = await this.replayRecordedBatch(this.prisma, idempotencyKey, expected);
+        if (replayInTx) return replayInTx;
+        throw new IdempotencyKeyInUseException();
+      }
+      updated = outcome;
     } catch (e) {
       if (isIdempotencyConflict(e)) {
-        const replayAfterRace = await this.replayRecordedBatch(idempotencyKey);
+        const replayAfterRace = await this.replayRecordedBatch(
+          this.prisma,
+          idempotencyKey,
+          expected,
+        );
         if (replayAfterRace) return replayAfterRace;
       }
       throw e;
@@ -429,15 +466,18 @@ export class ProductionBatchesService {
     return response;
   }
 
-  /** Kết quả lần "Lưu đợt" đã ghi với khoá này (null = chưa có). Khoá đã dùng cho loại báo khác -> 409. */
+  /**
+   * Kết quả lần "Lưu đợt" đã ghi với khoá này (null = chưa có). Khoá đã dùng cho loại báo khác / người khác / nội dung
+   * khác -> 422 (IdempotencyKeyReusedException, T4-4 20/11/2026; trước đây 409 hoặc trả nhầm đợt cũ).
+   */
   private async replayRecordedBatch(
+    client: Pick<PrismaTx, 'floorReport'>,
     idempotencyKey: string | null | undefined,
+    expected: FloorReportReplayExpected,
   ): Promise<ProductionBatchResponseDto | null> {
-    const prev = await findFloorReportByKey(this.prisma, idempotencyKey);
+    const prev = await findFloorReportByKey(client, idempotencyKey);
     if (!prev) return null;
-    if (prev.kind !== FloorReportKind.PIECE) {
-      throw new ConflictException('Idempotency-Key đã dùng cho một lần báo khác');
-    }
+    assertFloorReportReplayMatches(prev, expected);
     // QLSX đã hủy hết lần báo này (đợt bị xoá, dòng sổ còn lại nhưng không còn gắn đợt): không ghi dòng sổ mới.
     if (!prev.productionBatchId) throw new ConflictException(FLOOR_REPORT_REVERSED_REPLAY_MESSAGE);
     const batch = await this.prisma.productionBatch.findUniqueOrThrow({

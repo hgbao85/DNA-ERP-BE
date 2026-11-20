@@ -5,6 +5,10 @@ import { NotFoundException } from '@nestjs/common';
 import { NotificationAudience } from '../../generated/prisma/client';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { PrismaServiceType } from '../../prisma/prisma.service';
+import {
+  IdempotencyKeyInUseException,
+  IdempotencyKeyReusedException,
+} from '../../common/utils/idempotency.util';
 import { NotificationsService } from './notifications.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { RecipientResolverService } from './recipient-resolver.service';
@@ -58,7 +62,9 @@ describe('NotificationsService', () => {
       findFirst: jest.Mock;
       findMany: jest.Mock;
       count: jest.Mock;
+      findUnique: jest.Mock;
     };
+    $transaction?: jest.Mock;
     notificationRecipient: {
       createMany: jest.Mock;
       updateMany: jest.Mock;
@@ -113,6 +119,7 @@ describe('NotificationsService', () => {
         findFirst: jest.fn().mockResolvedValue(null),
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
+        findUnique: jest.fn().mockResolvedValue(null),
       },
       notificationRecipient: {
         createMany: jest.fn(),
@@ -124,6 +131,7 @@ describe('NotificationsService', () => {
         groupBy: jest.fn().mockResolvedValue([]),
       },
     };
+    prisma.$transaction = jest.fn((fn: (t: unknown) => Promise<unknown>) => fn(prisma));
     recipientResolver = {
       resolve: jest.fn().mockResolvedValue(['user-1', 'user-2']),
       // Mặc định không lọc theo xưởng - test riêng ở dưới.
@@ -793,6 +801,106 @@ describe('NotificationsService', () => {
       );
       expect(prisma.notificationRecipient.createMany).not.toHaveBeenCalled();
       expect(result.isRead).toBe(false);
+    });
+  });
+
+  // 20/11/2026 (T1-9): chống trùng khi admin bấm Gửi lại thông báo chung.
+  describe('createAnnouncement - Idempotency-Key', () => {
+    const dto = {
+      title: 'Nghỉ lễ',
+      message: 'Công ty nghỉ lễ ngày mai',
+      audience: NotificationAudience.ALL,
+    };
+    const stored = { ...announcement, idempotencyKey: 'K1' };
+    let tx: {
+      $queryRaw: jest.Mock;
+      notification: { findUnique: jest.Mock; create: jest.Mock };
+      notificationRecipient: { createMany: jest.Mock };
+    };
+
+    beforeEach(() => {
+      tx = {
+        $queryRaw: jest.fn().mockResolvedValue([{ ok: true }]),
+        notification: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue(stored),
+        },
+        notificationRecipient: { createMany: jest.fn() },
+      };
+      (prisma as unknown as { notification: { findUnique: jest.Mock } }).notification.findUnique =
+        jest.fn().mockResolvedValue(null);
+      (prisma as unknown as { $transaction: jest.Mock }).$transaction = jest.fn(
+        (fn: (t: unknown) => Promise<unknown>) => fn(tx),
+      );
+    });
+
+    it('có khoá, lần đầu: try-lock, create + createMany cùng transaction, publish sau commit', async () => {
+      const result = await service.createAnnouncement(dto, 'user-boss', 'K1');
+
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(tx.notification.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ idempotencyKey: 'K1' }) }),
+      );
+      expect(tx.notificationRecipient.createMany).toHaveBeenCalledTimes(1);
+      expect(prisma.notificationRecipient.createMany).not.toHaveBeenCalled();
+      expect(realtime.publishNotificationCreated).toHaveBeenCalledTimes(1);
+      expect(result.id).toBe('notif-2');
+    });
+
+    it('có khoá, đã có bản cũ cùng nội dung: trả lại bản cũ, không tạo, không phát lại', async () => {
+      (
+        prisma as unknown as { notification: { findUnique: jest.Mock } }
+      ).notification.findUnique.mockResolvedValue(stored);
+
+      const result = await service.createAnnouncement(dto, 'user-boss', 'K1');
+
+      expect(result.id).toBe('notif-2');
+      expect(tx.notification.create).not.toHaveBeenCalled();
+      expect(realtime.publishNotificationCreated).not.toHaveBeenCalled();
+    });
+
+    it('có khoá, bản cũ khác nội dung hoặc khác người: 422', async () => {
+      const findUnique = (prisma as unknown as { notification: { findUnique: jest.Mock } })
+        .notification.findUnique;
+      findUnique.mockResolvedValue(stored);
+
+      await expect(
+        service.createAnnouncement({ ...dto, title: 'Khác' }, 'user-boss', 'K1'),
+      ).rejects.toThrow(IdempotencyKeyReusedException);
+      await expect(service.createAnnouncement(dto, 'user-khac', 'K1')).rejects.toThrow(
+        IdempotencyKeyReusedException,
+      );
+      expect(tx.notification.create).not.toHaveBeenCalled();
+    });
+
+    it('có khoá, đọc lại trong transaction thấy bản của request song song: trả bản đó, không phát', async () => {
+      tx.notification.findUnique.mockResolvedValue(stored);
+
+      const result = await service.createAnnouncement(dto, 'user-boss', 'K1');
+
+      expect(result.id).toBe('notif-2');
+      expect(tx.notification.create).not.toHaveBeenCalled();
+      expect(realtime.publishNotificationCreated).not.toHaveBeenCalled();
+    });
+
+    it('có khoá, đang bị giữ khoá: 409 IdempotencyKeyInUseException', async () => {
+      tx.$queryRaw.mockResolvedValue([{ ok: false }]);
+
+      await expect(service.createAnnouncement(dto, 'user-boss', 'K1')).rejects.toThrow(
+        IdempotencyKeyInUseException,
+      );
+      expect(tx.notification.create).not.toHaveBeenCalled();
+    });
+
+    it('không khoá: create + createMany vẫn chung 1 transaction, không try-lock', async () => {
+      await service.createAnnouncement(dto, 'user-boss');
+
+      expect(tx.$queryRaw).not.toHaveBeenCalled();
+      expect(tx.notification.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.not.objectContaining({ idempotencyKey: 'K1' }) }),
+      );
+      expect(tx.notificationRecipient.createMany).toHaveBeenCalledTimes(1);
+      expect(realtime.publishNotificationCreated).toHaveBeenCalledTimes(1);
     });
   });
 

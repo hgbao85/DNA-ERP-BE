@@ -154,6 +154,69 @@ describe('OfficeSuppliesService', () => {
     });
   });
 
+  // 20/11/2026 (T3-12)
+  describe('create - 20/11 (tên rỗng, tồn đầu ghi người tạo, mã đã xoá)', () => {
+    it('tên toàn dấu cách -> 400 "Tên vật tư không được để trống"', async () => {
+      await expect(service.create({ name: '   ', unit: 'cái' }, 'phoi-son-han')).rejects.toThrow(
+        'Tên vật tư không được để trống',
+      );
+      expect(prisma.officeSupply.create).not.toHaveBeenCalled();
+    });
+
+    it('đơn vị toàn dấu cách -> 400 "Đơn vị tính không được để trống"', async () => {
+      await expect(service.create({ name: 'Bút', unit: ' ' }, 'phoi-son-han')).rejects.toThrow(
+        'Đơn vị tính không được để trống',
+      );
+    });
+
+    it('lưu tên và đơn vị đã trim', async () => {
+      prisma.officeSupply.create.mockResolvedValue({ ...existingSupply, quantity: 0 });
+      await service.create({ name: '  Bút bi ', unit: ' cái ' }, 'phoi-son-han');
+      expect(lastCallField(prisma.officeSupply.create, 'data')).toMatchObject({
+        name: 'Bút bi',
+        unit: 'cái',
+      });
+    });
+
+    it('dòng INITIAL ghi người tạo, cùng transaction với vật tư', async () => {
+      prisma.officeSupply.create.mockResolvedValue(existingSupply);
+
+      await service.create(
+        { name: 'Bút bi', unit: 'cái', openingQty: 5 },
+        'phoi-son-han',
+        'user-thu-kho',
+      );
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(lastCallField(prisma.officeSupplyLedgerEntry.create, 'data')).toMatchObject({
+        reason: OfficeSupplyLedgerReason.INITIAL,
+        createdByUserId: 'user-thu-kho',
+      });
+    });
+
+    it('mã trùng với vật tư ĐÃ XOÁ -> 409 nêu tên cũ', async () => {
+      prisma.officeSupply.findUnique.mockResolvedValue({
+        ...existingSupply,
+        code: 'VP01',
+        name: 'Bút cũ',
+        deletedAt: new Date(),
+      });
+
+      const p = service.create({ name: 'Bút', unit: 'cái', code: 'VP01' }, 'phoi-son-han');
+      await expect(p).rejects.toThrow(ConflictException);
+      await expect(p).rejects.toThrow(
+        'Mã "VP01" đã dùng cho vật tư văn phòng đã xoá "Bút cũ" trong kho này - đặt mã khác',
+      );
+    });
+
+    it('mã trùng vật tư còn dùng vẫn giữ câu cũ', async () => {
+      prisma.officeSupply.findUnique.mockResolvedValue(existingSupply);
+      await expect(
+        service.create({ name: 'Bút', unit: 'cái', code: 'VP-001' }, 'phoi-son-han'),
+      ).rejects.toThrow('Vật tư văn phòng "VP-001" đã tồn tại trong kho này');
+    });
+  });
+
   describe('warehouse scope enforcement', () => {
     it('allows the matching warehouseScope to read/update/delete', async () => {
       prisma.officeSupply.findUnique.mockResolvedValue(existingSupply);
@@ -261,6 +324,32 @@ describe('OfficeSuppliesService', () => {
       expect(prisma.officeSupplyLedgerEntry.create).not.toHaveBeenCalled();
     });
 
+    // 20/11/2026 (T3-12): dấu số lượng theo loại nghiệp vụ.
+    it.each([
+      [-1, OfficeSupplyLedgerReason.IMPORT, 'Nhập kho: số lượng phải lớn hơn 0'],
+      [1, OfficeSupplyLedgerReason.EXPORT, 'Xuất kho: số lượng phải ghi số âm'],
+    ])('changeQty %s với %s -> 400, không đụng tồn', async (changeQty, reason, message) => {
+      await expect(
+        service.adjustQuantity('1', { changeQty, reason }, 'user-1', 'phoi-son-han'),
+      ).rejects.toThrow(new BadRequestException(message));
+      expect(prisma.officeSupply.updateMany).not.toHaveBeenCalled();
+      expect(prisma.officeSupplyLedgerEntry.create).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [5, OfficeSupplyLedgerReason.IMPORT],
+      [-2, OfficeSupplyLedgerReason.EXPORT],
+      [1, OfficeSupplyLedgerReason.ADJUST],
+      [-1, OfficeSupplyLedgerReason.ADJUST],
+    ])('changeQty %s với %s hợp lệ', async (changeQty, reason) => {
+      prisma.officeSupply.findUnique.mockResolvedValue(existingSupply);
+      prisma.officeSupply.updateMany.mockResolvedValue({ count: 1 });
+      prisma.officeSupply.findUniqueOrThrow.mockResolvedValue({ ...existingSupply, quantity: 13 });
+      await expect(
+        service.adjustQuantity('1', { changeQty, reason }, 'user-1', 'phoi-son-han'),
+      ).resolves.toBeDefined();
+    });
+
     it('rejects changeQty of 0', async () => {
       await expect(
         service.adjustQuantity(
@@ -314,6 +403,33 @@ describe('OfficeSuppliesService', () => {
       await service.update('1', { name: 'Bút bi xanh' }, 'phoi-son-han');
 
       expect(lastCallField(prisma.officeSupply.update, 'data')).not.toHaveProperty('quantity');
+    });
+  });
+
+  describe('update - 20/11 (tên rỗng, mã đã xoá)', () => {
+    it.each([
+      [{ name: '' }, 'Tên vật tư không được để trống'],
+      [{ name: '   ' }, 'Tên vật tư không được để trống'],
+      [{ unit: '' }, 'Đơn vị tính không được để trống'],
+    ])('PATCH %j -> 400, không ghi', async (dto, message) => {
+      prisma.officeSupply.findUnique.mockResolvedValue(existingSupply);
+      await expect(service.update('1', dto, 'phoi-son-han')).rejects.toThrow(
+        new BadRequestException(message),
+      );
+      expect(prisma.officeSupply.update).not.toHaveBeenCalled();
+    });
+
+    it('đổi sang mã của vật tư đã xoá -> 409 nêu tên cũ', async () => {
+      prisma.officeSupply.findUnique.mockResolvedValueOnce(existingSupply).mockResolvedValueOnce({
+        ...existingSupply,
+        id: 9n,
+        code: 'VP01',
+        name: 'Bút cũ',
+        deletedAt: new Date(),
+      });
+      await expect(service.update('1', { code: 'VP01' }, 'phoi-son-han')).rejects.toThrow(
+        'Mã "VP01" đã dùng cho vật tư văn phòng đã xoá "Bút cũ" trong kho này - đặt mã khác',
+      );
     });
   });
 

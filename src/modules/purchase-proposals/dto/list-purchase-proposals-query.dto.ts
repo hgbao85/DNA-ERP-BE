@@ -1,7 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Transform } from 'class-transformer';
 import { IsBoolean, IsOptional } from 'class-validator';
 import { PaginationQueryDto } from '../../../common/dto/pagination-query.dto';
+import { ToStrictBoolean } from '../../../common/validators/strict-type.decorators';
 
 export class ListPurchaseProposalsQueryDto extends PaginationQueryDto {
   /**
@@ -14,7 +14,7 @@ export class ListPurchaseProposalsQueryDto extends PaginationQueryDto {
       'true = chỉ phiếu chưa đóng (khác PURCHASED) - dùng cho màn hàng đợi xử lý, tránh bị phiếu PURCHASED tích luỹ đẩy khỏi trang',
   })
   @IsOptional()
-  @Transform(({ value }) => value === 'true' || value === true)
+  @ToStrictBoolean()
   @IsBoolean()
   activeOnly?: boolean;
 }

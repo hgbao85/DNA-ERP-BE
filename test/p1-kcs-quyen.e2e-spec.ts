@@ -430,6 +430,7 @@ describe('P1 HT1: vai x route KCS tự chuyển (e2e, DB test thật)', () => {
       const path = `/step-bundles/${bundleId}/qc-review`;
       const noScrap = await call('kcs', 'post', path, {
         segments: [{ segmentSpecId: world.spec355.toString(), failedQty: 2 }],
+        defectReasonId: world.defectReasonId.toString(),
       });
       expect(noScrap.status).toBe(400);
       expect(bodyText(noScrap)).toContain('chọn số đoạn lỗi phải bỏ');
@@ -437,6 +438,7 @@ describe('P1 HT1: vai x route KCS tự chuyển (e2e, DB test thật)', () => {
 
       const tooMuch = await call('kcs', 'post', path, {
         segments: [{ segmentSpecId: world.spec355.toString(), failedQty: 2, scrapQty: 3 }],
+        defectReasonId: world.defectReasonId.toString(),
       });
       expect(tooMuch.status).toBe(400);
       expect(bodyText(tooMuch)).toContain('số bỏ (3) lớn hơn số lỗi (2)');
@@ -455,6 +457,7 @@ describe('P1 HT1: vai x route KCS tự chuyển (e2e, DB test thật)', () => {
       });
       const res = await call('kcs', 'post', `/cut-bundles/${bundleId}/qc-review`, {
         segments: [{ segmentSpecId: world.spec441.toString(), failedQty: 1, scrapQty: 1 }],
+        defectReasonId: world.defectReasonId.toString(),
       });
       expect(res.status).toBe(201);
       const rows = await prisma.$queryRawUnsafe<Array<{ failedQty: number; scrapQty: number }>>(

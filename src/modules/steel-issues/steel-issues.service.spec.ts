@@ -15,6 +15,7 @@ import {
   SteelIssueStatus,
 } from '../../generated/prisma/client';
 import { FLOOR_REPORT_REVERSED_REPLAY_MESSAGE } from '../../common/utils/floor-report.util';
+import { IdempotencyKeyReusedException } from '../../common/utils/idempotency.util';
 import { StockLedgerService } from '../stock/stock-ledger.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -1414,6 +1415,42 @@ describe('SteelIssuesService', () => {
   // Sổ ghi từng lần báo + chống gửi trùng (phần nền 2026-10-12, changelog-2026-10-08 mục 20).
   describe('sổ ghi từng lần báo (FloorReport) + Idempotency-Key', () => {
     const cutDto = { productionOrderId: '1', segments: [{ segmentSpecId: '30', qty: 8 }] };
+    // Dòng sổ đã ghi (T4-4, 20/11/2026): vân tay khớp với cutDto / stepDto gửi bởi 'cn-1' / 'cn-3' bên dưới.
+    const prevCut = (over: Record<string, unknown> = {}) => ({
+      id: 5n,
+      kind: FloorReportKind.CUT,
+      reportedById: 'cn-1',
+      workstationId: null,
+      cutBundleId: 1n,
+      lines: [{ segmentSpecId: 30n, pieceId: null, qty: 8 }],
+      stepBatch: null,
+      cutBundle: { steelIssueId: 100n },
+      productionBatch: null,
+      ...over,
+    });
+    const stepDto = {
+      productionOrderId: '1',
+      materialId: '30',
+      step: ProcessStep.UON,
+      segments: [{ segmentSpecId: '30', qty: 5 }],
+    };
+    const prevStep = (over: Record<string, unknown> = {}) => ({
+      id: 8n,
+      kind: FloorReportKind.STEP,
+      reportedById: 'cn-3',
+      workstationId: null,
+      stepBatchId: 900n,
+      lines: [{ segmentSpecId: 30n, pieceId: null, qty: 5 }],
+      stepBatch: {
+        productionInvoiceId: 1n,
+        materialId: 30n,
+        step: ProcessStep.UON,
+        productionOrderId: 1n,
+      },
+      cutBundle: null,
+      productionBatch: null,
+      ...over,
+    });
 
     it('recordCutBatch ghi 1 lần báo CUT: người báo, khoá, đợt cắt, từng dòng cỡ đoạn', async () => {
       prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
@@ -1448,11 +1485,7 @@ describe('SteelIssuesService', () => {
     });
 
     it('gửi lại CÙNG khoá: trả đợt đã cộng, không cộng lần 2, không ghi sổ lần 2', async () => {
-      prisma.floorReport.findUnique.mockResolvedValue({
-        id: 5n,
-        kind: FloorReportKind.CUT,
-        cutBundleId: 1n,
-      });
+      prisma.floorReport.findUnique.mockResolvedValue(prevCut());
 
       const result = await service.recordCutBatch('100', cutDto, 'cn-1', 'key-1');
 
@@ -1464,11 +1497,9 @@ describe('SteelIssuesService', () => {
 
     it('gửi lại CÙNG khoá sau khi QLSX đã hủy hết đợt (sổ không còn trỏ đợt): 409 câu rõ, không ghi lại', async () => {
       prisma.steelIssue.findUnique.mockResolvedValue(receivedIssue);
-      prisma.floorReport.findUnique.mockResolvedValue({
-        id: 5n,
-        kind: FloorReportKind.CUT,
-        cutBundleId: null,
-      });
+      prisma.floorReport.findUnique.mockResolvedValue(
+        prevCut({ cutBundleId: null, cutBundle: null }),
+      );
 
       await expect(service.recordCutBatch('100', cutDto, 'cn-1', 'key-1')).rejects.toThrow(
         /đã ghi nhận trước đó và đã bị QLSX hủy/,
@@ -1489,7 +1520,8 @@ describe('SteelIssuesService', () => {
       );
       prisma.floorReport.findUnique
         .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ id: 6n, kind: FloorReportKind.CUT, cutBundleId: null });
+        .mockResolvedValueOnce(null) // đọc lại trong khoá chống trùng: chưa có (20/11/2026)
+        .mockResolvedValueOnce(prevCut({ id: 6n, cutBundleId: null, cutBundle: null }));
 
       await expect(service.recordCutBatch('100', cutDto, 'cn-1', 'key-race')).rejects.toThrow(
         /đã ghi nhận trước đó và đã bị QLSX hủy/,
@@ -1507,22 +1539,108 @@ describe('SteelIssuesService', () => {
       );
       prisma.floorReport.findUnique
         .mockResolvedValueOnce(null) // lúc kiểm trước: chưa có
-        .mockResolvedValueOnce({ id: 6n, kind: FloorReportKind.CUT, cutBundleId: 1n }); // sau khi thua
+        .mockResolvedValueOnce(null) // đọc lại trong khoá chống trùng: chưa có (20/11/2026)
+        .mockResolvedValueOnce(prevCut({ id: 6n })); // sau khi thua
 
       const result = await service.recordCutBatch('100', cutDto, 'cn-1', 'key-race');
 
       expect(result.id).toBe('1');
     });
 
-    it('khoá đã dùng cho loại báo khác -> 409', async () => {
-      prisma.floorReport.findUnique.mockResolvedValue({
-        id: 5n,
-        kind: FloorReportKind.PIECE,
-        productionBatchId: 3n,
+    it('khoá đã dùng cho loại báo khác -> 422 IdempotencyKeyReusedException (trước đây 409)', async () => {
+      prisma.floorReport.findUnique.mockResolvedValue(
+        prevCut({ kind: FloorReportKind.PIECE, cutBundleId: null, cutBundle: null }),
+      );
+
+      await expect(service.recordCutBatch('100', cutDto, 'cn-1', 'key-x')).rejects.toBeInstanceOf(
+        IdempotencyKeyReusedException,
+      );
+    });
+
+    // T4-4: cùng khoá mà khác nội dung / người / lô thì 422, không trả đợt cũ và không ghi gì.
+    it.each([
+      [
+        'khác số lượng',
+        () =>
+          service.recordCutBatch(
+            '100',
+            { ...cutDto, segments: [{ segmentSpecId: '30', qty: 9 }] },
+            'cn-1',
+            'key-1',
+          ),
+      ],
+      [
+        'khác cỡ đoạn',
+        () =>
+          service.recordCutBatch(
+            '100',
+            { ...cutDto, segments: [{ segmentSpecId: '31', qty: 8 }] },
+            'cn-1',
+            'key-1',
+          ),
+      ],
+      ['khác người báo', () => service.recordCutBatch('100', cutDto, 'cn-9', 'key-1')],
+      ['sang lô sắt khác', () => service.recordCutBatch('101', cutDto, 'cn-1', 'key-1')],
+      [
+        'qua máy QR khác',
+        () => service.recordCutBatch('100', cutDto, 'cn-1', 'key-1', { workstationId: 4n }),
+      ],
+    ])(
+      'báo cắt gửi lại cùng khoá nhưng %s -> 422, không trả đợt cũ, không ghi sổ',
+      async (_l, call) => {
+        prisma.floorReport.findUnique.mockResolvedValue(prevCut());
+
+        await expect(call()).rejects.toBeInstanceOf(IdempotencyKeyReusedException);
+        expect(prisma.cutBundle.create).not.toHaveBeenCalled();
+        expect(prisma.cutPatternSegment.upsert).not.toHaveBeenCalled();
+        expect(prisma.floorReport.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ['khác số lượng', { ...stepDto, segments: [{ segmentSpecId: '30', qty: 6 }] }, 'cn-3'],
+      ['khác công đoạn (Dập thay Uốn)', { ...stepDto, step: ProcessStep.DAP }, 'cn-3'],
+      ['khác vật tư', { ...stepDto, materialId: '31' }, 'cn-3'],
+      ['khác người báo', stepDto, 'cn-9'],
+    ])(
+      'báo công đoạn phụ gửi lại cùng khoá nhưng %s -> 422, không trả đợt cũ',
+      async (_l, dto, user) => {
+        prisma.floorReport.findUnique.mockResolvedValue(prevStep());
+
+        await expect(service.recordStepBatch('1', dto, user, 'key-s')).rejects.toBeInstanceOf(
+          IdempotencyKeyReusedException,
+        );
+        expect(prisma.stepBatch.create).not.toHaveBeenCalled();
+        expect(prisma.stepBatch.findUniqueOrThrow).not.toHaveBeenCalled();
+        expect(prisma.floorReport.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it('báo công đoạn phụ gửi lại cùng khoá nhưng đợt đã đổi SKU (body mang SKU khác) -> KHÔNG 422, trả đợt cũ (QA 20/11/2026)', async () => {
+      prisma.floorReport.findUnique.mockResolvedValue(prevStep());
+      prisma.stepBatch.findUniqueOrThrow.mockResolvedValue({
+        id: 900n,
+        step: ProcessStep.UON,
+        segments: [],
       });
 
-      await expect(service.recordCutBatch('100', cutDto, 'cn-1', 'key-x')).rejects.toThrow(
-        ConflictException,
+      const res = await service.recordStepBatch(
+        '1',
+        { ...stepDto, productionOrderId: '2' },
+        'cn-3',
+        'key-s',
+      );
+
+      expect(res.id).toBe('900');
+      expect(prisma.stepBatch.create).not.toHaveBeenCalled();
+      expect(prisma.floorReport.create).not.toHaveBeenCalled();
+    });
+
+    it('báo công đoạn phụ gửi vào PI khác với cùng khoá -> 422', async () => {
+      prisma.floorReport.findUnique.mockResolvedValue(prevStep());
+
+      await expect(service.recordStepBatch('2', stepDto, 'cn-3', 'key-s')).rejects.toBeInstanceOf(
+        IdempotencyKeyReusedException,
       );
     });
 
@@ -1557,11 +1675,7 @@ describe('SteelIssuesService', () => {
       });
 
       prisma.stepBatch.create.mockClear();
-      prisma.floorReport.findUnique.mockResolvedValue({
-        id: 8n,
-        kind: FloorReportKind.STEP,
-        stepBatchId: 900n,
-      });
+      prisma.floorReport.findUnique.mockResolvedValue(prevStep());
       prisma.stepBatch.findUniqueOrThrow.mockResolvedValue(row);
       const again = await service.recordStepBatch('1', dto, 'cn-3', 'key-s');
       expect(again.id).toBe('900');
@@ -1574,11 +1688,9 @@ describe('SteelIssuesService', () => {
       prisma.pieceBom.findMany.mockResolvedValue([
         { ...pieceBomRow, processSteps: [ProcessStep.CAT, ProcessStep.UON] },
       ]);
-      prisma.floorReport.findUnique.mockResolvedValue({
-        id: 8n,
-        kind: FloorReportKind.STEP,
-        stepBatchId: null,
-      });
+      prisma.floorReport.findUnique.mockResolvedValue(
+        prevStep({ stepBatchId: null, stepBatch: null }),
+      );
 
       const call = service.recordStepBatch(
         '1',
@@ -1615,7 +1727,8 @@ describe('SteelIssuesService', () => {
       );
       prisma.floorReport.findUnique
         .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ id: 6n, kind: FloorReportKind.STEP, stepBatchId: null });
+        .mockResolvedValueOnce(null) // đọc lại trong khoá chống trùng: chưa có (20/11/2026)
+        .mockResolvedValueOnce(prevStep({ id: 6n, stepBatchId: null, stepBatch: null }));
 
       await expect(
         service.recordStepBatch(

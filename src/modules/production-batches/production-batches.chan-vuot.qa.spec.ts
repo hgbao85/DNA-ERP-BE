@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import { FloorReportKind } from '../../generated/prisma/client';
 import { FLOOR_REPORT_REVERSED_REPLAY_MESSAGE } from '../../common/utils/floor-report.util';
+import { IdempotencyKeyReusedException } from '../../common/utils/idempotency.util';
 import { MfgStage, ProcessStep, StockLedgerRefType } from '../../generated/prisma/client';
 import { PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { MaterialYieldIssuesService } from '../material-yield-issues/material-yield-issues.service';
@@ -674,12 +675,24 @@ describe('UB5 production-batches chặn vượt / trừ đoạn lúc chấm (QA)
   });
 
   describe('AC53 (mảnh): gửi lại cùng Idempotency-Key sau khi QLSX hủy hết', () => {
+    // Dòng sổ đã ghi, vân tay khớp với rec(service, 5, 'cn-1', ...): mảnh 40, 5 cái, tổ Hàn, lệnh 1, không qua máy QR.
+    const prevReport = (over: Record<string, unknown> = {}) => ({
+      kind: FloorReportKind.PIECE,
+      reportedById: 'cn-1',
+      workstationId: null,
+      productionBatchId: 700n,
+      lines: [{ segmentSpecId: null, pieceId: 40n, qty: 5 }],
+      stepBatch: null,
+      cutBundle: null,
+      productionBatch: { stage: MfgStage.HAN, productionOrderId: ORDER_ID, pieceId: 40n },
+      ...over,
+    });
+
     it('khoá thuộc lần báo đã bị hủy (productionBatchId null) -> 409 FLOOR_REPORT_REVERSED_REPLAY_MESSAGE, không ghi dòng sổ / đợt mới', async () => {
       const { service, prisma } = build();
-      (prisma.floorReport as MockGroup).findUnique.mockResolvedValue({
-        kind: FloorReportKind.PIECE,
-        productionBatchId: null,
-      });
+      (prisma.floorReport as MockGroup).findUnique.mockResolvedValue(
+        prevReport({ productionBatchId: null, productionBatch: null }),
+      );
       const err = await errOf(rec(service, 5, 'cn-1', 'K-9'));
       expect(err).toBeInstanceOf(ConflictException);
       expect(err.message).toBe(FLOOR_REPORT_REVERSED_REPLAY_MESSAGE);
@@ -687,23 +700,22 @@ describe('UB5 production-batches chặn vượt / trừ đoạn lúc chấm (QA)
       expect((prisma.floorReport as MockGroup).create).not.toHaveBeenCalled();
     });
 
-    it('khoá đã dùng cho loại báo khác (báo Uốn) giữ 409 cũ, không phải câu "đã bị hủy"', async () => {
+    it('khoá đã dùng cho loại báo khác (báo Uốn) -> 422 IdempotencyKeyReusedException (T4-4: trước đây 409), không phải câu "đã bị hủy"', async () => {
       const { service, prisma } = build();
-      (prisma.floorReport as MockGroup).findUnique.mockResolvedValue({
-        kind: FloorReportKind.STEP,
-        productionBatchId: null,
-      });
+      (prisma.floorReport as MockGroup).findUnique.mockResolvedValue(
+        prevReport({ kind: FloorReportKind.STEP, productionBatchId: null, productionBatch: null }),
+      );
       const err = await errOf(rec(service, 5, 'cn-1', 'K-10'));
-      expect(err.message).toContain('Idempotency-Key đã dùng cho một lần báo khác');
+      expect(err).toBeInstanceOf(IdempotencyKeyReusedException);
+      expect(err.message).not.toBe(FLOOR_REPORT_REVERSED_REPLAY_MESSAGE);
     });
 
     it('khoá còn hiệu lực (đợt còn) -> trả đợt cũ, không cộng lần 2', async () => {
       const { service, state, prisma } = build();
       const lot = addBatch(state, { id: 700n, status: 'OPEN', reportedQty: 5 });
-      (prisma.floorReport as MockGroup).findUnique.mockResolvedValue({
-        kind: FloorReportKind.PIECE,
-        productionBatchId: lot.id,
-      });
+      (prisma.floorReport as MockGroup).findUnique.mockResolvedValue(
+        prevReport({ productionBatchId: lot.id }),
+      );
       const res = await rec(service, 5, 'cn-1', 'K-11');
       expect(res.id).toBe('700');
       expect(lot.reportedQty).toBe(5);

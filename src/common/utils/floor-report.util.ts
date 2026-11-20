@@ -1,5 +1,6 @@
 import { FloorReportKind, Prisma } from '../../generated/prisma/client';
 import type { PrismaTx } from '../../prisma/prisma.service';
+import { assertSameIdempotentRequest } from './idempotency.util';
 
 /**
  * Sổ ghi từng lần báo sản lượng xưởng (`FloorReport`, 2026-10-12) - dùng chung cho Phôi (cắt + công
@@ -65,13 +66,99 @@ export async function writeFloorReport(tx: PrismaTx, input: FloorReportInput) {
   });
 }
 
-/** Lần báo đã ghi với khoá này (client gửi lại vì mạng chập chờn / bấm Lưu 2 lần). */
+/** Lần báo đã ghi với khoá này (client gửi lại vì mạng chập chờn / bấm Lưu 2 lần). Kèm dòng số và các trường
+ *  để so vân tay (assertFloorReportReplayMatches). */
 export async function findFloorReportByKey(
   client: Pick<PrismaTx, 'floorReport'>,
   idempotencyKey: string | null | undefined,
 ) {
   if (!idempotencyKey) return null;
-  return client.floorReport.findUnique({ where: { idempotencyKey } });
+  return client.floorReport.findUnique({
+    where: { idempotencyKey },
+    include: {
+      lines: true,
+      stepBatch: {
+        select: {
+          productionInvoiceId: true,
+          materialId: true,
+          step: true,
+          productionOrderId: true,
+        },
+      },
+      cutBundle: { select: { steelIssueId: true } },
+      productionBatch: { select: { stage: true, productionOrderId: true, pieceId: true } },
+    },
+  });
+}
+
+/** Vân tay của lần gửi lại (T4-4, 20/11/2026) - xem quy ước ở idempotency.util.ts. */
+export interface FloorReportReplayExpected {
+  kind: FloorReportKind;
+  reportedById: string;
+  /** Máy đã quét QR - vắng = báo từ màn thống kê cũ. */
+  workstationId?: bigint | null;
+  lines: FloorReportLineInput[];
+  /** Báo cắt: id phiếu xuất sắt trên route. */
+  cutIssueId?: bigint;
+  /** Báo công đoạn phụ: PI trên route + vật tư + công đoạn + SKU trong body. */
+  step?: {
+    productionInvoiceId: bigint;
+    materialId: bigint;
+    step: string;
+    productionOrderId: bigint;
+  };
+  /** Báo mảnh: tổ + lệnh + mảnh. */
+  batch?: { stage: string; productionOrderId: bigint; pieceId: bigint };
+}
+
+/**
+ * Cùng khoá mà khác loại báo, khác người, khác máy, khác dòng số hay khác đợt/lô/công đoạn/SKU thì 422
+ * (IdempotencyKeyReusedException), không trả kết quả của người/lần báo khác. Phần đợt/lô chỉ so khi lần báo
+ * cũ còn gắn đợt - QLSX đã hủy hết thì để bên gọi báo câu 409 "đã bị hủy" (FLOOR_REPORT_REVERSED_REPLAY_MESSAGE).
+ */
+export function assertFloorReportReplayMatches(
+  prev: NonNullable<Awaited<ReturnType<typeof findFloorReportByKey>>>,
+  expected: FloorReportReplayExpected,
+): void {
+  const stored: Record<string, unknown> = {
+    kind: prev.kind,
+    reportedById: prev.reportedById,
+    workstationId: prev.workstationId,
+    lines: prev.lines.map((l) => ({
+      segmentSpecId: l.segmentSpecId,
+      pieceId: l.pieceId,
+      qty: l.qty,
+    })),
+  };
+  const incoming: Record<string, unknown> = {
+    kind: expected.kind,
+    reportedById: expected.reportedById,
+    workstationId: expected.workstationId,
+    lines: expected.lines.map((l) => ({
+      segmentSpecId: l.segmentSpecId,
+      pieceId: l.pieceId,
+      qty: l.qty,
+    })),
+  };
+  if (prev.stepBatch && expected.step) {
+    // 20/11/2026 (QA): không so SKU (productionOrderId) của đợt - QLSX có thể đổi SKU đợt rồi máy gửi lại cùng khoá,
+    // không được 422 oan; vẫn so PI, vật tư, công đoạn (cộng với dòng, người, máy ở trên).
+    const { productionOrderId: _storedOrder, ...storedStep } = prev.stepBatch;
+    const { productionOrderId: _incomingOrder, ...incomingStep } = expected.step;
+    void _storedOrder;
+    void _incomingOrder;
+    stored.step = storedStep;
+    incoming.step = incomingStep;
+  }
+  if (prev.cutBundle && expected.cutIssueId !== undefined) {
+    stored.cutIssueId = prev.cutBundle.steelIssueId;
+    incoming.cutIssueId = expected.cutIssueId;
+  }
+  if (prev.productionBatch && expected.batch) {
+    stored.batch = prev.productionBatch;
+    incoming.batch = expected.batch;
+  }
+  assertSameIdempotentRequest(stored, incoming);
 }
 
 /** P2002 trên floor_reports.idempotencyKey - 2 request cùng khoá chạy song song, request thứ 2 thua.

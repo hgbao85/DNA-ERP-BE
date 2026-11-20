@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsSystemUploadUrl } from '../../../common/validators/system-upload-url.validator';
 
 export class CreateQcReviewDto {
   @ApiProperty()
@@ -27,5 +28,6 @@ export class CreateQcReviewDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @IsSystemUploadUrl()
   photoUrl?: string;
 }

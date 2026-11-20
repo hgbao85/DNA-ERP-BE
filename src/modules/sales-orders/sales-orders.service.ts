@@ -13,6 +13,7 @@ import {
   BomOptionKind,
   BomRevisionStatus,
   BookingStatus,
+  CuttingProposalStatus,
   Prisma,
   PrismaClient,
   ProductionOrderFloorStage,
@@ -21,6 +22,7 @@ import {
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
+import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { paginate } from '../../common/utils/paginate.util';
@@ -263,12 +265,18 @@ export class SalesOrdersService {
 
     const stages = await this.resolveStages(piItems);
     const piCodes = this.resolvePiCodes(piItems);
+    const solveLocked = await this.loadSolveLockedCounts(orderIds);
 
     return {
       data: result.data.map((o) =>
         this.toResponseDto(
           o,
-          this.buildDeleteBlockReason(o.orderCode, o.items, mergedIds.has(o.id) ? 1 : 0),
+          this.buildDeleteBlockReason(
+            o.orderCode,
+            o.items,
+            mergedIds.has(o.id) ? 1 : 0,
+            solveLocked.get(o.id) ?? 0,
+          ),
           stages,
           piCodes,
         ),
@@ -281,9 +289,15 @@ export class SalesOrdersService {
     const order = await this.findOneOrThrow(id);
     const mergedCount = await this.countMergedProductionInvoiceItems(order.id);
     const piItems = await this.loadPiItems([order.id]);
+    const solveLocked = await this.loadSolveLockedCounts([order.id]);
     return this.toResponseDto(
       order,
-      this.buildDeleteBlockReason(order.orderCode, order.items, mergedCount),
+      this.buildDeleteBlockReason(
+        order.orderCode,
+        order.items,
+        mergedCount,
+        solveLocked.get(order.id) ?? 0,
+      ),
       await this.resolveStages(piItems),
       this.resolvePiCodes(piItems),
     );
@@ -312,9 +326,15 @@ export class SalesOrdersService {
     this.publishRealtime(bigId, 'UPDATED');
     const mergedCount = await this.countMergedProductionInvoiceItems(bigId);
     const piItems = await this.loadPiItems([bigId]);
+    const solveLocked = await this.loadSolveLockedCounts([bigId]);
     return this.toResponseDto(
       updated,
-      this.buildDeleteBlockReason(updated.orderCode, updated.items, mergedCount),
+      this.buildDeleteBlockReason(
+        updated.orderCode,
+        updated.items,
+        mergedCount,
+        solveLocked.get(bigId) ?? 0,
+      ),
       await this.resolveStages(piItems),
       this.resolvePiCodes(piItems),
     );
@@ -340,7 +360,13 @@ export class SalesOrdersService {
     const order = await this.findOneOrThrow(id);
 
     const mergedCount = await this.countMergedProductionInvoiceItems(bigId);
-    const reason = this.buildDeleteBlockReason(order.orderCode, order.items, mergedCount);
+    const solveLocked = await this.loadSolveLockedCounts([bigId]);
+    const reason = this.buildDeleteBlockReason(
+      order.orderCode,
+      order.items,
+      mergedCount,
+      solveLocked.get(bigId) ?? 0,
+    );
     if (reason) {
       throw new ConflictException(reason);
     }
@@ -359,43 +385,74 @@ export class SalesOrdersService {
     // PlanForm/Sku đã gắn qua linkExistingSkus() (nếu có) KHÔNG bị xoá - dữ liệu độc lập của KHSX
     // (định mức, lịch sử duyệt...), có trước cả PO này - chỉ GỠ LIÊN KẾT (salesOrderId = null) để
     // hết trỏ tới đơn sắp xoá, SKU đó vẫn còn nguyên, sẵn sàng gắn cho đơn khác sau này.
-    await this.prisma.$transaction(async (tx) => {
-      // Phần A – Đợt 10a: đơn có hàng nằm trong booking chưa huỷ thì không xoá (gỡ hàng khỏi booking hoặc huỷ booking trước).
-      const inBooking = await tx.bookingLine.findFirst({
-        where: {
-          salesOrderItem: { salesOrderId: bigId },
-          booking: {
-            status: { in: [BookingStatus.DRAFT, BookingStatus.CONFIRMED, BookingStatus.SHIPPED] },
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        // 20/11/2026 (T2-2): khoá từng dòng PI (id tăng dần, cùng khoá và thứ tự với Tính phương án cắt - không khoá chéo)
+        // rồi đếm lại lượt tính đang mở; lượt đã bị "Tính lại" thay (SUPERSEDED) thì dọn dòng ghim để đơn xoá được.
+        const piItemIds = (
+          await tx.productionInvoiceItem.findMany({
+            where: { salesOrderId: bigId },
+            select: { id: true },
+            orderBy: { id: 'asc' },
+          })
+        ).map((r) => r.id);
+        for (const piItemId of piItemIds)
+          await lockBusinessKey(tx, `cutting-batch-solve:${piItemId}`);
+        const openSolves = (await this.loadSolveLockedCounts([bigId], tx)).get(bigId) ?? 0;
+        if (openSolves > 0) {
+          throw new ConflictException(
+            this.buildDeleteBlockReason(order.orderCode, order.items, 0, openSolves),
+          );
+        }
+        await tx.cuttingProposalItem.deleteMany({
+          where: {
+            productionInvoiceItemId: { in: piItemIds },
+            cuttingProposal: { status: CuttingProposalStatus.SUPERSEDED },
           },
-        },
-        select: { booking: { select: { bookingNo: true } } },
-      });
-      if (inBooking) {
-        throw new ConflictException(
-          `Đơn hàng ${order.orderCode} đang có hàng trong booking ${inBooking.booking.bookingNo} - gỡ hàng khỏi booking (hoặc huỷ booking) trước khi xoá đơn.`,
-        );
-      }
-      // Còn lại chỉ là dòng của booking đã huỷ - FK Restrict sẽ chặn xoá dòng đơn nếu không dọn trước.
-      await tx.bookingLine.deleteMany({ where: { salesOrderItem: { salesOrderId: bigId } } });
-
-      const linkedSkus = await tx.planForm.findMany({ where: { salesOrderId: bigId } });
-      for (const sku of linkedSkus) {
-        await tx.planForm.update({ where: { id: sku.id }, data: { salesOrderId: null } });
-      }
-
-      await tx.productionInvoice.deleteMany({ where: { salesOrderId: bigId } });
-      await tx.productionInvoiceItem.deleteMany({ where: { salesOrderId: bigId } });
-      for (const it of order.items) {
-        await writeAuditLog(auditClient(tx), this.cls, {
-          action: AuditAction.DELETE,
-          tableName: ITEM_AUDIT_TABLE,
-          recordId: it.id.toString(),
-          oldValue: itemAuditSnapshot(it),
         });
+
+        // Phần A – Đợt 10a: đơn có hàng nằm trong booking chưa huỷ thì không xoá (gỡ hàng khỏi booking hoặc huỷ booking trước).
+        const inBooking = await tx.bookingLine.findFirst({
+          where: {
+            salesOrderItem: { salesOrderId: bigId },
+            booking: {
+              status: { in: [BookingStatus.DRAFT, BookingStatus.CONFIRMED, BookingStatus.SHIPPED] },
+            },
+          },
+          select: { booking: { select: { bookingNo: true } } },
+        });
+        if (inBooking) {
+          throw new ConflictException(
+            `Đơn hàng ${order.orderCode} đang có hàng trong booking ${inBooking.booking.bookingNo} - gỡ hàng khỏi booking (hoặc huỷ booking) trước khi xoá đơn.`,
+          );
+        }
+        // Còn lại chỉ là dòng của booking đã huỷ - FK Restrict sẽ chặn xoá dòng đơn nếu không dọn trước.
+        await tx.bookingLine.deleteMany({ where: { salesOrderItem: { salesOrderId: bigId } } });
+
+        const linkedSkus = await tx.planForm.findMany({ where: { salesOrderId: bigId } });
+        for (const sku of linkedSkus) {
+          await tx.planForm.update({ where: { id: sku.id }, data: { salesOrderId: null } });
+        }
+
+        await tx.productionInvoice.deleteMany({ where: { salesOrderId: bigId } });
+        await tx.productionInvoiceItem.deleteMany({ where: { salesOrderId: bigId } });
+        for (const it of order.items) {
+          await writeAuditLog(auditClient(tx), this.cls, {
+            action: AuditAction.DELETE,
+            tableName: ITEM_AUDIT_TABLE,
+            recordId: it.id.toString(),
+            oldValue: itemAuditSnapshot(it),
+          });
+        }
+        await tx.salesOrderItem.deleteMany({ where: { salesOrderId: bigId } });
+        await tx.salesOrder.delete({ where: { id: bigId } }); // hard delete thật
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2003') {
+        throw new ConflictException('Đơn hàng đang được dùng ở chứng từ khác - không xoá được');
       }
-      await tx.salesOrderItem.deleteMany({ where: { salesOrderId: bigId } });
-      await tx.salesOrder.delete({ where: { id: bigId } }); // hard delete thật
-    });
+      throw e;
+    }
     this.publishRealtime(bigId, 'DELETED');
   }
 
@@ -423,6 +480,7 @@ export class SalesOrdersService {
     orderCode: string,
     items: { shippedQty: number; totalQty: number; skuName: string | null; mfgProductId: bigint }[],
     mergedCount: number,
+    solveLockedCount = 0,
   ): string | null {
     if (mergedCount > 0) {
       return (
@@ -437,7 +495,53 @@ export class SalesOrdersService {
         `dòng "${shippedItem.skuName ?? shippedItem.mfgProductId}" - không thể xoá đơn đã giao hàng một phần.`
       );
     }
+    if (solveLockedCount > 0) {
+      return (
+        `Đơn hàng ${orderCode} có ${solveLockedCount} dòng đang nằm trong lượt tính phương án cắt chưa dùng - ` +
+        `vào màn Tối ưu cắt sắt xoá lượt tính đó trước rồi mới xoá được đơn.`
+      );
+    }
     return null;
+  }
+
+  /**
+   * 20/11/2026 (T2-2): số dòng PI CHƯA gộp của mỗi đơn đang nằm trong lượt tính phương án cắt còn mở
+   * (CALCULATING / DRAFT / FAILED, chưa gắn lệnh sản xuất / PI). 1 truy vấn cho cả trang.
+   */
+  private async loadSolveLockedCounts(
+    orderIds: bigint[],
+    db: Pick<PrismaTx, 'cuttingProposalItem'> = this.prisma,
+  ): Promise<Map<bigint, number>> {
+    const result = new Map<bigint, number>();
+    if (orderIds.length === 0) return result;
+    const rows = await db.cuttingProposalItem.findMany({
+      where: {
+        cuttingProposal: {
+          status: {
+            in: [
+              CuttingProposalStatus.CALCULATING,
+              CuttingProposalStatus.DRAFT,
+              CuttingProposalStatus.FAILED,
+            ],
+          },
+          productionOrderId: null,
+          productionInvoiceId: null,
+        },
+        productionInvoiceItem: { salesOrderId: { in: orderIds }, productionInvoiceId: null },
+      },
+      select: {
+        productionInvoiceItemId: true,
+        productionInvoiceItem: { select: { salesOrderId: true } },
+      },
+    });
+    const seen = new Set<bigint>();
+    for (const r of rows) {
+      const orderId = r.productionInvoiceItem.salesOrderId;
+      if (orderId == null || seen.has(r.productionInvoiceItemId)) continue;
+      seen.add(r.productionInvoiceItemId);
+      result.set(orderId, (result.get(orderId) ?? 0) + 1);
+    }
+    return result;
   }
 
   // ─── Items ──────────────────────────────────────────────────────────────────

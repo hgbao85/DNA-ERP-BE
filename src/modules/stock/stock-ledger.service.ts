@@ -12,6 +12,10 @@ import { StockReservationsService } from './stock-reservations.service';
 import { paginate } from '../../common/utils/paginate.util';
 import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { lockBusinessKeyShared } from '../../common/utils/advisory-lock.util';
+import {
+  assertSameIdempotentRequest,
+  lockIdempotencyKey,
+} from '../../common/utils/idempotency.util';
 import { SEGMENT_LEGACY_CONVERSION_LOCK } from '../segment-stock/segment-stock.config';
 import { warehouseWhereForScope } from '../../common/utils/warehouse-family.util';
 import { TRON_SEGMENT_STEPS, isNormalizedSegmentSteps } from '../../common/utils/segment-code.util';
@@ -260,13 +264,6 @@ export class StockLedgerService {
       toWarehouseId,
     );
     await this.assertWholeCountQty(dto);
-    // Gọi lại cùng Idempotency-Key (mất mạng, bấm 2 lần) trả bút toán đã ghi - trước khi kiểm âm bên dưới, vì tồn đã đổi theo
-    // chính bút toán đó nên kiểm lại sẽ báo âm oan.
-    const replay = await this.prisma.stockLedger.findUnique({
-      where: { idempotencyKey },
-      include: LEDGER_INCLUDE,
-    });
-    if (replay) return this.toResponseDto(replay);
 
     const input = {
       fromWarehouseId,
@@ -287,14 +284,27 @@ export class StockLedgerService {
       idempotencyKey,
     };
 
+    // Gọi lại cùng Idempotency-Key (mất mạng, bấm 2 lần) trả bút toán đã ghi - trước khi kiểm âm bên dưới, vì tồn đã đổi theo
+    // chính bút toán đó nên kiểm lại sẽ báo âm oan. T3-9 (20/11/2026): so vân tay trước khi trả - khác người / loại /
+    // nội dung thì 422 (IdempotencyKeyReusedException), không trả bút toán của lần khác. Không phát realtime khi chỉ trả lại.
+    const replay = await this.prisma.stockLedger.findUnique({
+      where: { idempotencyKey },
+      include: LEDGER_INCLUDE,
+    });
+    if (replay) return this.replayAdjust(replay, input);
+
     // K3 (danh sách lỗi 16/11): trước đây không gửi expectedCurrentQty thì ghi thẳng - không khoá, không chặn âm. Nay mọi lần
     // sửa đều trong transaction, khoá đúng ô tồn sẽ ghi ở kho thật (lockAdjustBucket) và chặn tồn âm; expectedCurrentQty (nếu
     // có) vẫn so như cũ. Hạ tồn xuống dưới phần đang giữ cho lệnh vẫn cho (số đếm thực tế là đúng - anh chốt 17/11), kèm cảnh
     // báo reservationWarning để thủ kho báo người mua / KHSX.
     if (dto.expectedCurrentQty === undefined) {
-      const { entry, warning } = await this.prisma.$transaction((tx) =>
-        this.postAdjustLockedInTx(tx, input, realWarehouseId),
-      );
+      const done = await this.prisma.$transaction(async (tx) => {
+        const raced = await this.replayAdjustInTx(tx, input);
+        if (raced) return { raced };
+        return this.postAdjustLockedInTx(tx, input, realWarehouseId);
+      });
+      if ('raced' in done) return done.raced;
+      const { entry, warning } = done;
       if (input.materialId !== undefined) {
         this.publishRealtime('STOCK', input.materialId, 'ADJUSTED', userId);
       }
@@ -320,6 +330,10 @@ export class StockLedgerService {
     const materialId = input.materialId;
 
     const adjusted = await this.prisma.$transaction(async (tx) => {
+      // T3-9: khoá chống trùng + đọc lại theo khoá TRƯỚC FOR UPDATE và trước bước so expectedCurrentQty - gửi lại cùng
+      // khoá thì tồn đã đổi theo chính bút toán đó, so lại sẽ báo "tồn đã đổi" oan.
+      const raced = await this.replayAdjustInTx(tx, input);
+      if (raced) return { raced };
       // dto.stockLengthMm CÓ giá trị -> caller đã tách hiển thị theo từng bucket (vd
       // MfgWarehousesPage.tsx "Quản lý kho") và muốn sửa ĐÚNG bucket đó - lọc thêm stockLengthMm,
       // khớp unique index 3 cột nên chỉ có ĐÚNG 1 dòng.
@@ -357,8 +371,61 @@ export class StockLedgerService {
       }
       return this.postAdjustLockedInTx(tx, input, realWarehouseId);
     });
+    if ('raced' in adjusted) return adjusted.raced;
     this.publishRealtime('STOCK', materialId, 'ADJUSTED', userId);
     return Object.assign(adjusted.entry, { reservationWarning: adjusted.warning });
+  }
+
+  /**
+   * T3-9 (20/11/2026): lần gửi lại cùng Idempotency-Key của "Sửa tồn". Vân tay = các trường nghiệp vụ đã lưu trên bút toán
+   * (loại ADJUST, người ghi, 2 kho, chân hàng, số lượng, chiều dài cây, quy cách); KHÔNG so ghi chú và expectedCurrentQty
+   * (tồn đã đổi theo chính bút toán đó). Khác -> 422, giống nhau -> trả đúng bút toán cũ.
+   */
+  private replayAdjust(
+    row: Prisma.StockLedgerGetPayload<{ include: typeof LEDGER_INCLUDE }>,
+    input: PostStockEntryInput,
+  ): StockLedgerResponseDto {
+    const fingerprint = (r: {
+      refType: unknown;
+      createdById?: string | null | undefined;
+      fromWarehouseId: bigint;
+      toWarehouseId: bigint;
+      materialId?: bigint | null | undefined;
+      segmentSpecId?: bigint | null | undefined;
+      pieceId?: bigint | null | undefined;
+      productVariantId?: bigint | null | undefined;
+      qty: unknown;
+      stockLengthMm?: number | null | undefined;
+      spec?: string | null | undefined;
+    }) => ({
+      refType: r.refType,
+      createdById: r.createdById,
+      fromWarehouseId: r.fromWarehouseId,
+      toWarehouseId: r.toWarehouseId,
+      materialId: r.materialId,
+      segmentSpecId: r.segmentSpecId,
+      pieceId: r.pieceId,
+      productVariantId: r.productVariantId,
+      qty: r.qty,
+      stockLengthMm: r.stockLengthMm ?? 0,
+      spec: r.spec?.trim() ?? '',
+    });
+    assertSameIdempotentRequest(fingerprint(row), fingerprint(input));
+    return this.toResponseDto(row);
+  }
+
+  /** T3-9: câu ĐẦU của transaction sửa tồn - try-lock khoá chống trùng rồi đọc lại theo khoá. Có bút toán -> trả lại. */
+  private async replayAdjustInTx(
+    tx: PrismaTx,
+    input: PostStockEntryInput,
+  ): Promise<StockLedgerResponseDto | null> {
+    const key = input.idempotencyKey!;
+    await lockIdempotencyKey(tx, 'stock_ledger', key);
+    const row = await tx.stockLedger.findUnique({
+      where: { idempotencyKey: key },
+      include: LEDGER_INCLUDE,
+    });
+    return row ? this.replayAdjust(row, input) : null;
   }
 
   /**

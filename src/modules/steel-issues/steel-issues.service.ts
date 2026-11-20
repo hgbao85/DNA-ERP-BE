@@ -33,8 +33,14 @@ import {
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { assertWorkshopUnchanged, lockPisForIssue } from '../../common/utils/pi-workshop-lock.util';
 import {
+  IdempotencyKeyInUseException,
+  lockIdempotencyKey,
+} from '../../common/utils/idempotency.util';
+import {
   FLOOR_REPORT_REVERSED_REPLAY_MESSAGE,
   FloorReportContext,
+  FloorReportReplayExpected,
+  assertFloorReportReplayMatches,
   findFloorReportByKey,
   isIdempotencyConflict,
   writeFloorReport,
@@ -832,8 +838,19 @@ export class SteelIssuesService {
     idempotencyKey?: string | null,
     ctx?: FloorReportContext,
   ): Promise<CutBundleResponseDto> {
-    // Gửi lại cùng khoá -> trả đợt đã cộng, không cộng lần 2 (2026-10-12, xem FloorReport).
-    const replay = await this.replayFloorReport(idempotencyKey, FloorReportKind.CUT);
+    // Gửi lại cùng khoá -> trả đợt đã cộng, không cộng lần 2 (2026-10-12, xem FloorReport). Từ 20/11/2026 (T4-4) có so vân
+    // tay (người, máy, cỡ đoạn + số, lô sắt trên route): khác thì 422, không trả đợt của người / lần báo khác.
+    const expectedCut: FloorReportReplayExpected = {
+      kind: FloorReportKind.CUT,
+      reportedById,
+      workstationId: ctx?.workstationId,
+      lines: dto.segments.map((seg) => ({
+        segmentSpecId: parseBigIntId(seg.segmentSpecId),
+        qty: seg.qty,
+      })),
+      cutIssueId: parseBigIntId(id),
+    };
+    const replay = await this.replayFloorReport(idempotencyKey, expectedCut);
     if (replay) return this.replayCutReport(replay.cutBundleId);
     const issue = await this.findOneOrThrow(id);
     // CHỈ chặn khi CHƯA từng xác nhận nhận (ISSUED) - 1 lô có DUY NHẤT 1 đợt cắt thì ngay khi đợt
@@ -918,8 +935,14 @@ export class SteelIssuesService {
     }));
     let bundleId: bigint;
     try {
-      bundleId = await this.prisma.$transaction(
+      const cutOutcome = await this.prisma.$transaction(
         async (tx) => {
+          // 20/11/2026 (QA): try-lock khoá chống trùng là câu ĐẦU (trước cut-cap): bản trùng đang chạy -> 409 ngay, không xếp hàng
+          // rồi vấp "vượt". Có khoá thì đọc lại trong khoá: lần báo vừa commit thì trả dấu 'trả lại', không ghi lần 2.
+          if (idempotencyKey) {
+            await lockIdempotencyKey(tx, 'floor_reports', idempotencyKey);
+            if (await findFloorReportByKey(tx, idempotencyKey)) return null;
+          }
           // Thứ tự khoá: cut-cap (gom mọi người) -> cut-report (của riêng người báo) -> FOR UPDATE các đợt ứng viên.
           await lockBusinessKey(
             tx,
@@ -1020,9 +1043,16 @@ export class SteelIssuesService {
         },
         { timeout: 20_000 },
       );
+      if (cutOutcome === null) {
+        // Lần báo cùng khoá vừa commit ở request khác: so vân tay rồi trả kết quả đó, không phát realtime / việc phụ.
+        const replayInTx = await this.replayFloorReport(idempotencyKey, expectedCut);
+        if (replayInTx) return this.replayCutReport(replayInTx.cutBundleId);
+        throw new IdempotencyKeyInUseException();
+      }
+      bundleId = cutOutcome;
     } catch (e) {
       if (isIdempotencyConflict(e)) {
-        const raced = await this.replayFloorReport(idempotencyKey, FloorReportKind.CUT);
+        const raced = await this.replayFloorReport(idempotencyKey, expectedCut);
         if (raced) return this.replayCutReport(raced.cutBundleId);
       }
       throw e;
@@ -1300,15 +1330,14 @@ export class SteelIssuesService {
     return out;
   }
 
-  /** Lần báo đã ghi với khoá này (null = chưa có). Khoá đã dùng cho loại báo khác -> 409. */
+  /** Lần báo đã ghi với khoá này (null = chưa có). Khoá đã dùng cho loại báo khác / người khác / nội dung khác -> 422
+   *  (IdempotencyKeyReusedException, T4-4 20/11/2026; trước đây 409 hoặc trả nhầm đợt cũ). */
   private async replayFloorReport(
     idempotencyKey: string | null | undefined,
-    kind: FloorReportKind,
+    expected: FloorReportReplayExpected,
   ) {
     const prev = await findFloorReportByKey(this.prisma, idempotencyKey);
-    if (prev && prev.kind !== kind) {
-      throw new ConflictException('Idempotency-Key đã dùng cho một lần báo khác');
-    }
+    if (prev) assertFloorReportReplayMatches(prev, expected);
     return prev;
   }
 
@@ -2660,7 +2689,23 @@ export class SteelIssuesService {
     }
     // Gửi lại cùng khoá -> trả đúng đợt đã ghi (2026-10-12, xem FloorReport).
     // Đã hủy hết lần báo đó (stepBatchId về NULL) thì báo câu lời thường, không ghi lại (P1, AC53).
-    const replay = await this.replayFloorReport(idempotencyKey, FloorReportKind.STEP);
+    // T4-4 (20/11/2026): so vân tay - người, máy, cỡ đoạn + số, và PI / vật tư / công đoạn / SKU - trước khi trả đợt cũ.
+    const expectedStep: FloorReportReplayExpected = {
+      kind: FloorReportKind.STEP,
+      reportedById,
+      workstationId: ctx?.workstationId,
+      lines: dto.segments.map((seg) => ({
+        segmentSpecId: parseBigIntId(seg.segmentSpecId),
+        qty: seg.qty,
+      })),
+      step: {
+        productionInvoiceId: parseBigIntId(productionInvoiceId),
+        materialId: parseBigIntId(dto.materialId),
+        step: dto.step,
+        productionOrderId: parseBigIntId(dto.productionOrderId),
+      },
+    };
+    const replay = await this.replayFloorReport(idempotencyKey, expectedStep);
     if (replay) return this.replayStepReport(replay.stepBatchId);
     const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
     const materialBigId = parseBigIntId(dto.materialId);
@@ -2713,8 +2758,13 @@ export class SteelIssuesService {
     // stepDoneSoFar, giữ khoá tới khi ghi xong dòng mới.
     let created: { id: bigint };
     try {
-      created = await this.prisma.$transaction(
+      const stepOutcome = await this.prisma.$transaction(
         async (tx) => {
+          // 20/11/2026 (QA): try-lock khoá chống trùng là câu ĐẦU (trước step-batch), giống recordCutBatch.
+          if (idempotencyKey) {
+            await lockIdempotencyKey(tx, 'floor_reports', idempotencyKey);
+            if (await findFloorReportByKey(tx, idempotencyKey)) return null;
+          }
           await lockBusinessKey(
             tx,
             `step-batch:${invoice.id}:${materialBigId}:${dto.step}:${order.id}`,
@@ -2769,9 +2819,15 @@ export class SteelIssuesService {
         },
         { timeout: 20_000 },
       );
+      if (stepOutcome === null) {
+        const replayInTx = await this.replayFloorReport(idempotencyKey, expectedStep);
+        if (replayInTx) return this.replayStepReport(replayInTx.stepBatchId);
+        throw new IdempotencyKeyInUseException();
+      }
+      created = stepOutcome;
     } catch (e) {
       if (isIdempotencyConflict(e)) {
-        const raced = await this.replayFloorReport(idempotencyKey, FloorReportKind.STEP);
+        const raced = await this.replayFloorReport(idempotencyKey, expectedStep);
         if (raced) return this.replayStepReport(raced.stepBatchId);
       }
       throw e;
