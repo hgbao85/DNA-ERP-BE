@@ -42,6 +42,16 @@ interface Rule {
 
 const { VIEW, CREATE, UPDATE, DELETE, APPROVE } = PermissionAction;
 const qlsx = (action: PermissionAction): Rule => ({ action, roles: [QLSX] });
+const qlsxAdmin = (action: PermissionAction): Rule => ({
+  action,
+  roles: [QLSX, DEFAULT_ROLES.ADMIN],
+});
+/** Route ghi được mở cho Admin (21/11/2026): chỉ phần Máy & tem QR. */
+const ADMIN_WRITE_ROUTES = [
+  'POST workstations',
+  'PATCH workstations/:id',
+  'POST workstations/:id/regenerate-token',
+];
 /** KCS chốt để chấm (P1): quyền chấm QC_REVIEW:CREATE + chỉ tài khoản KCS_STAFF. */
 const kcsClose: Rule = {
   module: PERMISSION_MODULES.QC_REVIEW,
@@ -66,11 +76,12 @@ const MATRIX: Record<string, Rule> = {
   },
   // QLSX
   'GET summary': qlsx(VIEW),
-  'GET settings': qlsx(VIEW),
-  'GET workstations': qlsx(VIEW),
-  'POST workstations': qlsx(CREATE),
-  'PATCH workstations/:id': qlsx(UPDATE),
-  'POST workstations/:id/regenerate-token': qlsx(UPDATE),
+  // Máy & tem QR: QLSX + Admin (21/11/2026 - Admin cũng thêm / đổi mã / tắt máy được)
+  'GET settings': qlsxAdmin(VIEW),
+  'GET workstations': qlsxAdmin(VIEW),
+  'POST workstations': qlsxAdmin(CREATE),
+  'PATCH workstations/:id': qlsxAdmin(UPDATE),
+  'POST workstations/:id/regenerate-token': qlsxAdmin(UPDATE),
   'GET workers': qlsx(VIEW),
   'POST workers': qlsx(CREATE),
   'PATCH workers/:id': qlsx(UPDATE),
@@ -153,11 +164,13 @@ describe('FloorController - ma trận phân quyền', () => {
     }
   });
 
-  it('Giám đốc (BOSS) và Admin chỉ được ĐỌC báo cáo - không route ghi nào mở cho họ', () => {
-    const readOnlyRoles = [BUSINESS_ROLES.BOSS, DEFAULT_ROLES.ADMIN] as string[];
+  it('Giám đốc (BOSS) chỉ được ĐỌC; Admin chỉ ghi được phần Máy & tem QR', () => {
     for (const [key, rule] of Object.entries(MATRIX)) {
-      const opened = (rule.roles ?? []).filter((r) => readOnlyRoles.includes(r));
-      if (opened.length) expect({ key, method: key.split(' ')[0] }).toEqual({ key, method: 'GET' });
+      const roles = rule.roles ?? [];
+      if (roles.includes(BUSINESS_ROLES.BOSS))
+        expect({ key, method: key.split(' ')[0] }).toEqual({ key, method: 'GET' });
+      if (roles.includes(DEFAULT_ROLES.ADMIN) && !ADMIN_WRITE_ROUTES.includes(key))
+        expect({ key, method: key.split(' ')[0] }).toEqual({ key, method: 'GET' });
     }
   });
 

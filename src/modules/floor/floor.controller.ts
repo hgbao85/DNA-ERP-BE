@@ -198,7 +198,7 @@ export class FloorController {
 
   @Get('settings')
   @RequirePermissions(perm(PermissionAction.VIEW))
-  @RequireRole(QLSX)
+  @RequireRole(QLSX, DEFAULT_ROLES.ADMIN)
   getSettings() {
     return this.admin.getSettings();
   }
@@ -207,21 +207,21 @@ export class FloorController {
 
   @Get('workstations')
   @RequirePermissions(perm(PermissionAction.VIEW))
-  @RequireRole(QLSX)
+  @RequireRole(QLSX, DEFAULT_ROLES.ADMIN)
   listWorkstations(@CurrentUser('id') userId: string) {
     return this.admin.listWorkstations(userId);
   }
 
   @Post('workstations')
   @RequirePermissions(perm(PermissionAction.CREATE))
-  @RequireRole(QLSX)
+  @RequireRole(QLSX, DEFAULT_ROLES.ADMIN)
   createWorkstation(@Body() dto: CreateWorkstationDto, @CurrentUser('id') userId: string) {
     return this.admin.createWorkstation(dto, userId);
   }
 
   @Patch('workstations/:id')
   @RequirePermissions(perm(PermissionAction.UPDATE))
-  @RequireRole(QLSX)
+  @RequireRole(QLSX, DEFAULT_ROLES.ADMIN)
   updateWorkstation(
     @Param('id') id: string,
     @Body() dto: UpdateWorkstationDto,
@@ -232,7 +232,7 @@ export class FloorController {
 
   @Post('workstations/:id/regenerate-token')
   @RequirePermissions(perm(PermissionAction.UPDATE))
-  @RequireRole(QLSX)
+  @RequireRole(QLSX, DEFAULT_ROLES.ADMIN)
   regenerateToken(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.admin.regenerateWorkstationToken(id, userId);
   }

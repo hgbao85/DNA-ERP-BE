@@ -321,7 +321,8 @@ export class FloorAdminService {
       const created = await this.prisma.workstation.create({
         data: {
           code,
-          name: dto.name.trim(),
+          // 21/11/2026: màn bỏ ô "Tên gọi" - không gửi tên thì tên = mã.
+          name: dto.name?.trim() || code,
           stage: dto.stage,
           kind: dto.kind,
           processStep: dto.kind === WorkstationKind.STEP ? dto.processStep : null,
@@ -360,13 +361,34 @@ export class FloorAdminService {
       workshopId = await this.assertWorkshopUsable(dto.workshopId);
       this.workshopScope.assertCanManage(scope, [workshopId], 'xưởng chọn cho máy');
     }
+    // 21/11/2026: đổi mã ngắn - tên gọi đổi theo mã (màn chỉ còn hiện mã). Mã QR giữ nguyên.
+    const code = dto.code?.trim().toUpperCase();
     const data = {
-      name: dto.name?.trim(),
+      code,
+      name: code ?? dto.name?.trim(),
       isActive: dto.isActive,
       cutMachineType: dto.cutMachineType,
       workshopId,
     };
     const machineId = parseBigIntId(id);
+    try {
+      return await this.applyWorkstationUpdate(current, machineId, data, dto, workshopId, userId);
+    } catch (e) {
+      if (code && e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException(`Mã điểm làm việc ${code} đã có`);
+      }
+      throw e;
+    }
+  }
+
+  private async applyWorkstationUpdate(
+    current: Awaited<ReturnType<FloorAdminService['findWorkstationOrThrow']>>,
+    machineId: bigint,
+    data: Prisma.WorkstationUncheckedUpdateInput,
+    dto: UpdateWorkstationDto,
+    workshopId: bigint | null | undefined,
+    userId?: string,
+  ) {
     // Máy cắt tắt / đổi xưởng: phần việc đã chia cho máy bị xoá cùng lúc (về "Chưa chia"), vì máy
     // tắt hay xưởng khác thì dòng chia không còn đúng chỗ.
     const switchedOff = dto.isActive === false && current.isActive;
