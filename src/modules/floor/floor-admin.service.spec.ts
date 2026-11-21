@@ -189,6 +189,19 @@ describe('FloorAdminService', () => {
       expect(prisma.workstation.create).not.toHaveBeenCalled();
     });
 
+    it('21/11: không gửi tên gọi -> tên = mã (màn bỏ ô Tên gọi)', async () => {
+      await service.createWorkstation({
+        code: ' khoan-pa ',
+        stage: 'PHOI',
+        kind: 'STEP',
+        processStep: 'DUC_LO',
+      });
+      const call = (prisma.workstation.create.mock.calls as unknown[][]).at(-1)![0] as {
+        data: { code: string; name: string };
+      };
+      expect(call.data).toMatchObject({ code: 'KHOAN-PA', name: 'KHOAN-PA' });
+    });
+
     it('mã viết hoa, token QR ngẫu nhiên 24 ký tự, bỏ processStep nếu không phải STEP', async () => {
       const w = await service.createWorkstation({
         code: ' laser-01 ',
@@ -367,6 +380,48 @@ describe('FloorAdminService', () => {
         data: { workshopId: unknown };
       };
       expect(keep.data.workshopId).toBeUndefined(); // không gửi = giữ nguyên
+    });
+
+    // 21/11/2026: đổi mã ngắn (QLSX / Admin) - tên gọi đổi theo mã; mã trùng -> 409.
+    it('sửa: đổi mã -> mã viết hoa, tên = mã; không đổi qrToken', async () => {
+      prisma.workstation.findUnique.mockResolvedValue({
+        id: 1n,
+        kind: 'STEP',
+        workshopId: 1n,
+        isActive: true,
+      });
+      await service.updateWorkstation('1', { code: ' dap-pa ' });
+      const call = (prisma.workstation.update.mock.calls as unknown[][]).at(-1)![0] as {
+        data: Record<string, unknown>;
+      };
+      expect(call.data).toMatchObject({ code: 'DAP-PA', name: 'DAP-PA' });
+      expect(call.data).not.toHaveProperty('qrToken');
+    });
+
+    it('sửa: đổi sang mã máy khác đang dùng -> 409 câu rõ', async () => {
+      prisma.workstation.findUnique.mockResolvedValue({
+        id: 1n,
+        kind: 'STEP',
+        workshopId: 1n,
+        isActive: true,
+      });
+      prisma.workstation.update.mockRejectedValueOnce(
+        new Prisma.PrismaClientKnownRequestError('dup', { code: 'P2002', clientVersion: 'test' }),
+      );
+      await expect(service.updateWorkstation('1', { code: 'laser' })).rejects.toThrow(
+        'Mã điểm làm việc LASER đã có',
+      );
+    });
+
+    it('sửa: đổi mã máy cắt đang hoạt động không xoá dòng chia (chỉ tắt / đổi xưởng mới xoá)', async () => {
+      prisma.workstation.findUnique.mockResolvedValue({
+        id: 1n,
+        kind: 'CUT',
+        workshopId: 1n,
+        isActive: true,
+      });
+      await service.updateWorkstation('1', { code: 'LASER-PA' });
+      expect(tx.cutAllocation.findMany).not.toHaveBeenCalled();
     });
 
     it('sửa: đổi loại máy cắt trên máy không phải CUT -> 400; xưởng ngừng -> 400', async () => {

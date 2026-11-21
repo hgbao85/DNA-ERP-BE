@@ -25,11 +25,13 @@ export class CreateWorkstationDto {
   @Matches(/^[A-Za-z0-9_.-]+$/, { message: 'Mã chỉ gồm chữ, số, dấu chấm, gạch dưới, gạch ngang' })
   code!: string;
 
-  @ApiProperty()
+  /** 21/11/2026: màn bỏ ô "Tên gọi" - không gửi thì tên = mã. Giữ trường cho bản FE cũ. */
+  @ApiPropertyOptional({ description: 'Không gửi thì lấy bằng mã' })
+  @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(120)
-  name!: string;
+  name?: string;
 
   @ApiProperty({ enum: MfgStage, enumName: 'MfgStage' })
   @IsEnum(MfgStage)
@@ -70,6 +72,16 @@ export class CreateWorkstationDto {
  * trỏ về điểm cũ).
  */
 export class UpdateWorkstationDto {
+  /** 21/11/2026: đổi mã ngắn in trên tem (QLSX / Admin). Tên gọi đổi theo mã. Mã QR (qrToken) giữ nguyên nên tem cũ vẫn quét được,
+   *  chỉ chữ in trên tem cũ không còn đúng. */
+  @ApiPropertyOptional({ description: 'Mã ngắn mới in trên tem, vd DAP-PA' })
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(32)
+  @Matches(/^[A-Za-z0-9_.-]+$/, { message: 'Mã chỉ gồm chữ, số, dấu chấm, gạch dưới, gạch ngang' })
+  code?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
