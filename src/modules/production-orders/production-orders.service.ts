@@ -454,8 +454,8 @@ export class ProductionOrdersService {
       current?.status === 'CANCELLED'
         ? `Lệnh xưởng ${id} đã bị huỷ (Sếp duyệt huỷ) - không ${action} được nữa`
         : current?.floorStage === 'FINISHED'
-        ? `Lệnh xưởng ${id} đã Kết thúc - không ${action} được nữa (Kết thúc không hoàn tác được)`
-        : `Lệnh xưởng ${id} đang ở trạng thái ${current?.floorStage ?? 'không rõ'} - không ${action} được. Tải lại trang.`,
+          ? `Lệnh xưởng ${id} đã Kết thúc - không ${action} được nữa (Kết thúc không hoàn tác được)`
+          : `Lệnh xưởng ${id} đang ở trạng thái ${current?.floorStage ?? 'không rõ'} - không ${action} được. Tải lại trang.`,
     );
   }
 

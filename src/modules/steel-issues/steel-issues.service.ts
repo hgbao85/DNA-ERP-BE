@@ -2696,8 +2696,7 @@ export class SteelIssuesService {
       // `done` mới = đã báo - thiếu: đoạn KCS ghi thiếu không có thật nên không tốn sắt.
       // Cộng theo byOrder (gồm cả SKU đã huỷ - sg.done không gồm): đoạn của SKU huỷ cũng đã tốn sắt.
       const reportedMm = item.segments.reduce(
-        (t, sg) =>
-          t + sg.byOrder.reduce((s, o) => s + o.done, 0) * (sg.cutLengthMm + kerfMm),
+        (t, sg) => t + sg.byOrder.reduce((s, o) => s + o.done, 0) * (sg.cutLengthMm + kerfMm),
         0,
       );
       // Gợi ý cho P1b (chỉ đọc): còn phải cắt bao nhiêu đoạn (theo từng SKU, SKU đã dư không bù cho SKU còn thiếu),

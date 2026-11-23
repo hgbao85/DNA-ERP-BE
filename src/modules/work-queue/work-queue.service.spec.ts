@@ -436,7 +436,10 @@ describe('WorkQueueService', () => {
       expect(prisma.productionOrderCancelRequest.count).toHaveBeenCalledWith({
         where: { status: 'PENDING' },
       });
-      const khsx = await service.getWorkQueue({ roles: ['PRODUCTION_PLANNER'], warehouseScope: null });
+      const khsx = await service.getWorkQueue({
+        roles: ['PRODUCTION_PLANNER'],
+        warehouseScope: null,
+      });
       expect(khsx.counts).not.toHaveProperty('bossOrderCancel');
     });
   });
