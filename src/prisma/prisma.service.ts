@@ -19,10 +19,45 @@ import { withQueryTiming } from './extensions/query-timing.extension';
 export function createExtendedPrismaClient(cls: ClsService<AppClsStore>) {
   const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
   const client = new PrismaClient({ adapter });
-  return client
+  const extended = client
     .$extends(withQueryTiming(cls))
     .$extends(withAuditLog(cls))
     .$extends(withSoftDelete());
+  return withTransactionContext(extended, cls);
+}
+
+/**
+ * B5 (23/11/2026): bọc `$transaction(async (tx) => ...)` để callback chạy trong ngữ cảnh CLS con có `prismaTx = tx`.
+ * Extension audit-log đọc nó để ghi nhật ký TRONG transaction nghiệp vụ - trước đây nhật ký ghi qua client gốc (kết nối
+ * riêng, ngoài transaction): nghiệp vụ bị huỷ thì dữ liệu về như cũ nhưng dòng nhật ký "đã tạo / đã sửa" vẫn còn (thử sống
+ * trên bản sao: phiếu xuất sắt 146 + giữ chỗ 157), và mỗi lần ghi trong transaction tốn thêm 1 kết nối của pool.
+ * Ngữ cảnh con kế thừa userId / ip / correlationId của request (ifNested 'inherit'); 2 transaction song song mỗi cái có ngữ
+ * cảnh riêng. Dạng mảng `$transaction([...])` để nguyên.
+ */
+export function withTransactionContext<T extends object>(
+  extended: T,
+  cls: ClsService<AppClsStore>,
+): T {
+  return new Proxy(extended, {
+    get(target, prop) {
+      const value = Reflect.get(target, prop, target) as unknown;
+      if (typeof value !== 'function') return value;
+      const bound = (value as (...a: unknown[]) => unknown).bind(target);
+      if (prop !== '$transaction') return bound;
+      return (arg: unknown, ...rest: unknown[]) => {
+        if (typeof arg !== 'function') return bound(arg, ...rest);
+        const callback = arg as (tx: unknown) => unknown;
+        return bound(
+          (tx: unknown) =>
+            cls.run({ ifNested: 'inherit' }, () => {
+              cls.set('prismaTx', tx);
+              return callback(tx);
+            }),
+          ...rest,
+        );
+      };
+    },
+  });
 }
 
 export type PrismaServiceType = ReturnType<typeof createExtendedPrismaClient>;
