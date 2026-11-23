@@ -72,6 +72,7 @@ describe('SteelIssuesService', () => {
       updateMany: jest.Mock;
       findUniqueOrThrow: jest.Mock;
       aggregate: jest.Mock;
+      groupBy: jest.Mock;
     };
     floorReport: { create: jest.Mock; findUnique: jest.Mock; findFirst: jest.Mock };
     productionInvoice: { findUnique: jest.Mock; findMany: jest.Mock };
@@ -203,6 +204,7 @@ describe('SteelIssuesService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findUniqueOrThrow: jest.fn(),
         aggregate: jest.fn().mockResolvedValue({ _sum: { barCount: null } }),
+        groupBy: jest.fn().mockResolvedValue([]),
       },
       // Sổ ghi từng lần báo (2026-10-12) - mặc định chưa có khoá nào (findUnique null), không có lần
       // báo trước để đảo (findFirst null).
@@ -658,6 +660,23 @@ describe('SteelIssuesService', () => {
       expect((err as Error).message).toContain('chỉ còn xuất được 1 cây');
       expect((err as Error).message).toContain('1 cây 5800mm');
       expect(prisma.steelIssue.create).not.toHaveBeenCalled();
+    });
+
+    it('23/11: chiều dài khác đã xuất đủ thì không nêu là "phần còn lại" nữa', async () => {
+      prisma.cuttingProposalLine.findMany.mockResolvedValueOnce(twoLengthPlan);
+      prisma.steelIssue.aggregate.mockResolvedValueOnce({ _sum: { barCount: 3 } });
+      prisma.steelIssue.groupBy.mockResolvedValueOnce([
+        { barLengthMm: 5800, _sum: { barCount: 1 } },
+        { barLengthMm: 6000, _sum: { barCount: 3 } },
+      ]);
+
+      const err = await service
+        .create('1', { materialId: '30', barLengthMm: 6000, barCount: 1 }, 'user-1', null)
+        .catch((e: Error) => e);
+
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect((err as Error).message).toContain('chỉ còn xuất được 0 cây');
+      expect((err as Error).message).not.toContain('chiều dài khác');
     });
 
     it('loại sắt CHỈ cắt cây lẻ (1 chiều dài khác chiều dài mua): không xuất cây chiều dài mua, chặn quá số cây lẻ', async () => {

@@ -522,9 +522,22 @@ export class SteelIssuesService {
     });
     const issued = agg._sum.barCount ?? 0;
     if (issued + barCount <= need) return;
+    // 23/11/2026 (thử sống cây lẻ): nêu số cây CÒN PHẢI xuất ở chiều dài khác (trừ phần đã xuất) - trước đây nêu tổng phương án
+    // cần nên báo "còn 1 cây 5800" dù cây 5800 đã xuất đủ.
+    const issuedByLength = new Map(
+      (
+        await db.steelIssue.groupBy({
+          by: ['barLengthMm'],
+          where: { productionInvoiceId, materialId, reworkOfId: null },
+          _sum: { barCount: true },
+        })
+      ).map((g) => [g.barLengthMm, g._sum.barCount ?? 0]),
+    );
     const others = [...requiredBarsByLength]
       .filter(([len]) => len !== barLengthMm)
-      .map(([len, bars]) => `${bars} cây ${len}mm`)
+      .map(([len, bars]) => [len, bars - (issuedByLength.get(len) ?? 0)] as const)
+      .filter(([, left]) => left > 0)
+      .map(([len, left]) => `${left} cây ${len}mm`)
       .join(', ');
     throw new BadRequestException(
       `Phương án cắt cần ${need} cây ${barLengthMm}mm (đã xuất ${issued}) - chỉ còn xuất được ${Math.max(0, need - issued)} cây chiều dài này.` +
