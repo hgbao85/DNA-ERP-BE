@@ -79,6 +79,54 @@ describe('StockReservationsService', () => {
       expect(result.quantity.toNumber()).toBe(5);
     });
 
+    // CS2 review Sang 21/11: khoá không có chiều dài -> lần giữ chỗ thứ 2 cùng vật tư (cây lẻ + cây mua) trả lại dòng lần 1, mất phần giữ.
+    it('lengthKeyed: cùng nguồn giữ 2 chiều dài cùng vật tư = 2 dòng riêng (cây mua giữ khoá cũ, cây lẻ có đuôi chiều dài)', async () => {
+      const rows = new Map<
+        string,
+        { id: bigint; quantity: unknown; status: string; consumedQty: unknown }
+      >();
+      prisma.stockReservation.findUnique.mockImplementation(
+        ({ where }: { where: { idempotencyKey: string } }) =>
+          Promise.resolve(rows.get(where.idempotencyKey) ?? null),
+      );
+      let nextId = 1n;
+      prisma.stockReservation.create.mockImplementation(
+        ({ data }: { data: { idempotencyKey: string; quantity: number } }) => {
+          const row = {
+            id: nextId++,
+            quantity: decimal(data.quantity),
+            status: 'ACTIVE',
+            consumedQty: decimal(0),
+          };
+          rows.set(data.idempotencyKey, row);
+          return Promise.resolve(row);
+        },
+      );
+      const base = {
+        warehouseId: 6n,
+        materialId: 33n,
+        refType: 'CUTTING_PROPOSAL' as const,
+        refId: '90',
+      };
+
+      const leftover = await service.reserve(
+        { ...base, qty: 1, stockLengthMm: 5800, lengthKeyed: true },
+        prisma as unknown as PrismaTx,
+      );
+      const purchase = await service.reserve(
+        { ...base, qty: 2, stockLengthMm: 6000, lengthKeyed: false },
+        prisma as unknown as PrismaTx,
+      );
+
+      expect(prisma.stockReservation.create).toHaveBeenCalledTimes(2);
+      expect(leftover.id).not.toBe(purchase.id);
+      expect([...rows.keys()]).toEqual([
+        'CUTTING_PROPOSAL:90:material:33:len:5800',
+        'CUTTING_PROPOSAL:90:material:33',
+      ]);
+      expect(purchase.quantity.toNumber()).toBe(2);
+    });
+
     it('lưu đúng stockLengthMm khi caller truyền vào (audit chiều dài đã chốt)', async () => {
       prisma.stockReservation.create.mockResolvedValue({ id: 1n, quantity: decimal(5) });
 
@@ -866,6 +914,102 @@ describe('StockReservationsService', () => {
       expect(prisma.stockReservation.update).toHaveBeenCalledWith({
         where: { id: 900n },
         data: { consumedQty: { increment: 5 } },
+      });
+    });
+
+    // CS2 review Sang 21/11: xuất cây chiều dài mua không được ăn phần giữ cây lẻ (rút theo tổng thì dòng 5800 bị rút trước).
+    describe('stockLengthMm (xuất sắt): chỉ rút dòng cùng chiều dài hoặc dòng chưa ghi chiều dài', () => {
+      const pool = () => [
+        {
+          id: 910n,
+          refType: 'CUTTING_PROPOSAL',
+          refId: '90',
+          warehouseId: 6n,
+          quantity: decimal(1),
+          consumedQty: decimal(0),
+          stockLengthMm: 5800,
+        },
+        {
+          id: 911n,
+          refType: 'CUTTING_PROPOSAL',
+          refId: '90',
+          warehouseId: 6n,
+          quantity: decimal(3),
+          consumedQty: decimal(0),
+          stockLengthMm: 6000,
+        },
+      ];
+
+      it('xuất 3 cây 6000: rút dòng 6000, dòng cây lẻ 5800 giữ nguyên', async () => {
+        const rows = pool();
+        prisma.stockReservation.findMany.mockResolvedValue(rows);
+        mockRowLocks(rows);
+
+        await service.drainPool(prisma as unknown as PrismaTx, {
+          productionInvoiceId: 85n,
+          materialId: 33n,
+          qty: 3,
+          warehouseId: 6n,
+          stockLengthMm: 6000,
+        });
+
+        expect(prisma.stockReservation.update).toHaveBeenCalledTimes(1);
+        expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+          where: { id: 911n },
+          data: { consumedQty: { increment: 3 } },
+        });
+      });
+
+      it('xuất 4 cây 6000 khi chỉ giữ 3 cây 6000 (+1 cây lẻ 5800) -> chặn, không vét sang dòng 5800', async () => {
+        const rows = pool();
+        // lần 2 = tra giữ chỗ ở kho khác cho câu báo (không có)
+        prisma.stockReservation.findMany.mockResolvedValueOnce(rows).mockResolvedValueOnce([]);
+        mockRowLocks(rows);
+
+        await expect(
+          service.drainPool(prisma as unknown as PrismaTx, {
+            productionInvoiceId: 85n,
+            materialId: 33n,
+            qty: 4,
+            warehouseId: 6n,
+            stockLengthMm: 6000,
+          }),
+        ).rejects.toThrow(/dài 6000mm/);
+        expect(prisma.stockReservation.update).not.toHaveBeenCalled();
+      });
+
+      it('dòng chưa ghi chiều dài (0, giữ chỗ cũ) vẫn rút được', async () => {
+        const rows = [{ ...pool()[1], id: 912n, stockLengthMm: 0 }];
+        prisma.stockReservation.findMany.mockResolvedValue(rows);
+        mockRowLocks(rows);
+
+        await service.drainPool(prisma as unknown as PrismaTx, {
+          productionInvoiceId: 85n,
+          materialId: 33n,
+          qty: 2,
+          warehouseId: 6n,
+          stockLengthMm: 6000,
+        });
+        expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+          where: { id: 912n },
+          data: { consumedQty: { increment: 2 } },
+        });
+      });
+
+      it('lệnh không giữ chiều dài đang xuất -> báo rõ các chiều dài đang giữ', async () => {
+        const rows = [pool()[0]];
+        prisma.stockReservation.findMany.mockResolvedValue(rows);
+        mockRowLocks(rows);
+
+        await expect(
+          service.drainPool(prisma as unknown as PrismaTx, {
+            productionInvoiceId: 85n,
+            materialId: 33n,
+            qty: 1,
+            warehouseId: 6n,
+            stockLengthMm: 6000,
+          }),
+        ).rejects.toThrow(/chỉ giữ cây 5800mm/);
       });
     });
 

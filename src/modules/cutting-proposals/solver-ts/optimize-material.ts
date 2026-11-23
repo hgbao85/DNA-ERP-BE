@@ -147,6 +147,16 @@ export function optimizeMaterial(
     };
   }
 
+  // CS2: chiều dài cây lẻ có trong bài này (bỏ chiều dài không có trong stockLengths / số cây ≤ 0).
+  const cappedLengths = Object.entries(opts.lengthCaps ?? {})
+    .map(([len, max]) => [Number(len), Math.trunc(max)] as const)
+    .filter(([len, max]) => max > 0 && stockLengths.includes(len));
+  const hasCaps = cappedLengths.length > 0;
+  // CS2 (anh Nhân câu 2b, review Sang 21/11): chỉ kiểu cắt trên CÂY LẺ được vượt ngưỡng hao hụt từng cây (cây lẻ dùng trước kể cả
+  // khi làm vượt ngưỡng - KHSX xin đặc cách); kiểu cắt trên cây MUA giữ đúng ngưỡng như thường.
+  const cappedSet = new Set(cappedLengths.map(([len]) => len));
+  const ratioOf = (S: number) => (cappedSet.has(S) ? 1.0 : maxWasteRatio);
+
   // 2) Sinh pattern (MC Laser: cap 4 cỡ/cây trước, rỗng thì sinh lại không giới hạn; MC Tự động: chặn
   //    CỨNG mctdCap cỡ - máy không nhập được hơn, nên không có bước "sinh lại không giới hạn")
   const enumBudget = Math.max(1.0, Math.min(timeLimit, ENUM_TIME_LIMIT));
@@ -172,7 +182,8 @@ export function optimizeMaterial(
           ...(minTail > 0 ? { minLastCutMm: minTail } : {}),
         });
       const tGen = performance.now();
-      const first = gen(maxWasteRatio);
+      const ratioS = ratioOf(S);
+      const first = gen(ratioS);
       let rows = first.rows;
       const complete = first.complete;
       // Ngưỡng cao (vd chế độ "Chấp nhận hao hụt cao hơn" gửi 100 %) làm liệt kê chạm trần 100.000 kiểu theo thứ tự DFS -
@@ -182,7 +193,7 @@ export function optimizeMaterial(
       // Chỉ chạy khi lần liệt kê đầu hụt MÀ không phải do hết giờ; ca ngưỡng thấp/đủ trần không đi qua đây.
       if (!complete && first.rows.length && (performance.now() - tGen) / 1000 < enumBudget * 0.5) {
         for (const r of ENUM_RATIO_LADDER) {
-          if (r >= maxWasteRatio) continue;
+          if (r >= ratioS) continue;
           const low = gen(r);
           if (!low.complete) continue;
           const seen = new Set(low.rows.map((x) => x.counts.join(',')));
@@ -260,11 +271,6 @@ export function optimizeMaterial(
   // 10.000 -> 325 cây chưa chứng minh, 5.000 -> 324 cây tối ưu 22 s. 4 ca tham chiếu (3-12.343 pattern)
   // vẫn trùng OR-Tools với 5.000. Biến môi trường SOLVER_TS_WARM_START=0 / SOLVER_TS_MAX_IP_PATTERNS=0
   // tắt (ngữ nghĩa Python: đưa hết tới 100.000 pattern).
-  // CS2: chiều dài cây lẻ có trong bài này (bỏ chiều dài không có trong stockLengths / số cây ≤ 0).
-  const cappedLengths = Object.entries(opts.lengthCaps ?? {})
-    .map(([len, max]) => [Number(len), Math.trunc(max)] as const)
-    .filter(([len, max]) => max > 0 && stockLengths.includes(len));
-  const hasCaps = cappedLengths.length > 0;
   // Nghiệm tham lam không biết giới hạn cây lẻ -> tắt khi có cây lẻ (HiGHS tự tìm nghiệm đầu).
   const warmStart = hasCaps ? false : (opts.warmStart ?? process.env.SOLVER_TS_WARM_START !== '0');
   const maxIpPatterns =

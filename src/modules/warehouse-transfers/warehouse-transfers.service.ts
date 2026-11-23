@@ -1369,7 +1369,8 @@ export class WarehouseTransfersService {
         kind === 'PIECE'
           ? t.pieceItems.map((p) => `${p.productionOrderId}|${p.pieceId}|${Number(p.quantity)}`)
           : t.items.map(
-              (i) => `${i.materialId}|${i.spec?.trim() ?? ''}|${Number(i.quantity.toNumber().toFixed(4))}`,
+              (i) =>
+                `${i.materialId}|${i.spec?.trim() ?? ''}|${Number(i.quantity.toNumber().toFixed(4))}`,
             ),
     };
   }

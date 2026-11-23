@@ -2511,6 +2511,29 @@ export class CuttingProposalsService {
    * cần QLSX bấm duyệt riêng - tính xong là duyệt luôn); vẫn nhận string thật khi gọi qua endpoint
    * thủ công POST /:id/approve (dự phòng cho ca hiếm auto-duyệt lỗi, xem runSolverAndSave()).
    */
+  /**
+   * Phương án ĐÃ DUYỆT cùng neo (cùng lệnh SX đơn SKU, hoặc cùng lệnh gộp) với phương án proposalId - đúng tập approve() sẽ đánh
+   * SUPERSEDED và nhả giữ chỗ. CS2 (review Sang 21/11): đọc cây lẻ cho lượt tính lại phải coi giữ chỗ của các phương án này là của
+   * chính lệnh (sắp nhả), không phải của lệnh khác. Phương án tính trước lệnh (chưa neo) -> rỗng.
+   */
+  private async siblingProposalIdsToSupersede(proposalId: bigint): Promise<bigint[]> {
+    const p = await this.prisma.cuttingProposal.findUnique({
+      where: { id: proposalId },
+      select: { productionOrderId: true, productionInvoiceId: true },
+    });
+    const anchor = p?.productionOrderId
+      ? { productionOrderId: p.productionOrderId }
+      : p?.productionInvoiceId
+        ? { productionInvoiceId: p.productionInvoiceId }
+        : null;
+    if (!anchor) return [];
+    const rows = await this.prisma.cuttingProposal.findMany({
+      where: { ...anchor, id: { not: proposalId }, status: CuttingProposalStatus.APPROVED },
+      select: { id: true },
+    });
+    return rows.map((r) => r.id);
+  }
+
   async approve(id: string, actorUserId: string | null): Promise<CuttingProposalResponseDto> {
     const bigId = parseBigIntId(id);
     const proposal = await this.prisma.cuttingProposal.findUnique({
@@ -2778,6 +2801,8 @@ export class CuttingProposalsService {
           consumeQty: number;
           warehouseId: bigint;
           bestStockLengthMm: number | null;
+          /** CS2: dòng cây lẻ (khác chiều dài mua) - khoá giữ chỗ có chiều dài để không trùng dòng cây mua. */
+          leftover: boolean;
         }[] = [];
 
         if (buyableLines.length > 0) {
@@ -2858,6 +2883,7 @@ export class CuttingProposalsService {
                   consumeQty,
                   warehouseId,
                   bestStockLengthMm: lengthMm,
+                  leftover: lengthMm !== purchaseLengthMm,
                 });
               }
             }
@@ -3089,7 +3115,13 @@ export class CuttingProposalsService {
         // Việc đọc tồn - quyết định consumeQty - ghi giữ chỗ vẫn nằm trọn trong 1 khoá, 1 commit như
         // trước (lý do giữ FOR UPDATE ở trên không đổi: 2 phương án cùng vật tư duyệt gần nhau vẫn
         // phải xếp hàng, chỉ là phần "ăn" giờ là giữ chỗ thay vì trừ tồn thẳng).
-        for (const { materialId, consumeQty, warehouseId, bestStockLengthMm } of consumptions) {
+        for (const {
+          materialId,
+          consumeQty,
+          warehouseId,
+          bestStockLengthMm,
+          leftover,
+        } of consumptions) {
           await this.stockReservationsService.reserve(
             {
               warehouseId,
@@ -3106,6 +3138,9 @@ export class CuttingProposalsService {
               // riêng). Pool vẫn rút theo tổng số cây (length-agnostic); xuất sắt tự chặn số cây theo từng chiều dài
               // (SteelIssuesService.prepareIssue).
               stockLengthMm: bestStockLengthMm ?? 0,
+              // Review Sang 21/11: cây lẻ cùng vật tư với cây mua -> khoá riêng theo chiều dài, nếu không reserve() trả lại dòng
+              // của lần trước và phần giữ thứ 2 mất lặng lẽ. Dòng cây mua giữ khoá dạng cũ.
+              lengthKeyed: leftover,
             },
             tx,
           );
@@ -3254,6 +3289,8 @@ export class CuttingProposalsService {
           distinctMaterialIds,
           { minMm: config.solverMinLengthMm, maxMm: config.solverMaxLengthMm, standardLengths: [] },
           job.workshop ? BigInt(job.workshop.id) : null,
+          // Review Sang 21/11: cây lẻ lệnh này đang giữ qua phương án cũ (sẽ bị thay khi duyệt phương án này) vẫn tính là có.
+          { excludeCuttingProposalIds: await this.siblingProposalIdsToSupersede(proposalId) },
         );
         for (const [id, rows] of leftovers) {
           const typed = typedLengths[id];

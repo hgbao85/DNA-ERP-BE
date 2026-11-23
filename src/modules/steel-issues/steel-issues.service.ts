@@ -151,6 +151,9 @@ export interface PreparedSteelIssue {
   warehouse: { id: bigint; code: string };
   /** Xưởng của lệnh lúc tra `warehouse` - createInTx() so lại SAU khoá dòng lệnh (rà soát 14/11 CK6). */
   workshopId: bigint | null;
+  /** CS2: số cây phương án cần theo từng chiều dài khi loại sắt có cây lẻ - createInTx() kiểm lại SAU khoá dòng lệnh (review Sang
+   *  21/11: kiểm ở prepareIssue nằm ngoài transaction, 2 người xuất cùng lúc / 1 phiếu 2 dòng trùng đều lọt). null = không kiểm. */
+  lengthCap?: Map<number, number> | null;
 }
 type SteelIssueDetail = Prisma.SteelIssueGetPayload<{ include: typeof STEEL_ISSUE_DETAIL_INCLUDE }>;
 type BaseInputs = {
@@ -439,11 +442,8 @@ export class SteelIssuesService {
     }
     await this.assertMaterialUsedInInvoice(orders, materialId, invoice.id);
     const poIds = orders.map((o) => o.id);
-    const { approvedAt, stockLengthsMm, requiredBarsByLength, usesLeftover } = await this.assertMaterialInApprovedProposal(
-      invoice.id,
-      poIds,
-      materialId,
-    );
+    const { approvedAt, stockLengthsMm, requiredBarsByLength, usesLeftover } =
+      await this.assertMaterialInApprovedProposal(invoice.id, poIds, materialId);
     // Rà soát 14/11 XK4: cây xuất phải đúng chiều dài phương án đã duyệt (Phôi cắt theo phương án đó; tồn bị trừ ở đúng ô chiều dài
     // xuất). Phương án cũ chưa lưu chiều dài (trước 26/08) thì không kiểm.
     if (stockLengthsMm.length > 0 && !stockLengthsMm.includes(dto.barLengthMm)) {
@@ -455,23 +455,17 @@ export class SteelIssuesService {
     // cây phương án cần. Giữ chỗ rút theo TỔNG cây nên không tự chặn được: xuất dư chiều dài này sẽ ăn mất phần của chiều dài
     // kia. Cũng áp dụng khi CẢ loại sắt chỉ cắt cây lẻ (1 chiều dài nhưng khác chiều dài mua) - không xuất cây chiều dài mua
     // không được giữ chỗ cho lệnh. Phương án 1 chiều dài mua (cũ) giữ nguyên như trước (giữ chỗ chặn tổng).
-    if (requiredBarsByLength.size > 1 || usesLeftover) {
-      const need = requiredBarsByLength.get(dto.barLengthMm) ?? 0;
-      const agg = await this.prisma.steelIssue.aggregate({
-        where: { productionInvoiceId: invoice.id, materialId, barLengthMm: dto.barLengthMm, reworkOfId: null },
-        _sum: { barCount: true },
-      });
-      const issued = agg._sum.barCount ?? 0;
-      if (issued + dto.barCount > need) {
-        const others = [...requiredBarsByLength]
-          .filter(([len]) => len !== dto.barLengthMm)
-          .map(([len, bars]) => `${bars} cây ${len}mm`)
-          .join(', ');
-        throw new BadRequestException(
-          `Phương án cắt cần ${need} cây ${dto.barLengthMm}mm (đã xuất ${issued}) - chỉ còn xuất được ${Math.max(0, need - issued)} cây chiều dài này.` +
-            (others ? `\nPhần còn lại của loại sắt này xuất theo chiều dài khác: ${others}` : ''),
-        );
-      }
+    const lengthCap = requiredBarsByLength.size > 1 || usesLeftover ? requiredBarsByLength : null;
+    if (lengthCap) {
+      // Báo sớm (trước khi lập phiếu); createInTx() kiểm lại dưới khoá dòng lệnh.
+      await this.assertLengthCap(
+        this.prisma,
+        invoice.id,
+        materialId,
+        dto.barLengthMm,
+        dto.barCount,
+        lengthCap,
+      );
     }
     // approvedAt null về lý thuyết không xảy ra (status đã lọc APPROVED ở query trên, field này
     // luôn được set cùng lúc chuyển status) - coi như "trước cutover" nếu có, an toàn hơn (không
@@ -498,7 +492,38 @@ export class SteelIssuesService {
       warehouse: { id: warehouse.id, code: warehouse.code },
       // Cùng resolver (đã nhớ xưởng lúc tra kho ở trên) - đúng xưởng đã dùng để ra `warehouse`.
       workshopId: await resolver.workshopIdOfPi(invoice.id),
+      lengthCap,
     };
+  }
+
+  /**
+   * CS2 (anh Nhân 20/11/2026): phương án dùng cả cây lẻ kho Phôi lẫn cây chiều dài mua (hoặc chỉ cây lẻ) -> mỗi chiều dài chỉ xuất tới
+   * đúng số cây phương án cần. Giữ chỗ giờ rút đúng chiều dài (drainPool stockLengthMm) nhưng phần giữ cây mua còn gồm hàng mua về
+   * cho cả lệnh, nên vẫn chặn theo số cây phương án ở đây. `db` = tx khi gọi từ createInTx (đếm cả dòng vừa ghi trong cùng phiếu).
+   */
+  private async assertLengthCap(
+    db: PrismaTx | PrismaServiceType,
+    productionInvoiceId: bigint,
+    materialId: bigint,
+    barLengthMm: number,
+    barCount: number,
+    requiredBarsByLength: Map<number, number>,
+  ): Promise<void> {
+    const need = requiredBarsByLength.get(barLengthMm) ?? 0;
+    const agg = await db.steelIssue.aggregate({
+      where: { productionInvoiceId, materialId, barLengthMm, reworkOfId: null },
+      _sum: { barCount: true },
+    });
+    const issued = agg._sum.barCount ?? 0;
+    if (issued + barCount <= need) return;
+    const others = [...requiredBarsByLength]
+      .filter(([len]) => len !== barLengthMm)
+      .map(([len, bars]) => `${bars} cây ${len}mm`)
+      .join(', ');
+    throw new BadRequestException(
+      `Phương án cắt cần ${need} cây ${barLengthMm}mm (đã xuất ${issued}) - chỉ còn xuất được ${Math.max(0, need - issued)} cây chiều dài này.` +
+        (others ? `\nPhần còn lại của loại sắt này xuất theo chiều dài khác: ${others}` : ''),
+    );
   }
 
   /** Đợt 7: thủ kho chỉ xuất sắt ở đúng kho Phôi của xưởng làm lệnh (trước đây cả họ phoi-son-han). null = tổng kho. */
@@ -527,6 +552,16 @@ export class SteelIssuesService {
     }
     assertWorkshopUnchanged(locked, p.workshopId);
     await assertPiHasActiveFloorLocked(tx, p.productionInvoiceId, 'xuất sắt');
+    if (p.lengthCap) {
+      await this.assertLengthCap(
+        tx,
+        p.productionInvoiceId,
+        p.materialId,
+        p.barLengthMm,
+        p.barCount,
+        p.lengthCap,
+      );
+    }
 
     const issue = await tx.steelIssue.create({
       data: {
@@ -600,6 +635,8 @@ export class SteelIssuesService {
       materialId: input.materialId,
       qty: input.barCount,
       warehouseId: input.expectedWarehouseId,
+      // CS2 (review Sang 21/11): rút đúng giữ chỗ của chiều dài cây đang xuất (cây lẻ / cây mua tách riêng).
+      stockLengthMm: input.barLengthMm,
     });
 
     // Chặn tồn âm cục bộ (lỗ #2, mục 13.4) - không sửa StockLedgerService.postEntry() dùng chung

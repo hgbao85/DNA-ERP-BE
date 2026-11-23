@@ -281,10 +281,10 @@ function optimizeOneMaterialAtCap(
     ...(opts.hardMaxSizesPerBar != null ? { hardMaxSizesPerBar: opts.hardMaxSizesPerBar } : {}),
   };
   const machineOpts = { ...baseMachineOpts, ...(minTail > 0 ? { laserMinTailMm: minTail } : {}) };
-  // CS2: thêm cây lẻ (khác chiều dài mua đang thử) + giới hạn số cây vào mọi lần giải. Anh Nhân câu 2b (C): dùng HẾT cây lẻ kể
-  // cả khi làm hao hụt vượt ngưỡng - KHSX xin đặc cách. Nên khi có cây lẻ thì KHÔNG lọc kiểu cắt theo ngưỡng TỪNG cây (lọc thì
-  // bộ giải tự bỏ cây lẻ để giữ dưới ngưỡng - đo thật 20/11: SAT-001 cây lẻ 5800 bị bỏ); ngưỡng vẫn xét trên TỔNG hao hụt
-  // (over_waste) như cũ -> vượt thì báo vượt ngưỡng.
+  // CS2: thêm cây lẻ (khác chiều dài mua đang thử) + giới hạn số cây vào mọi lần giải. Anh Nhân câu 2b: dùng cây lẻ trước kể cả
+  // khi làm hao hụt vượt ngưỡng - KHSX xin đặc cách. optimizeMaterial chỉ nới ngưỡng TỪNG cây cho kiểu cắt trên cây lẻ (lọc thì
+  // bộ giải tự bỏ cây lẻ để giữ dưới ngưỡng - đo thật 20/11: SAT-001 cây lẻ 5800 bị bỏ); kiểu cắt trên cây mua giữ ngưỡng (review
+  // Sang 21/11: nới cả loại sắt thì cây mua cũng cắt 1 đoạn/cây được). Ngưỡng tổng (over_waste) xét như cũ.
   const leftovers = (opts.leftovers ?? []).filter(
     (l) => Number.isFinite(l.length) && l.length > 0 && Math.trunc(l.count) > 0,
   );
@@ -295,7 +295,7 @@ function optimizeOneMaterialAtCap(
     for (const l of extra) lengthCaps[l.length] = Math.trunc(l.count);
     return {
       sl: [...sl, ...extra.map((l) => l.length)],
-      o: { ...o, lengthCaps, maxWasteRatio: 1.0 },
+      o: { ...o, lengthCaps },
     };
   };
   const optimize: OptimizeMaterialFn = (h, cl, dm, sl, t, k, o) => {

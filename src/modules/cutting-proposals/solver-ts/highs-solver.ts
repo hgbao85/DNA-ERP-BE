@@ -78,8 +78,11 @@ export interface TwoStageInput {
   stage1Only?: boolean;
   /**
    * CS2 (anh Nhân 20/11/2026): cây lẻ trong kho - mỗi nhóm là các pattern cắt trên MỘT chiều dài cây lẻ, tổng số cây của nhóm
-   * ≤ `max` (số cây đang có). Có mặt thì giải thêm "tầng 0": dùng NHIỀU cây lẻ nhất có thể ("ưu tiên dùng hết cây lẻ trước khi
-   * dùng cây mua"), rồi mới tới 2 tầng thường với số cây lẻ đã chốt ở tầng 0. Chỉ đường 'direct' (nhiều chiều dài cây).
+   * ≤ `max` (số cây đang có). Có mặt thì giải thêm "tầng 0": ÍT CÂY MUA nhất (pattern không thuộc nhóm cây lẻ nào) - cây lẻ chỉ có
+   * ích khi bớt được cây phải mua. KHÔNG tối đa số cây lẻ (review Sang 21/11: 30 cây lẻ 5800 cho 20 đoạn 500 bị phá hết, mỗi cây
+   * 1 đoạn), cũng KHÔNG tối đa chiều dài cắt từ cây lẻ (đo 23/11: SAT-001 650×4 + 420×8 vẫn phải mua 1 cây 6000 mà còn cắt thêm
+   * 1 cây lẻ 5800 - 2 cây cho việc 1 cây làm được). Rồi 2 tầng thường với số cây mua ≤ số tầng 0 - tầng 1 min khúc thừa tự dùng
+   * ít cây lẻ nhất đủ bù. Chỉ đường 'direct' (nhiều chiều dài cây).
    */
   lengthCaps?: Array<{ patterns: number[]; max: number }>;
 }
@@ -212,6 +215,10 @@ interface Built {
   capRows: number[];
   /** CS2: số cây lẻ một cột dùng (factor nếu pattern thuộc nhóm cây lẻ, 0 nếu không) */
   capCoef: number[];
+  /** CS2: hàng "Σ cây MUA" (pattern không thuộc nhóm cây lẻ nào); -1 khi không có cây lẻ */
+  purchaseRow: number;
+  /** CS2: số cây mua một cột dùng (factor nếu pattern KHÔNG thuộc nhóm cây lẻ, 0 nếu thuộc) */
+  purchaseCoef: number[];
 }
 
 /** Hệ số bó hợp lệ: nguyên, > 1, bỏ trùng, giảm dần (như app cũ `sorted(set(factors), reverse=True)`). */
@@ -235,10 +242,13 @@ function build(highs: Highs, inp: TwoStageInput): Built {
   const capRows = caps.map((_, g) => capRow0 + g);
   const capGroupOf = new Map<number, number>();
   caps.forEach((cg, g) => cg.patterns.forEach((p) => capGroupOf.set(p, g)));
-  const numRows = capRow0 + caps.length;
+  // CS2: có cây lẻ thì thêm 1 hàng "Σ cây mua" sau các hàng cây lẻ (tầng 0 tối thiểu hàng này, rồi chốt cận trên).
+  const purchaseRow = caps.length > 0 ? capRow0 + caps.length : -1;
+  const numRows = capRow0 + caps.length + (purchaseRow >= 0 ? 1 : 0);
   const factors = bundle ?? [1];
   const numCols = P * factors.length;
   const capCoef = new Array<number>(numCols).fill(0);
+  const purchaseCoef = new Array<number>(numCols).fill(0);
 
   const colLower = new Array<number>(numCols).fill(0);
   const colUpper = new Array<number>(numCols);
@@ -281,6 +291,10 @@ function build(highs: Highs, inp: TwoStageInput): Built {
         indices.push(capRows[g]);
         values.push(f);
         capCoef[col] = f;
+      } else if (purchaseRow >= 0) {
+        indices.push(purchaseRow);
+        values.push(f);
+        purchaseCoef[col] = f;
       }
       starts.push(indices.length);
       // Có bó: cận trên số bó = ceil(cap / f) như app cũ (safe_div_ceil) - bó cuối có thể vượt cap
@@ -311,6 +325,10 @@ function build(highs: Highs, inp: TwoStageInput): Built {
     rowLower[capRows[g]] = 0;
     rowUpper[capRows[g]] = Math.max(0, Math.trunc(cg.max));
   });
+  if (purchaseRow >= 0) {
+    rowLower[purchaseRow] = 0;
+    rowUpper[purchaseRow] = highs.infinity;
+  }
 
   return {
     numCols,
@@ -329,6 +347,8 @@ function build(highs: Highs, inp: TwoStageInput): Built {
     ...(useManual ? { columns } : {}),
     capRows,
     capCoef,
+    purchaseRow,
+    purchaseCoef,
   };
 }
 
@@ -1584,14 +1604,15 @@ function solveBundled(highs: Highs, inp: TwoStageInput): TwoStageResult {
 }
 
 /**
- * CS2 (anh Nhân 20/11/2026: "ưu tiên dùng hết cây lẻ trước khi dùng cây mua"): tầng 0 = max Σ cây lẻ dùng (trong giới hạn số cây
- * từng chiều dài và ràng buộc nhu cầu như thường), rồi CHỐT cận dưới số cây lẻ của từng chiều dài = số tầng 0 dùng và giải 2 tầng
- * thường (min khúc thừa, rồi min đoạn dư) trên mô hình đã chốt. Hao hụt vượt ngưỡng do cây lẻ thì phía trên báo như thường (KHSX
- * xin đặc cách - câu 2b). Tầng 0 vô nghiệm = cả bài vô nghiệm.
+ * CS2 (anh Nhân 20/11/2026: "ưu tiên dùng cây lẻ trước khi dùng cây mua"): tầng 0 = min Σ cây MUA (trong giới hạn số cây lẻ từng
+ * chiều dài và ràng buộc nhu cầu như thường), rồi CHỐT cận trên số cây mua = số tầng 0 và giải 2 tầng thường (min khúc thừa, rồi
+ * min đoạn dư) - tầng 1 tự dùng ít cây lẻ nhất đủ bù phần không phải mua; cây lẻ không bớt được cây mua nào thì không bị cắt.
+ * Bản đầu (20/11) tối đa số CÂY lẻ rồi chốt làm cận dưới: kiểu cắt 1 đoạn/cây cũng hợp lệ nên phá hết cây lẻ (review Sang 21/11).
+ * Hao hụt vượt ngưỡng do cây lẻ thì phía trên báo như thường (KHSX xin đặc cách - câu 2b). Tầng 0 vô nghiệm = cả bài vô nghiệm.
  */
 function solveWithLengthCaps(highs: Highs, b: Built, inp: TwoStageInput): TwoStageResult {
   const s0 = runModel(highs, b, {
-    colCost: b.capCoef.map((v) => -v),
+    colCost: b.purchaseCoef,
     timeLimitSec: Math.max(1, inp.timeLimitSec * 0.3),
   });
   if (!s0.y) {
@@ -1603,22 +1624,73 @@ function solveWithLengthCaps(highs: Highs, b: Built, inp: TwoStageInput): TwoSta
       stage2: { ...emptyStage('error'), fellBack: false },
     };
   }
-  const rowLower = b.rowLower.slice();
-  b.capRows.forEach((row) => {
-    let used = 0;
-    for (let c = 0; c < b.numCols; c++) {
-      if (b.capCoef[c] === 0) continue;
-      for (let k = b.starts[c]; k < b.starts[c + 1]; k++) {
-        if (b.indices[k] === row) used += b.values[k] * Math.round(s0.y![c]);
-      }
-    }
-    rowLower[row] = used;
+  let purchased = 0;
+  for (let c = 0; c < b.numCols; c++) purchased += b.purchaseCoef[c] * Math.round(s0.y[c]);
+  const rowUpper = b.rowUpper.slice();
+  rowUpper[b.purchaseRow] = purchased;
+  return solveDirect(highs, { ...b, rowUpper }, { ...inp, warmStart: false });
+}
+
+/** Bài con chỉ gồm các pattern `idx` (chỉ số gốc), nhóm cây lẻ đánh lại chỉ số. */
+function subsetInput(inp: TwoStageInput, idx: number[]): TwoStageInput {
+  const pos = new Map(idx.map((p, i) => [p, i]));
+  return {
+    ...inp,
+    patterns: idx.map((p) => inp.patterns[p]),
+    lengthCaps: (inp.lengthCaps ?? [])
+      .map((g) => ({
+        max: g.max,
+        patterns: g.patterns.filter((p) => pos.has(p)).map((p) => pos.get(p)!),
+      }))
+      .filter((g) => g.patterns.length > 0),
+  };
+}
+
+/** Đưa cột của nghiệm bài con về chỉ số pattern gốc. */
+function remapColumns(r: TwoStageResult, idx: number[]): TwoStageResult {
+  return r.columns
+    ? { ...r, columns: r.columns.map((c) => ({ pattern: idx[c.pattern], factor: c.factor })) }
+    : r;
+}
+
+/**
+ * CS2 + MC Tự động (review Sang 21/11, đo 23/11): có cây lẻ mà đi thẳng solveWithLengthCaps trên bài bó đầy đủ thì loại sắt lớn hết giờ
+ * không ra nghiệm (I5 V15 12 cỡ / 27.300 đoạn + 3 cây lẻ 5800: 20 s không nghiệm; không cây lẻ 1801 cây nhờ đường thu hẹp). Nên:
+ * (1) giải bài CÂY MUA bằng đường thường (thu hẹp bó); (2) giải bài có cây lẻ trên tập nhỏ = pattern (1) dùng + mọi pattern cây lẻ.
+ * Nghiệm (1) nằm trong tập (2) (cây lẻ = 0) nên (2) không tệ hơn về số cây mua; (2) không ra nghiệm thì dùng (1) - không cây lẻ.
+ */
+function solveBundledWithLengthCaps(highs: Highs, inp: TwoStageInput): TwoStageResult {
+  const capped = new Set((inp.lengthCaps ?? []).flatMap((g) => g.patterns));
+  const purchaseIdx = inp.patterns.map((_, p) => p).filter((p) => !capped.has(p));
+  const t0 = performance.now();
+  const base =
+    purchaseIdx.length > 0
+      ? solveTwoStage(highs, { ...subsetInput(inp, purchaseIdx), lengthCaps: undefined })
+      : null;
+  if (!base?.y || !base.columns) return solveWithLengthCaps(highs, build(highs, inp), inp);
+  const used = new Set<number>();
+  base.columns.forEach((c, i) => {
+    if ((base.y![i] ?? 0) > 0) used.add(purchaseIdx[c.pattern]);
   });
-  return solveDirect(highs, { ...b, rowLower }, { ...inp, warmStart: false });
+  const idx = [...new Set([...used, ...capped])].sort((a, b) => a - b);
+  const sub = subsetInput(inp, idx);
+  const elapsed = (performance.now() - t0) / 1000;
+  const r = solveWithLengthCaps(highs, build(highs, sub), {
+    ...sub,
+    timeLimitSec: Math.max(5, inp.timeLimitSec - elapsed),
+  });
+  return r.y ? remapColumns(r, idx) : remapColumns(base, purchaseIdx);
 }
 
 export function solveTwoStage(highs: Highs, inp: TwoStageInput): TwoStageResult {
   if (inp.lengthCaps && inp.lengthCaps.length > 0) {
+    if (
+      inp.bundle &&
+      !inp.allowShortage &&
+      inp.patterns.length >= (inp.bundle.narrowMinPatterns ?? BUNDLE_NARROW_MIN_PATTERNS)
+    ) {
+      return solveBundledWithLengthCaps(highs, inp);
+    }
     return solveWithLengthCaps(highs, build(highs, inp), inp);
   }
   if (
