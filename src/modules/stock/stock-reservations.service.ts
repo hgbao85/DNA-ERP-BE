@@ -14,11 +14,12 @@ export interface ReserveInput {
   productionInvoiceId?: bigint;
   note?: string;
   createdById?: string;
-  /** Chiều dài cây (mm) đã chốt cho lần giữ chỗ này - CHỈ để audit, KHÔNG ảnh hưởng logic pool
-   *  (loadPool/creditPool/drainPool cố ý length-agnostic, xem doc comment class: 1 (PI, vật tư) chỉ
-   *  có 1 chiều dài nhờ CuttingProposalsService.findConflictingStockLengthReason() chặn từ lúc
-   *  duyệt, nên rút theo tổng số cây vẫn đúng). Mặc định 0 khi không truyền. */
+  /** Chiều dài cây (mm) của lần giữ chỗ này. Mặc định 0 khi không truyền. drainPool() có `stockLengthMm` (xuất sắt) chỉ rút dòng
+   *  cùng chiều dài hoặc dòng chưa ghi chiều dài (0) - CS2 20/11: 1 lệnh có thể giữ cả cây lẻ kho Phôi lẫn cây chiều dài mua. */
   stockLengthMm?: number;
+  /** CS2 (review Sang 21/11): true = khoá chống trùng có thêm chiều dài - cùng nguồn giữ được NHIỀU dòng cùng vật tư khác chiều dài
+   *  (cây lẻ kho Phôi bên cạnh cây chiều dài mua). Bỏ trống = khoá dạng cũ (dòng cũ không đổi). */
+  lengthKeyed?: boolean;
   /** Quy cách của hàng được giữ ('' / bỏ trống = không quy cách) - nệm. Khác quy cách = dòng giữ chỗ RIÊNG. */
   spec?: string;
 }
@@ -45,11 +46,14 @@ function reservationKey(
   materialId: bigint,
   spec: string | undefined,
   warehouseId: bigint,
+  /** CS2: chiều dài cây khi nguồn giữ nhiều chiều dài cùng vật tư (cây lẻ) - bỏ trống/0 = dạng cũ. */
+  lengthMm?: number,
 ): string {
   const base = `${refType}:${refId}:material:${materialId}`;
   const s = spec?.trim();
   const withSpec = s ? `${base}:spec:${s}` : base;
-  return WAREHOUSE_KEYED_REF_TYPES.has(refType) ? `${withSpec}:wh:${warehouseId}` : withSpec;
+  const withLen = lengthMm && lengthMm > 0 ? `${withSpec}:len:${lengthMm}` : withSpec;
+  return WAREHOUSE_KEYED_REF_TYPES.has(refType) ? `${withLen}:wh:${warehouseId}` : withLen;
 }
 
 const WAREHOUSE_SUFFIX = /:wh:\d+$/;
@@ -112,14 +116,16 @@ export class StockReservationsService {
       throw new BadRequestException('qty giữ chỗ phải lớn hơn 0');
     }
 
-    // Idempotent theo (refType, refId, materialId, quy cách) - 1 nguồn chỉ giữ chỗ đúng 1 dòng cho 1 (vật tư,
-    // quy cách), gọi lại (retry mất mạng, double-click) trả về dòng đã tạo thay vì cộng dồn sai.
+    // Idempotent theo (refType, refId, materialId, quy cách[, chiều dài]) - 1 nguồn chỉ giữ chỗ đúng 1 dòng cho 1 (vật tư, quy
+    // cách[, chiều dài]), gọi lại (retry mất mạng, double-click) trả về dòng đã tạo thay vì cộng dồn sai. CS2 (review Sang 21/11):
+    // thiếu chiều dài thì lần giữ chỗ thứ 2 cùng vật tư (cây lẻ + cây mua) trả lại dòng của lần 1 - mất phần giữ.
     const idempotencyKey = reservationKey(
       input.refType,
       input.refId,
       input.materialId,
       input.spec,
       input.warehouseId,
+      input.lengthKeyed ? input.stockLengthMm : undefined,
     );
     const existing = await db.stockReservation.findUnique({ where: { idempotencyKey } });
     if (existing) {
@@ -502,18 +508,32 @@ export class StockReservationsService {
       spec?: string;
       /** Kho đang trừ tồn - chỉ rút dòng ở kho này (rà soát 14/11 CK3, nhóm B 16/11). */
       warehouseId: bigint;
+      /** CS2 (review Sang 21/11): chiều dài cây đang xuất (xuất sắt) - chỉ rút dòng cùng chiều dài hoặc dòng chưa ghi chiều dài (0).
+       *  Rút theo tổng cả pool thì xuất cây chiều dài mua ăn mất phần giữ cây lẻ (cây lẻ còn trong kho nhưng hết giữ chỗ, lệnh
+       *  khác giữ mất). Bỏ trống = rút cả pool như trước. */
+      stockLengthMm?: number;
     },
   ): Promise<{ warehouseId: bigint }> {
     if (!(input.qty > 0)) {
       throw new BadRequestException('qty xuất phải lớn hơn 0');
     }
-    const pool = await this.loadPool(
+    const fullPool = await this.loadPool(
       tx,
       input.productionInvoiceId,
       input.materialId,
       input.spec?.trim(),
       input.warehouseId,
     );
+    const len = input.stockLengthMm;
+    const pool =
+      len != null && len > 0
+        ? fullPool.filter((r) => r.stockLengthMm === len || r.stockLengthMm === 0)
+        : fullPool;
+    if (pool.length === 0 && fullPool.length > 0) {
+      throw new BadRequestException(
+        `Lệnh không giữ chỗ cây dài ${len}mm cho vật tư ${input.materialId} - chỉ giữ cây ${[...new Set(fullPool.map((r) => r.stockLengthMm))].join(' / ')}mm, xuất đúng chiều dài phương án cắt`,
+      );
+    }
     if (pool.length === 0) {
       const elsewhere = await this.heldElsewhereMessage(tx, input);
       throw new ConflictException(
@@ -546,7 +566,7 @@ export class StockReservationsService {
     if (input.qty > totalRemaining) {
       const elsewhere = await this.heldElsewhereMessage(tx, input);
       throw new BadRequestException(
-        `Xuất ${input.qty} cây vượt quá phần đã giữ chỗ còn lại (${totalRemaining} cây) cho vật tư ${input.materialId} của PI ${input.productionInvoiceId} - không đủ hứa` +
+        `Xuất ${input.qty} cây${len ? ` dài ${len}mm` : ''} vượt quá phần đã giữ chỗ còn lại (${totalRemaining} cây) cho vật tư ${input.materialId} của PI ${input.productionInvoiceId} - không đủ hứa` +
           (elsewhere ? `. ${elsewhere}` : ''),
       );
     }

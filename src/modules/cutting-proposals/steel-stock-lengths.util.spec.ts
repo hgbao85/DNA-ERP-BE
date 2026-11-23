@@ -77,9 +77,23 @@ describe('steel-stock-lengths.util', () => {
   });
 
   describe('loadAvailableStockLengths', () => {
+    // Kho mặc định của SAT 200/201 là kho Phôi 11 của xưởng 3 (đúng xưởng làm lệnh -> resolver giữ nguyên, không tra thêm).
+    const phoi = (id: bigint, workshopId: bigint) => ({
+      id,
+      code: `phoi-${id}`,
+      kind: 'PHOI',
+      workshopId,
+    });
     const makePrisma = (over: Record<string, unknown> = {}) => {
       const prisma = {
-        warehouse: { findMany: jest.fn().mockResolvedValue([{ id: 11n }, { id: 12n }]) },
+        material: {
+          findMany: jest.fn().mockResolvedValue([
+            { id: 200n, warehouse: phoi(11n, 3n) },
+            { id: 201n, warehouse: phoi(11n, 3n) },
+          ]),
+        },
+        warehouse: { findFirst: jest.fn().mockResolvedValue(null) },
+        productionInvoiceItem: { findFirst: jest.fn() },
         stockQuant: { findMany: jest.fn().mockResolvedValue([]) },
         stockReservation: { findMany: jest.fn().mockResolvedValue([]) },
         warehouseTransferReservation: { findMany: jest.fn().mockResolvedValue([]) },
@@ -95,18 +109,19 @@ describe('steel-stock-lengths.util', () => {
       spec: '',
       qty: dec(qty),
     });
+    const resv = (warehouseId: bigint, len: number, quantity: number, consumed: number) => ({
+      warehouseId,
+      materialId: 200n,
+      stockLengthMm: len,
+      spec: '',
+      quantity: dec(quantity),
+      consumedQty: dec(consumed),
+    });
 
     it('không có vật tư nào -> không truy vấn', async () => {
       const prisma = makePrisma();
       expect((await loadAvailableStockLengths(asPrisma(prisma), [], filter, 3n)).size).toBe(0);
-      expect(prisma.warehouse.findMany).not.toHaveBeenCalled();
-    });
-
-    it('không có kho Phôi nào đang hoạt động -> rỗng, không đọc tồn', async () => {
-      const prisma = makePrisma({ warehouse: { findMany: jest.fn().mockResolvedValue([]) } });
-      const res = await loadAvailableStockLengths(asPrisma(prisma), [200n], filter, 3n);
-      expect(res.size).toBe(0);
-      expect(prisma.stockQuant.findMany).not.toHaveBeenCalled();
+      expect(prisma.material.findMany).not.toHaveBeenCalled();
     });
 
     it('CS2: chưa biết xưởng làm lệnh -> rỗng, không truy vấn gì', async () => {
@@ -114,71 +129,102 @@ describe('steel-stock-lengths.util', () => {
       expect((await loadAvailableStockLengths(asPrisma(prisma), [200n], filter, null)).size).toBe(
         0,
       );
-      expect(prisma.warehouse.findMany).not.toHaveBeenCalled();
+      expect(prisma.material.findMany).not.toHaveBeenCalled();
     });
 
-    it('CS2: chỉ lọc kho Phôi đang hoạt động CỦA XƯỞNG làm lệnh (truy vấn đúng điều kiện)', async () => {
-      const prisma = makePrisma();
-      await loadAvailableStockLengths(asPrisma(prisma), [200n], filter, 3n);
-      expect(prisma.warehouse.findMany).toHaveBeenCalledWith({
-        where: { kind: 'PHOI', workshopId: 3n, isActive: true, deletedAt: null },
-        select: { id: true },
+    it('vật tư chưa gán kho -> rỗng, không đọc tồn', async () => {
+      const prisma = makePrisma({
+        material: { findMany: jest.fn().mockResolvedValue([{ id: 200n, warehouse: null }]) },
       });
+      expect((await loadAvailableStockLengths(asPrisma(prisma), [200n], filter, 3n)).size).toBe(0);
+      expect(prisma.stockQuant.findMany).not.toHaveBeenCalled();
     });
 
-    it('khả dụng = tồn - giữ chỗ còn hiệu lực (quantity - consumedQty); cộng tồn nhiều kho; sắp tăng dần', async () => {
+    // Review Sang 21/11: lúc tính cộng mọi kho Phôi của xưởng + mọi quy cách, lúc duyệt chỉ đọc 1 kho + quy cách rỗng -> 409 lặp mãi.
+    it('đọc ĐÚNG kho approve() dùng (kho mặc định resolve theo xưởng) và chỉ ô quy cách rỗng', async () => {
+      const prisma = makePrisma({
+        material: {
+          findMany: jest.fn().mockResolvedValue([{ id: 200n, warehouse: phoi(6n, 1n) }]),
+        },
+        warehouse: { findFirst: jest.fn().mockResolvedValue(phoi(21n, 3n)) },
+        stockQuant: {
+          findMany: jest.fn().mockResolvedValue([
+            quant(21n, 200n, 5800, 2),
+            quant(6n, 200n, 5650, 4), // kho Phôi xưởng khác - không tính
+          ]),
+        },
+      });
+      const res = await loadAvailableStockLengths(asPrisma(prisma), [200n], filter, 3n);
+      expect(res.get('200')).toEqual([{ length: 5800, count: 2 }]);
+      expect(prisma.warehouse.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ kind: 'PHOI', workshopId: 3n }) as unknown,
+        }),
+      );
+      expect(prisma.stockQuant.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ warehouseId: { in: [21n] }, spec: '' }) as unknown,
+        }),
+      );
+      expect(prisma.stockReservation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ spec: '' }) as unknown }),
+      );
+    });
+
+    it('xưởng làm lệnh chưa có kho Phôi -> ném lỗi (nơi gọi bắt, tính như không có cây lẻ)', async () => {
+      const prisma = makePrisma({
+        material: {
+          findMany: jest.fn().mockResolvedValue([{ id: 200n, warehouse: phoi(6n, 1n) }]),
+        },
+      });
+      await expect(loadAvailableStockLengths(asPrisma(prisma), [200n], filter, 3n)).rejects.toThrow(
+        /chưa có kho/,
+      );
+    });
+
+    it('khả dụng = tồn - giữ chỗ còn hiệu lực (quantity - consumedQty); sắp tăng dần; gộp truy vấn', async () => {
       const prisma = makePrisma({
         stockQuant: {
           findMany: jest.fn().mockResolvedValue([
-            quant(11n, 200n, 5950, 1),
-            quant(12n, 200n, 5950, 1), // kho 12 còn tự do dù kho 11 bị giữ hết
+            quant(11n, 200n, 5950, 1), // giữ 1 -> hết
             quant(11n, 200n, 5900, 2), // giữ chỗ 2 -> hết
             quant(11n, 200n, 5800, 3), // giữ 3 đã lấy 1 -> còn 1
             quant(11n, 201n, 5700, 5),
           ]),
         },
         stockReservation: {
-          findMany: jest.fn().mockResolvedValue([
-            {
-              warehouseId: 11n,
-              materialId: 200n,
-              stockLengthMm: 5950,
-              spec: '',
-              quantity: dec(1),
-              consumedQty: dec(0),
-            },
-            {
-              warehouseId: 11n,
-              materialId: 200n,
-              stockLengthMm: 5900,
-              spec: '',
-              quantity: dec(2),
-              consumedQty: dec(0),
-            },
-            {
-              warehouseId: 11n,
-              materialId: 200n,
-              stockLengthMm: 5800,
-              spec: '',
-              quantity: dec(3),
-              consumedQty: dec(1),
-            },
-          ]),
+          findMany: jest
+            .fn()
+            .mockResolvedValue([
+              resv(11n, 5950, 1, 0),
+              resv(11n, 5900, 2, 0),
+              resv(11n, 5800, 3, 1),
+            ]),
         },
       });
 
       const res = await loadAvailableStockLengths(asPrisma(prisma), [200n, 201n], filter, 3n);
 
-      // CS2: kèm SỐ CÂY khả dụng (kho 11 bị giữ hết 5950, kho 12 còn 1).
-      expect(res.get('200')).toEqual([
-        { length: 5800, count: 1 },
-        { length: 5950, count: 1 },
-      ]);
+      expect(res.get('200')).toEqual([{ length: 5800, count: 1 }]);
       expect(res.get('201')).toEqual([{ length: 5700, count: 5 }]);
-      // Gộp truy vấn: 1 lần mỗi bảng cho mọi vật tư.
       expect(prisma.stockQuant.findMany).toHaveBeenCalledTimes(1);
       expect(prisma.stockReservation.findMany).toHaveBeenCalledTimes(1);
       expect(prisma.warehouseTransferReservation.findMany).toHaveBeenCalledTimes(1);
+    });
+
+    // Review Sang 21/11: "Tính lại" không được coi cây lẻ chính lệnh đang giữ (qua phương án sắp bị thay) là của lệnh khác.
+    it('excludeCuttingProposalIds: không trừ giữ chỗ của phương án cũ cùng lệnh sắp bị thay', async () => {
+      const prisma = makePrisma();
+      await loadAvailableStockLengths(asPrisma(prisma), [200n], filter, 3n, {
+        excludeCuttingProposalIds: [77n, 78n],
+      });
+      expect(prisma.stockReservation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            NOT: { refType: 'CUTTING_PROPOSAL', refId: { in: ['77', '78'] } },
+          }) as unknown,
+        }),
+      );
     });
 
     it('giữ chỗ chuyển kho (không có chiều dài) trừ vào mọi chiều dài của (kho, vật tư)', async () => {

@@ -2334,8 +2334,22 @@ describe('CuttingProposalsService', () => {
     // leftover_stock_by_material; chiều dài MUA giữ 1 chiều dài/loại sắt (chuẩn hoặc KHSX chọn). Thay hành vi 13/11 (chiều dài tồn
     // ở kho Phôi MỌI xưởng bị đưa vào danh sách chiều dài mua, không giới hạn số cây).
     describe('cây lẻ kho Phôi của xưởng làm lệnh (CS2)', () => {
+      // Kho mặc định của SAT 200 = kho Phôi 11 của xưởng 3 (xưởng làm lệnh) - đúng kho approve() đọc / giữ chỗ.
+      const materialWarehouses = (impl?: () => Promise<unknown>) =>
+        prisma.material.findMany.mockImplementation(
+          (args?: { select?: { warehouse?: unknown } }) =>
+            args?.select?.warehouse
+              ? (impl?.() ??
+                Promise.resolve([
+                  {
+                    id: 200n,
+                    warehouse: { id: 11n, code: 'phoi-pa', kind: 'PHOI', workshopId: 3n },
+                  },
+                ]))
+              : Promise.resolve([]),
+        );
       beforeEach(() => {
-        prisma.warehouse.findMany.mockResolvedValue([{ id: 11n }, { id: 12n }]);
+        materialWarehouses();
         workshop('PHU_AN', 'Phú An');
       });
 
@@ -2343,7 +2357,7 @@ describe('CuttingProposalsService', () => {
         prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(3n));
         prisma.stockQuant.findMany.mockResolvedValue([
           quant(11n, 5950, 4), // hợp lệ
-          quant(12n, 5950, 1), // cùng chiều dài ở kho Phôi khác của CÙNG xưởng: cộng dồn -> 5 cây
+          quant(12n, 5950, 1), // kho khác (không phải kho approve() đọc) - không tính (review Sang 21/11)
           quant(11n, 5900, 2), // bị giữ chỗ hết
           quant(12n, 5925, 9), // không bội 50
           quant(12n, 6000, 9), // chiều dài MUA (chuẩn) - không phải cây lẻ
@@ -2362,14 +2376,14 @@ describe('CuttingProposalsService', () => {
         expect(sentBody().leftover_stock_by_material).toEqual({
           '200': [
             { length: 5800, count: 1 },
-            { length: 5950, count: 5 },
+            { length: 5950, count: 4 },
           ],
         });
         // Chiều dài mua KHÔNG còn bị thêm chiều dài tồn (hành vi 13/11 đã bỏ).
         expect(sentBody()).not.toHaveProperty('stock_lengths_by_material');
-        expect(prisma.warehouse.findMany).toHaveBeenCalledWith(
+        expect(prisma.stockQuant.findMany).toHaveBeenCalledWith(
           expect.objectContaining({
-            where: expect.objectContaining({ kind: 'PHOI', workshopId: 3n }) as unknown,
+            where: expect.objectContaining({ warehouseId: { in: [11n] }, spec: '' }) as unknown,
           }),
         );
         expect(prisma.stockQuant.findMany).toHaveBeenCalledTimes(1);
@@ -2392,13 +2406,37 @@ describe('CuttingProposalsService', () => {
         });
       });
 
+      // Review Sang 21/11: "Tính lại" phải coi cây lẻ lệnh đang giữ qua phương án cũ (sắp bị thay khi duyệt) là của chính lệnh.
+      it('tính lại: phương án ĐÃ DUYỆT cùng lệnh SX (sẽ bị thay) được bỏ khỏi phần "đã giữ" khi đọc cây lẻ', async () => {
+        const priv = service as unknown as {
+          siblingProposalIdsToSupersede: (id: bigint) => Promise<bigint[]>;
+        };
+        prisma.cuttingProposal.findUnique.mockResolvedValueOnce({
+          productionOrderId: 5n,
+          productionInvoiceId: null,
+        });
+        prisma.cuttingProposal.findMany.mockResolvedValueOnce([{ id: 77n }]);
+
+        await expect(priv.siblingProposalIdsToSupersede(2n)).resolves.toEqual([77n]);
+        expect(prisma.cuttingProposal.findMany).toHaveBeenCalledWith({
+          where: { productionOrderId: 5n, id: { not: 2n }, status: 'APPROVED' },
+          select: { id: true },
+        });
+
+        prisma.cuttingProposal.findUnique.mockResolvedValueOnce({
+          productionOrderId: null,
+          productionInvoiceId: null,
+        });
+        await expect(priv.siblingProposalIdsToSupersede(3n)).resolves.toEqual([]);
+      });
+
       it('lệnh chưa có xưởng -> không biết đúng kho Phôi nào, không đọc cây lẻ', async () => {
         prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(null));
         respond(okLine());
 
         await invoke();
 
-        expect(prisma.warehouse.findMany).not.toHaveBeenCalled();
+        expect(prisma.stockQuant.findMany).not.toHaveBeenCalled();
         expect(sentBody()).not.toHaveProperty('leftover_stock_by_material');
       });
 
@@ -2415,7 +2453,7 @@ describe('CuttingProposalsService', () => {
       it('đọc tồn lỗi KHÔNG làm hỏng lượt tính: cảnh báo rồi tính như không có cây lẻ', async () => {
         const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
         prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(3n));
-        prisma.warehouse.findMany.mockRejectedValue(new Error('db sập'));
+        materialWarehouses(() => Promise.reject(new Error('db sập')));
         respond(okLine());
 
         await invoke();
@@ -3031,6 +3069,7 @@ describe('CuttingProposalsService', () => {
           productionInvoiceId: undefined,
           createdById: 'user-1',
           stockLengthMm: 0,
+          lengthKeyed: false,
         },
         expect.anything(),
       );
@@ -3092,7 +3131,9 @@ describe('CuttingProposalsService', () => {
           id: 2n,
           productionOrderId: 1n,
           status: CuttingProposalStatus.DRAFT,
-          lines: [{ id: 9n, materialId: 30n, feasible: true, totalBars: 4, bestStockLengthMm: 6000 }],
+          lines: [
+            { id: 9n, materialId: 30n, feasible: true, totalBars: 4, bestStockLengthMm: 6000 },
+          ],
         });
         prisma.cuttingProposal.update.mockResolvedValue({
           id: 2n,

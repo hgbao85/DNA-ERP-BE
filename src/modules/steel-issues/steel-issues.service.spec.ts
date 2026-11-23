@@ -636,7 +636,12 @@ describe('SteelIssuesService', () => {
       prisma.steelIssue.create.mockResolvedValue(issue);
       prisma.cuttingProposalLine.findMany.mockResolvedValueOnce(twoLengthPlan);
 
-      await service.create('1', { materialId: '30', barLengthMm: 5800, barCount: 1 }, 'user-1', null);
+      await service.create(
+        '1',
+        { materialId: '30', barLengthMm: 5800, barCount: 1 },
+        'user-1',
+        null,
+      );
 
       expect(prisma.steelIssue.create).toHaveBeenCalledTimes(1);
     });
@@ -725,6 +730,39 @@ describe('SteelIssuesService', () => {
       expect(assertWorkshopUnchanged).toHaveBeenCalledWith(locked, 5n);
       expect(prisma.steelIssue.create).not.toHaveBeenCalled();
     });
+
+    // CS2 review Sang 21/11: kiểm số cây theo chiều dài ở prepareIssue nằm ngoài transaction - 2 người xuất cùng lúc / 1 phiếu 2 dòng
+    // trùng đều lọt. createInTx kiểm lại SAU khoá dòng lệnh, đếm bằng tx (thấy cả dòng vừa ghi trong cùng phiếu).
+    it('có cây lẻ: kiểm lại số cây theo chiều dài SAU khoá, bằng tx; vượt -> 400, không ghi', async () => {
+      (lockPisForIssue as jest.Mock).mockResolvedValueOnce(
+        new Map([['1', { workshopId: 5n, cuttingRecheckRequired: false }]]),
+      );
+      prisma.steelIssue.aggregate.mockResolvedValueOnce({ _sum: { barCount: 2 } });
+      const withCap = {
+        ...prepared,
+        lengthCap: new Map([
+          [5800, 1],
+          [6000, 3],
+        ]),
+      };
+
+      const err = await service
+        .createInTx(prisma as unknown as PrismaTx, withCap, 'user-1')
+        .catch((e: Error) => e);
+
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect((err as Error).message).toContain('chỉ còn xuất được 1 cây');
+      expect(prisma.steelIssue.aggregate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            productionInvoiceId: 1n,
+            materialId: 30n,
+            barLengthMm: 6000,
+          }) as unknown,
+        }),
+      );
+      expect(prisma.steelIssue.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('create - QLSX "Bắt đầu" gate (assertPiHasActiveFloor, 2026-08-31)', () => {
@@ -800,6 +838,7 @@ describe('SteelIssuesService', () => {
         materialId: 30n,
         qty: 12,
         warehouseId: 800n, // rà soát 14/11 CK3: chỉ rút giữ chỗ ở kho Phôi của xưởng làm lệnh
+        stockLengthMm: 6000, // CS2 review Sang 21/11: rút đúng chiều dài cây đang xuất
       });
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         {

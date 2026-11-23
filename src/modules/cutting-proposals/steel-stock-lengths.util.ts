@@ -1,5 +1,6 @@
-import { ReservationStatus, WarehouseKind } from '../../generated/prisma/client';
+import { ReservationStatus, StockReservationRefType } from '../../generated/prisma/client';
 import type { PrismaServiceType } from '../../prisma/prisma.service';
+import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 
 /**
  * Bước chiều dài tồn kho là bội số của giá trị này (13/11/2026): cây lẻ kiểu 5873 mm không phải
@@ -65,24 +66,43 @@ const bucketKey = (warehouseId: bigint, materialId: bigint, lengthMm: number, sp
  * chiều dài của (kho, vật tư, quy cách) đó. Số cây = phần nguyên của khả dụng; chiều dài lọc theo `isUsableStockLength` (nơi
  * gọi tự bỏ chiều dài đang mua của từng loại sắt).
  *
- * Gộp truy vấn (4 câu, không N+1). Hàm này CÓ THỂ ném lỗi DB - nơi gọi phải bắt và tính như không có cây lẻ (lỗi đọc tồn không
- * được làm hỏng lượt tính).
+ * Review Sang 21/11:
+ *   - Đọc ĐÚNG kho mà approve() sẽ đọc/giữ chỗ (kho mặc định của vật tư qua WorkshopWarehouseResolver theo xưởng) và chỉ ô quy cách
+ *     rỗng (sắt không mang quy cách; approve() chỉ đọc ô này) - trước đây cộng mọi kho Phôi của xưởng + mọi quy cách nên xưởng có 2
+ *     kho Phôi / cây lẻ có quy cách thì duyệt báo 409 "Tính lại" lặp mãi.
+ *   - `excludeCuttingProposalIds`: giữ chỗ của các phương án cũ cùng lệnh sẽ bị thay khi duyệt phương án này (approve() nhả
+ *     trước khi tính khả dụng) - KHÔNG trừ, nếu không "Tính lại" bỏ qua cây lẻ của chính lệnh rồi nhả ra và mua thêm cây mới.
+ *
+ * Gộp truy vấn (không N+1 theo ô tồn). Hàm này CÓ THỂ ném lỗi DB / thiếu kho - nơi gọi phải bắt và tính như không có cây lẻ
+ * (lỗi đọc tồn không được làm hỏng lượt tính).
  */
 export async function loadAvailableStockLengths(
   prisma: PrismaServiceType,
   materialIds: bigint[],
   filter: StockLengthFilter,
   workshopId: bigint | null,
+  opts: { excludeCuttingProposalIds?: bigint[] } = {},
 ): Promise<Map<string, Array<{ length: number; count: number }>>> {
   const result = new Map<string, Array<{ length: number; count: number }>>();
   if (materialIds.length === 0 || workshopId == null) return result;
 
-  const warehouses = await prisma.warehouse.findMany({
-    where: { kind: WarehouseKind.PHOI, workshopId, isActive: true, deletedAt: null },
-    select: { id: true },
+  // Kho của từng loại sắt cho xưởng này - đúng cách approve() tra (Material.warehouse -> resolve theo xưởng).
+  const materials = await prisma.material.findMany({
+    where: { id: { in: materialIds } },
+    select: {
+      id: true,
+      warehouse: { select: { id: true, code: true, kind: true, workshopId: true } },
+    },
   });
-  if (warehouses.length === 0) return result;
-  const warehouseIds = warehouses.map((w) => w.id);
+  const resolver = new WorkshopWarehouseResolver(prisma);
+  const warehouseByMaterial = new Map<string, bigint>();
+  for (const m of materials) {
+    if (!m.warehouse) continue;
+    warehouseByMaterial.set(m.id.toString(), (await resolver.resolve(m.warehouse, workshopId)).id);
+  }
+  if (warehouseByMaterial.size === 0) return result;
+  const warehouseIds = [...new Set(warehouseByMaterial.values())];
+  const excluded = (opts.excludeCuttingProposalIds ?? []).map((id) => id.toString());
 
   const [quants, reservations, transferReservations] = await Promise.all([
     prisma.stockQuant.findMany({
@@ -90,6 +110,7 @@ export async function loadAvailableStockLengths(
         warehouseId: { in: warehouseIds },
         materialId: { in: materialIds },
         stockLengthMm: { gt: 0 },
+        spec: '',
         qty: { gt: 0 },
       },
       select: { warehouseId: true, materialId: true, stockLengthMm: true, spec: true, qty: true },
@@ -100,6 +121,10 @@ export async function loadAvailableStockLengths(
         materialId: { in: materialIds },
         status: ReservationStatus.ACTIVE,
         stockLengthMm: { gt: 0 },
+        spec: '',
+        ...(excluded.length > 0
+          ? { NOT: { refType: StockReservationRefType.CUTTING_PROPOSAL, refId: { in: excluded } } }
+          : {}),
       },
       select: {
         warehouseId: true,
@@ -115,6 +140,7 @@ export async function loadAvailableStockLengths(
         warehouseId: { in: warehouseIds },
         materialId: { in: materialIds },
         status: ReservationStatus.ACTIVE,
+        spec: '',
       },
       select: { warehouseId: true, materialId: true, spec: true, quantity: true },
     }),
@@ -135,6 +161,8 @@ export async function loadAvailableStockLengths(
   const buckets = new Map<string, QuantBucket>();
   for (const q of quants) {
     if (q.materialId == null) continue;
+    // Chỉ kho của chính loại sắt này (2 loại sắt có thể thuộc 2 kho khác nhau trong cùng warehouseIds).
+    if (warehouseByMaterial.get(q.materialId.toString()) !== q.warehouseId) continue;
     const key = bucketKey(q.warehouseId, q.materialId, q.stockLengthMm, q.spec);
     const cur = buckets.get(key);
     const onHand = q.qty.toNumber();

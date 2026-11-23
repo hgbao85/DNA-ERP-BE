@@ -24,6 +24,7 @@ import {
   type StatsReport,
 } from './cut-machine-stats.util';
 import { CutMachineStatsQueryDto } from './dto/cut-machine-stats.dto';
+import { barsByStockLength } from '../cutting-proposals/pattern-stock-length.util';
 
 const DAY_MS = 24 * 3600 * 1000;
 const DEFAULT_RANGE_DAYS = 14;
@@ -264,7 +265,8 @@ export class CutMachineStatsService {
     };
   }
 
-  /** Chiều dài cây theo phương án APPROVED đầu tiên của (PI, loại sắt); neo PI hoặc PO. */
+  /** Chiều dài cây theo phương án APPROVED đầu tiên của (PI, loại sắt); neo PI hoặc PO. CS2 (review Sang 21/11): phương án có cây lẻ
+   *  kho Phôi (kiểu cắt khác chiều dài mua) thì lấy chiều dài TRUNG BÌNH theo số cây của các kiểu cắt - con số chỉ để ước số cây. */
   private async loadBarLengths(piIds: Array<bigint | null>): Promise<Map<string, number>> {
     const ids = [...new Set(piIds.filter((x): x is bigint => x != null))];
     const out = new Map<string, number>();
@@ -286,7 +288,12 @@ export class CutMachineStatsService {
         lines: {
           where: { bestStockLengthMm: { not: null } },
           orderBy: { id: 'asc' },
-          select: { materialId: true, bestStockLengthMm: true },
+          select: {
+            materialId: true,
+            bestStockLengthMm: true,
+            totalBars: true,
+            patterns: { select: { stockLengthMm: true, barCount: true } },
+          },
         },
       },
     });
@@ -297,7 +304,14 @@ export class CutMachineStatsService {
       for (const l of p.lines) {
         if (l.bestStockLengthMm == null || !(l.bestStockLengthMm > 0)) continue;
         const key = barLengthKey(piId.toString(), l.materialId.toString());
-        if (!out.has(key)) out.set(key, l.bestStockLengthMm);
+        if (out.has(key)) continue;
+        let bars = 0;
+        let mm = 0;
+        for (const [len, n] of barsByStockLength(l, l.patterns)) {
+          bars += n;
+          mm += len * n;
+        }
+        out.set(key, bars > 0 ? Math.round(mm / bars) : l.bestStockLengthMm);
       }
     }
     return out;
