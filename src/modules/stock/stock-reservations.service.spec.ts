@@ -826,6 +826,119 @@ describe('StockReservationsService', () => {
       });
     });
 
+    // K2 danh sách 16/11 - phần chiều dài (sửa 23/11/2026): hàng về chỉ cộng vào dòng PI cùng chiều dài.
+    const piRowOf = (id: bigint, stockLengthMm: number) => ({
+      id,
+      refType: 'PRODUCTION_INVOICE',
+      refId: '50',
+      warehouseId: 800n,
+      quantity: decimal(4),
+      consumedQty: decimal(0),
+      stockLengthMm,
+    });
+
+    it('chiều dài: dòng PI cùng chiều dài -> cộng vào dòng đó', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([piRowOf(905n, 6000)]);
+      await service.creditPool(prisma as unknown as PrismaTx, {
+        productionInvoiceId: 50n,
+        materialId: 30n,
+        warehouseId: 800n,
+        qty: 2,
+        stockLengthMm: 6000,
+      });
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+        where: { id: 905n },
+        data: { quantity: { increment: 2 } },
+      });
+      expect(prisma.stockReservation.create).not.toHaveBeenCalled();
+    });
+
+    it('chiều dài: dòng PI đang giữ chiều dài KHÁC -> tạo dòng mới khoá :len:, không cộng / ghi đè dòng kia', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([piRowOf(905n, 6000)]);
+      prisma.stockReservation.findUnique.mockImplementation(
+        ({ where }: { where: { idempotencyKey: string } }) =>
+          Promise.resolve(
+            where.idempotencyKey === 'PRODUCTION_INVOICE:50:material:30:wh:800'
+              ? {
+                  id: 905n,
+                  status: 'ACTIVE',
+                  stockLengthMm: 6000,
+                  quantity: decimal(4),
+                  consumedQty: decimal(0),
+                }
+              : null,
+          ),
+      );
+      await service.creditPool(prisma as unknown as PrismaTx, {
+        productionInvoiceId: 50n,
+        materialId: 30n,
+        warehouseId: 800n,
+        qty: 3,
+        stockLengthMm: 5850,
+      });
+      expect(prisma.stockReservation.update).not.toHaveBeenCalled();
+      expect(prisma.stockReservation.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          quantity: 3,
+          stockLengthMm: 5850,
+          idempotencyKey: 'PRODUCTION_INVOICE:50:material:30:len:5850:wh:800',
+        }) as unknown,
+      });
+    });
+
+    it('chiều dài: dòng PI chiều dài 0 (không phân chiều dài) nhận mọi hàng như cũ', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([piRowOf(906n, 0)]);
+      await service.creditPool(prisma as unknown as PrismaTx, {
+        productionInvoiceId: 50n,
+        materialId: 30n,
+        warehouseId: 800n,
+        qty: 1,
+        stockLengthMm: 6000,
+      });
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith({
+        where: { id: 906n },
+        data: { quantity: { increment: 1 } },
+      });
+    });
+
+    it('chiều dài: khoá chung đã nhả nhưng của chiều dài khác -> mở lại dòng khoá :len:, không mở dòng chiều dài kia', async () => {
+      prisma.stockReservation.findMany.mockResolvedValue([]);
+      prisma.stockReservation.findUnique.mockImplementation(
+        ({ where }: { where: { idempotencyKey: string } }) =>
+          Promise.resolve(
+            where.idempotencyKey === 'PRODUCTION_INVOICE:50:material:30:wh:800'
+              ? {
+                  id: 905n,
+                  status: 'RELEASED',
+                  stockLengthMm: 6000,
+                  quantity: decimal(4),
+                  consumedQty: decimal(4),
+                }
+              : {
+                  id: 907n,
+                  status: 'RELEASED',
+                  stockLengthMm: 5850,
+                  quantity: decimal(2),
+                  consumedQty: decimal(1),
+                },
+          ),
+      );
+      await service.creditPool(prisma as unknown as PrismaTx, {
+        productionInvoiceId: 50n,
+        materialId: 30n,
+        warehouseId: 800n,
+        qty: 3,
+        stockLengthMm: 5850,
+      });
+      expect(prisma.stockReservation.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 907n },
+          data: expect.objectContaining({ quantity: 4 }) as unknown,
+        }),
+      );
+      expect(prisma.stockReservation.create).not.toHaveBeenCalled();
+    });
+
     it('kho nhận đã có dòng "của cả lệnh" bị nhả (PI xong rồi vẫn nhận) - mở lại dòng đó, không tạo trùng khoá', async () => {
       prisma.stockReservation.findMany.mockResolvedValue([]);
       prisma.stockReservation.findUnique.mockResolvedValue({

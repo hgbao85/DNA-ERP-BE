@@ -433,7 +433,15 @@ export class StockReservationsService {
     // duyệt phương án mới thì releaseByRef nhả CẢ phần hàng vừa nhận -> phần đó vừa tính là tồn khả dụng vừa nằm trong "đã
     // ký" (receivedQty) -> mua thiếu sắt (vd thiếu 50 cây) hoặc báo "nhu cầu giảm" sai. Dòng PI không bị nhả khi thay phương
     // án; drainPool rút theo tổng pool nên dòng nào nhận credit không đổi số xuất được.
-    const piRow = pool.find((r) => r.refType === StockReservationRefType.PRODUCTION_INVOICE);
+    // 23/11/2026 (K2 danh sách 16/11 - phần chiều dài): chỉ cộng vào dòng PI CÙNG chiều dài với hàng về (dòng chiều dài 0 = không
+    // phân chiều dài, nhận mọi hàng). Trước đây cộng vào dòng PI bất kỳ - cùng lệnh nhận 2 chiều dài mua của 1 loại sắt thì hàng
+    // cây thứ hai nằm ở ngăn chiều dài của dòng đầu, xuất sắt theo chiều dài (drainPool) bị chặn dù hàng đã về.
+    const len = input.stockLengthMm ?? 0;
+    const sameLength = (r: { stockLengthMm: number }) =>
+      len <= 0 || r.stockLengthMm === 0 || r.stockLengthMm === len;
+    const piRow = pool.find(
+      (r) => r.refType === StockReservationRefType.PRODUCTION_INVOICE && sameLength(r),
+    );
     if (piRow) {
       await tx.$queryRaw`SELECT "id" FROM "stock_reservations" WHERE "id" = ${piRow.id} FOR UPDATE`;
       await tx.stockReservation.update({
@@ -447,14 +455,21 @@ export class StockReservationsService {
     // vừa về (hoặc với dòng phương án đã chốt lúc duyệt). Dòng cùng khoá đã nhả (PI xong rồi vẫn nhận tiếp) thì mở lại thay
     // vì tạo trùng khoá.
     {
-      const idempotencyKey = reservationKey(
+      // Khoá chung (dạng cũ) cho dòng PI đầu tiên ở kho này. Khoá chung đã có dòng KHÁC chiều dài (đang giữ, hoặc đã nhả) thì
+      // dòng chiều dài này dùng khoá có đuôi `:len:` - không mở lại / ghi đè dòng của chiều dài kia.
+      const keyArgs = [
         StockReservationRefType.PRODUCTION_INVOICE,
         input.productionInvoiceId.toString(),
         input.materialId,
         input.spec,
         input.warehouseId,
-      );
-      const released = await tx.stockReservation.findUnique({ where: { idempotencyKey } });
+      ] as const;
+      let idempotencyKey = reservationKey(...keyArgs);
+      let released = await tx.stockReservation.findUnique({ where: { idempotencyKey } });
+      if (released && (released.status === ReservationStatus.ACTIVE || !sameLength(released))) {
+        idempotencyKey = reservationKey(...keyArgs, len);
+        released = await tx.stockReservation.findUnique({ where: { idempotencyKey } });
+      }
       if (released) {
         await tx.stockReservation.update({
           where: { id: released.id },
