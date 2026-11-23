@@ -34,7 +34,10 @@ export async function loadMaterialYieldNeed(
 
   const [piOrders, recipes] = await Promise.all([
     db.productionOrder.findMany({
-      where: { productionInvoiceItem: { productionInvoiceId: { in: piIds } }, ...NOT_CANCELLED_ORDER },
+      where: {
+        productionInvoiceItem: { productionInvoiceId: { in: piIds } },
+        ...NOT_CANCELLED_ORDER,
+      },
       select: {
         bomRevisionId: true,
         quantity: true,

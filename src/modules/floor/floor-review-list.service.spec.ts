@@ -473,16 +473,16 @@ describe('FloorReviewService.listOpen', () => {
         OR: [{ productionOrderId: null }, { productionOrder: { status: { not: 'CANCELLED' } } }],
       };
       expect(prisma.cutBundle.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: expect.objectContaining(nullableFilter) }),
+        expect.objectContaining({ where: expect.objectContaining(nullableFilter) as unknown }),
       );
       expect(prisma.stepBatch.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: expect.objectContaining(nullableFilter) }),
+        expect.objectContaining({ where: expect.objectContaining(nullableFilter) as unknown }),
       );
       expect(prisma.productionBatch.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
             AND: [{ productionOrder: { status: { not: 'CANCELLED' } } }],
-          }),
+          }) as unknown,
         }),
       );
       expect(res.cancelledOrderIds).toEqual(['99']);

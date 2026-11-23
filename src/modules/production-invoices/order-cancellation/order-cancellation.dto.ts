@@ -20,7 +20,7 @@ export class CreateOrderCancelRequestDto {
 
   @ApiProperty()
   @IsString()
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
   @MinLength(1)
   @MaxLength(1000)
   reason!: string;
