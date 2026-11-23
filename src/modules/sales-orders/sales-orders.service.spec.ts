@@ -816,7 +816,7 @@ describe('SalesOrdersService', () => {
           }),
         );
         expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
-          where: { salesOrderItemId: 5n },
+          where: { salesOrderItemId: 5n, cancelledAt: null },
           data: { wireMaterialId: 61n, cushionMaterialId: undefined },
         });
       });
@@ -832,7 +832,7 @@ describe('SalesOrdersService', () => {
         );
         expect(prisma.salesOrderItem.update).not.toHaveBeenCalled();
         expect(prisma.productionInvoiceItem.findFirst).toHaveBeenCalledWith({
-          where: { salesOrderItemId: 5n, productionOrder: { isNot: null } },
+          where: { salesOrderItemId: 5n, productionOrder: { isNot: null }, cancelledAt: null },
           select: { id: true },
         });
       });
@@ -864,7 +864,7 @@ describe('SalesOrdersService', () => {
           }),
         );
         expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
-          where: { salesOrderItemId: 5n },
+          where: { salesOrderItemId: 5n, cancelledAt: null },
           data: { wireMaterialId: null, cushionMaterialId: undefined },
         });
       });
@@ -1186,6 +1186,7 @@ describe('SalesOrdersService', () => {
         where: {
           mfgProductId: 2n,
           productionInvoiceId: { not: null },
+          cancelledAt: null,
           OR: [
             { salesOrderItemId: 5n },
             { salesOrderItemId: null, salesOrderId: 10n },

@@ -19,6 +19,7 @@ import {
   assertItemPiHasActiveFloorLocked,
 } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import { NOT_CANCELLED_ORDER } from '../../common/utils/cancelled-order.util';
 import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import {
   loadSkuPriorityHoldback,
@@ -393,8 +394,9 @@ export class PackagingIssuesService {
       throw new BadRequestException('Phải truyền ít nhất 1 productionOrderId');
     }
     const orderBigIds = productionOrderIds.map((id) => parseBigIntId(id));
+    // Huỷ lệnh theo SKU (23/11/2026): SKU đã huỷ không còn "cần xuất" (ghi đã bị chặn) - bỏ khỏi kế hoạch.
     const orders = await this.prisma.productionOrder.findMany({
-      where: { id: { in: orderBigIds } },
+      where: { id: { in: orderBigIds }, ...NOT_CANCELLED_ORDER },
       include: {
         mfgProduct: true,
         productionInvoiceItem: {

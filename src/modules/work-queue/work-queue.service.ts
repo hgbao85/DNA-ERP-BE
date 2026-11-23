@@ -83,6 +83,11 @@ export class WorkQueueService {
         'bossDeadlineChange',
         this.prisma.deadlineChangeBatch.count({ where: { status: 'PENDING' } }),
       );
+      // Huỷ lệnh theo SKU (23/11/2026): đề nghị huỷ của KHSX đang chờ Sếp.
+      set(
+        'bossOrderCancel',
+        this.prisma.productionOrderCancelRequest.count({ where: { status: 'PENDING' } }),
+      );
     }
     if (has(BUSINESS_ROLES.PRODUCTION_PLANNER)) {
       set('khsxSkuReview', this.countKhsxSkuReview());

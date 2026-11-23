@@ -54,8 +54,9 @@ export async function assertItemPiHasActiveFloor(
 ): Promise<void> {
   const item = await prisma.productionInvoiceItem.findUniqueOrThrow({
     where: { id: productionInvoiceItemId },
-    select: { productionInvoiceId: true },
+    select: { productionInvoiceId: true, cancelledAt: true },
   });
+  throwIfCancelled(item.cancelledAt, actionLabel);
   await assertPiHasActiveFloor(prisma, item.productionInvoiceId!, actionLabel);
 }
 
@@ -126,4 +127,51 @@ export async function assertItemPiHasActiveFloorLocked(
     select: { productionInvoiceId: true },
   });
   await assertPiHasActiveFloorLocked(tx, item.productionInvoiceId!, actionLabel);
+  // Đọc lại SAU khi đã khoá dòng lệnh: lượt duyệt huỷ khoá cùng dòng (FOR UPDATE) nên tới đây đã thấy kết quả huỷ nếu có.
+  await assertItemNotCancelled(tx, productionInvoiceItemId, actionLabel);
+}
+
+// ─── Huỷ lệnh theo SKU - đợt 1 (23/11/2026) ─────────────────────────────────────────────────────────────────────────────
+// Cổng trên là theo PI (chỉ cần 1 SKU ACTIVE) nên KHÔNG chặn được ghi vào CHÍNH SKU đã huỷ khi SKU khác của lệnh còn chạy. Các bản
+// đi từ dòng SKU / lệnh SX ở trên đã tự kiểm; nơi gọi bản theo PI mà vẫn ghi cho 1 SKU cụ thể (báo cắt, KCS, chuyền kiểm, đóng gói)
+// gọi thêm 2 hàm dưới.
+
+function throwIfCancelled(cancelledAt: Date | null, actionLabel: string): void {
+  if (cancelledAt != null) {
+    throw new ConflictException(
+      `SKU này đã bị huỷ (Sếp duyệt huỷ lệnh) - không ${actionLabel} được nữa`,
+    );
+  }
+}
+
+export async function assertItemNotCancelled(
+  prisma: PrismaTx,
+  productionInvoiceItemId: bigint,
+  actionLabel: string,
+): Promise<void> {
+  const item = await prisma.productionInvoiceItem.findUniqueOrThrow({
+    where: { id: productionInvoiceItemId },
+    select: { cancelledAt: true },
+  });
+  throwIfCancelled(item.cancelledAt, actionLabel);
+}
+
+export async function assertOrderNotCancelled(
+  prisma: PrismaTx,
+  productionOrderId: bigint,
+  actionLabel: string,
+): Promise<void> {
+  const order = await prisma.productionOrder.findUniqueOrThrow({
+    where: { id: productionOrderId },
+    select: { status: true },
+  });
+  if (order.status === 'CANCELLED') throwIfCancelled(new Date(0), actionLabel);
+}
+
+/** Cùng assertOrderNotCancelled nhưng trên lệnh nơi gọi đã đọc sẵn (khỏi 1 truy vấn). Thiếu status (dữ liệu cũ) = chưa huỷ. */
+export function assertLoadedOrderNotCancelled(
+  order: { status?: string | null },
+  actionLabel: string,
+): void {
+  if (order.status === 'CANCELLED') throwIfCancelled(new Date(0), actionLabel);
 }

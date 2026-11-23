@@ -65,6 +65,7 @@ export { BOOKING_INCLUDE };
 const PII_SELECT = {
   id: true,
   lsxCode: true,
+  cancelledAt: true,
   warehouseCode: true,
   warehouseName: true,
   salesOrderId: true,
@@ -248,6 +249,8 @@ export class BookingsService {
       this.prisma.productionInvoiceItem.findMany({
         where: {
           salesOrderItemId: { not: null },
+          // Huỷ lệnh theo SKU (23/11/2026): dòng SKU đã huỷ không xếp booking được.
+          cancelledAt: null,
           salesOrder: { customerId, isActive: true, deletedAt: null },
           OR: [
             { productionInvoiceId: null },
@@ -738,6 +741,9 @@ export class BookingsService {
         throw new BadRequestException(`Dòng lệnh ${l.productionInvoiceItemId} không tồn tại`);
       }
       const label = `SKU ${pii.mfgProduct.factoryCode} (PO ${pii.salesOrder?.orderCode ?? '?'})`;
+      if (pii.cancelledAt != null) {
+        throw new BadRequestException(`${label} đã bị huỷ lệnh - không xếp vào booking được`);
+      }
       if (pii.salesOrderItemId === null || !pii.salesOrder) {
         throw new BadRequestException(
           `${label} không gắn với đơn hàng nào - không xếp vào booking được`,

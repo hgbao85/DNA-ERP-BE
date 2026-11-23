@@ -9,6 +9,7 @@ import {
 import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import type { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import { NOT_CANCELLED_ORDER } from '../../common/utils/cancelled-order.util';
 import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
@@ -179,8 +180,12 @@ export class FloorStageService {
   /** Lệnh đã có đợt tổ TRƯỚC chấm KCS xong và số đạt > 0 (spec 4.1 / 4.2 điều kiện 4). */
   private async pisWithUpstreamPassed(stage: MfgStage, piIds: bigint[]): Promise<Set<string>> {
     const out = new Set<string>();
+    // Huỷ lệnh theo SKU (23/11/2026): hàng đạt của SKU đã huỷ nằm lại kho công đoạn, không thành việc cho tổ sau.
     const orderPi = {
-      productionOrder: { productionInvoiceItem: { productionInvoiceId: { in: piIds } } },
+      productionOrder: {
+        productionInvoiceItem: { productionInvoiceId: { in: piIds } },
+        ...NOT_CANCELLED_ORDER,
+      },
     };
     const piOfOrder = {
       productionOrder: {
@@ -225,7 +230,7 @@ export class FloorStageService {
       FROM piece_step_bundles pb
       JOIN production_orders po ON po.id = pb."productionOrderId"
       JOIN production_invoice_items it ON it.id = po."productionInvoiceItemId"
-      WHERE pb.status::text = 'QC_PASSED' AND it."productionInvoiceId" IN (${ids})
+      WHERE pb.status::text = 'QC_PASSED' AND it."productionInvoiceId" IN (${ids}) AND po."status" <> 'CANCELLED'
         AND pb.qty - COALESCE((SELECT SUM(r."failedQty" + r."shortQty") FROM qc_reviews r WHERE r."pieceStepBundleId" = pb.id), 0) > 0
       UNION
       SELECT mb."productionInvoiceId" AS id
@@ -273,8 +278,12 @@ export class FloorStageService {
     const out = new Map<string, FloorProgress>();
     if (piIds.length === 0) return out;
     try {
+      // Huỷ lệnh theo SKU (23/11/2026): bỏ lệnh đã huỷ - không thì lệnh không bao giờ "đủ số".
       const orders = await this.prisma.productionOrder.findMany({
-        where: { productionInvoiceItem: { productionInvoiceId: { in: piIds } } },
+        where: {
+          productionInvoiceItem: { productionInvoiceId: { in: piIds } },
+          ...NOT_CANCELLED_ORDER,
+        },
         select: { id: true, productionInvoiceItem: { select: { productionInvoiceId: true } } },
         orderBy: { id: 'asc' },
       });

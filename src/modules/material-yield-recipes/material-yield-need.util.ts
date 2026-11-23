@@ -1,4 +1,5 @@
 import { PrismaTx } from '../../prisma/prisma.service';
+import { NOT_CANCELLED_ORDER } from '../../common/utils/cancelled-order.util';
 
 /** Số cần / số đã tính của 1 công đoạn vật tư thành phẩm không gắn mảnh (chân nhôm) của 1 PI. */
 export interface MaterialYieldNeed {
@@ -33,7 +34,7 @@ export async function loadMaterialYieldNeed(
 
   const [piOrders, recipes] = await Promise.all([
     db.productionOrder.findMany({
-      where: { productionInvoiceItem: { productionInvoiceId: { in: piIds } } },
+      where: { productionInvoiceItem: { productionInvoiceId: { in: piIds } }, ...NOT_CANCELLED_ORDER },
       select: {
         bomRevisionId: true,
         quantity: true,

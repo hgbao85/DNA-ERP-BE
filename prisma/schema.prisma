@@ -114,68 +114,70 @@ model User {
 
   roles                             UserRole[]
   refreshTokens                     RefreshToken[]
-  notificationsCreated              Notification[]              @relation("NotificationCreatedBy")
-  notificationsAsActor              Notification[]              @relation("NotificationActor")
+  notificationsCreated              Notification[]                 @relation("NotificationCreatedBy")
+  notificationsAsActor              Notification[]                 @relation("NotificationActor")
   notificationRecipients            NotificationRecipient[]
   planForms                         PlanForm[]
-  piRequestedItems                  ProductionInvoiceItem[]     @relation("PIItemRequestedBy")
-  piQlsxItems                       ProductionInvoiceItem[]     @relation("PIItemQlsxBy")
-  piDecidedItems                    ProductionInvoiceItem[]     @relation("PIItemDecidedBy")
-  piMerged                          ProductionInvoice[]         @relation("PIMergedBy")
-  piCuttingRechecks                 ProductionInvoice[]         @relation("PiCuttingRechecked")
-  cuttingProposalsRequested         CuttingProposal[]           @relation("CuttingProposalRequestedBy")
-  cuttingProposalsApproved          CuttingProposal[]           @relation("CuttingProposalApprovedBy")
-  transferCheckResults              TransferCheckResult[]       @relation("TransferCheckCheckedBy")
+  piRequestedItems                  ProductionInvoiceItem[]        @relation("PIItemRequestedBy")
+  piQlsxItems                       ProductionInvoiceItem[]        @relation("PIItemQlsxBy")
+  piDecidedItems                    ProductionInvoiceItem[]        @relation("PIItemDecidedBy")
+  piMerged                          ProductionInvoice[]            @relation("PIMergedBy")
+  piCuttingRechecks                 ProductionInvoice[]            @relation("PiCuttingRechecked")
+  cuttingProposalsRequested         CuttingProposal[]              @relation("CuttingProposalRequestedBy")
+  cuttingProposalsApproved          CuttingProposal[]              @relation("CuttingProposalApprovedBy")
+  transferCheckResults              TransferCheckResult[]          @relation("TransferCheckCheckedBy")
   purchaseProposalsApproved         PurchaseProposal[]
   purchaseProposalItemsApproved     PurchaseProposalItem[]
-  supplierOrdersCreated             SupplierOrder[]             @relation("SupplierOrderCreatedBy")
-  supplierOrdersApproved            SupplierOrder[]             @relation("SupplierOrderApprovedBy")
+  supplierOrdersCreated             SupplierOrder[]                @relation("SupplierOrderCreatedBy")
+  supplierOrdersApproved            SupplierOrder[]                @relation("SupplierOrderApprovedBy")
   purchaseReceiptLogsReceived       PurchaseReceiptLog[]
-  purchaseReceiptsCreated           PurchaseReceipt[]           @relation("PurchaseReceiptCreatedBy")
+  purchaseReceiptsCreated           PurchaseReceipt[]              @relation("PurchaseReceiptCreatedBy")
   stockLedgerEntries                StockLedger[]
   stockReservations                 StockReservation[]
   materialsToBuy                    Material[]
-  steelIssuesIssued                 SteelIssue[]                @relation("SteelIssueIssuedBy")
-  issueSlipsCreated                 IssueSlip[]                 @relation("IssueSlipCreatedBy")
-  issueSlipsIssued                  IssueSlip[]                 @relation("IssueSlipIssuedBy")
-  steelIssuesReceived               SteelIssue[]                @relation("SteelIssueReceivedBy")
+  steelIssuesIssued                 SteelIssue[]                   @relation("SteelIssueIssuedBy")
+  issueSlipsCreated                 IssueSlip[]                    @relation("IssueSlipCreatedBy")
+  issueSlipsIssued                  IssueSlip[]                    @relation("IssueSlipIssuedBy")
+  steelIssuesReceived               SteelIssue[]                   @relation("SteelIssueReceivedBy")
   floorReports                      FloorReport[]
-  cutBundlesOpened                  CutBundle[]                 @relation("CutBundleOpenedBy")
-  stepBatchesReported               StepBatch[]                 @relation("StepBatchReportedBy")
-  stepBundlesWorker                 StepBundle[]                @relation("StepBundleWorker")
-  floorQueueQueued                  FloorQueueEntry[]           @relation("FloorQueueQueuedBy")
-  floorQueueStarted                 FloorQueueEntry[]           @relation("FloorQueueStartedBy")
-  floorQueueEnded                   FloorQueueEntry[]           @relation("FloorQueueEndedBy")
-  cutAllocationLogsCreated          CutAllocationLog[]          @relation("CutAllocationLogCreatedBy")
-  cutAllocationsUpdated             CutAllocation[]             @relation("CutAllocationUpdatedBy")
-  qcReviewsReviewed                 QcReview[]                  @relation("QcReviewReviewedBy")
-  weavingIssuesIssued               WeavingIssue[]              @relation("WeavingIssueIssuedBy")
-  weavingReceiptsReceived           WeavingReceipt[]            @relation("WeavingReceiptReceivedBy")
-  materialIssuesIssued              MaterialIssue[]             @relation("MaterialIssueIssuedBy")
-  materialIssuesReceived            MaterialIssue[]             @relation("MaterialIssueReceivedBy")
-  materialYieldIssuesIssued         MaterialYieldIssue[]        @relation("MaterialYieldIssueIssuedBy")
-  materialYieldIssuesReceived       MaterialYieldIssue[]        @relation("MaterialYieldIssueReceivedBy")
+  cutBundlesOpened                  CutBundle[]                    @relation("CutBundleOpenedBy")
+  stepBatchesReported               StepBatch[]                    @relation("StepBatchReportedBy")
+  stepBundlesWorker                 StepBundle[]                   @relation("StepBundleWorker")
+  floorQueueQueued                  FloorQueueEntry[]              @relation("FloorQueueQueuedBy")
+  floorQueueStarted                 FloorQueueEntry[]              @relation("FloorQueueStartedBy")
+  floorQueueEnded                   FloorQueueEntry[]              @relation("FloorQueueEndedBy")
+  cutAllocationLogsCreated          CutAllocationLog[]             @relation("CutAllocationLogCreatedBy")
+  cutAllocationsUpdated             CutAllocation[]                @relation("CutAllocationUpdatedBy")
+  qcReviewsReviewed                 QcReview[]                     @relation("QcReviewReviewedBy")
+  weavingIssuesIssued               WeavingIssue[]                 @relation("WeavingIssueIssuedBy")
+  weavingReceiptsReceived           WeavingReceipt[]               @relation("WeavingReceiptReceivedBy")
+  materialIssuesIssued              MaterialIssue[]                @relation("MaterialIssueIssuedBy")
+  materialIssuesReceived            MaterialIssue[]                @relation("MaterialIssueReceivedBy")
+  materialYieldIssuesIssued         MaterialYieldIssue[]           @relation("MaterialYieldIssueIssuedBy")
+  materialYieldIssuesReceived       MaterialYieldIssue[]           @relation("MaterialYieldIssueReceivedBy")
   officeSupplyLedgerEntries         OfficeSupplyLedgerEntry[]
-  packagingIssuesIssued             PackagingIssue[]            @relation("PackagingIssueIssuedBy")
-  productionBatchesReported         ProductionBatch[]           @relation("ProductionBatchReportedBy")
-  pieceStepBatchesReported          PieceStepBatch[]            @relation("PieceStepBatchReportedBy")
-  pieceStepBundlesSubmitted         PieceStepBundle[]           @relation("PieceStepBundleSubmittedBy")
-  stepBundlesSubmitted              StepBundle[]                @relation("StepBundleSubmittedBy")
-  materialYieldStepBatchesReported  MaterialYieldStepBatch[]    @relation("MaterialYieldStepBatchReportedBy")
-  materialYieldStepBundlesSubmitted MaterialYieldStepBundle[]   @relation("MaterialYieldStepBundleSubmittedBy")
-  materialYieldRecipeIssuesIssued   MaterialYieldRecipeIssue[]  @relation("MaterialYieldRecipeIssueIssuedBy")
-  materialYieldRecipeIssuesReceived MaterialYieldRecipeIssue[]  @relation("MaterialYieldRecipeIssueReceivedBy")
+  packagingIssuesIssued             PackagingIssue[]               @relation("PackagingIssueIssuedBy")
+  productionBatchesReported         ProductionBatch[]              @relation("ProductionBatchReportedBy")
+  pieceStepBatchesReported          PieceStepBatch[]               @relation("PieceStepBatchReportedBy")
+  pieceStepBundlesSubmitted         PieceStepBundle[]              @relation("PieceStepBundleSubmittedBy")
+  stepBundlesSubmitted              StepBundle[]                   @relation("StepBundleSubmittedBy")
+  materialYieldStepBatchesReported  MaterialYieldStepBatch[]       @relation("MaterialYieldStepBatchReportedBy")
+  materialYieldStepBundlesSubmitted MaterialYieldStepBundle[]      @relation("MaterialYieldStepBundleSubmittedBy")
+  materialYieldRecipeIssuesIssued   MaterialYieldRecipeIssue[]     @relation("MaterialYieldRecipeIssueIssuedBy")
+  materialYieldRecipeIssuesReceived MaterialYieldRecipeIssue[]     @relation("MaterialYieldRecipeIssueReceivedBy")
   materialInspectionRequestsCreated MaterialInspectionRequest[]
   inspectionKhoResultsSubmitted     InspectionKhoResult[]
   packagingRecordsPacked            PackagingRecord[]
-  warehouseTransfersCreated         WarehouseTransfer[]         @relation("WarehouseTransferCreatedBy")
-  warehouseTransfersConfirmed       WarehouseTransfer[]         @relation("WarehouseTransferConfirmedBy")
-  warehouseTransfersRejected        WarehouseTransfer[]         @relation("WarehouseTransferRejectedBy")
+  warehouseTransfersCreated         WarehouseTransfer[]            @relation("WarehouseTransferCreatedBy")
+  warehouseTransfersConfirmed       WarehouseTransfer[]            @relation("WarehouseTransferConfirmedBy")
+  warehouseTransfersRejected        WarehouseTransfer[]            @relation("WarehouseTransferRejectedBy")
   // Phần A – Đợt 10a (YC5)
-  bookingsCreated                   Booking[]                   @relation("BookingCreatedBy")
+  bookingsCreated                   Booking[]                      @relation("BookingCreatedBy")
   // Phần A – Đợt 9 (YC2)
-  deadlineChangeBatchesRequested    DeadlineChangeBatch[]       @relation("DeadlineChangeRequestedBy")
-  deadlineChangeBatchesDecided      DeadlineChangeBatch[]       @relation("DeadlineChangeDecidedBy")
+  deadlineChangeBatchesRequested    DeadlineChangeBatch[]          @relation("DeadlineChangeRequestedBy")
+  deadlineChangeBatchesDecided      DeadlineChangeBatch[]          @relation("DeadlineChangeDecidedBy")
+  poCancelRequestsRequested         ProductionOrderCancelRequest[] @relation("PoCancelRequestedBy")
+  poCancelRequestsDecided           ProductionOrderCancelRequest[] @relation("PoCancelDecidedBy")
 
   @@index([deletedAt])
   @@index([warehouseScope])
@@ -1860,17 +1862,21 @@ model ProductionInvoiceItem {
   /// warehouseCode (gộp/cắt riêng lại) thì xoá luôn cột này. Mọi dòng của 1 PI cùng 1 xưởng (xuất sắt/giữ chỗ theo PI).
   workshopId               BigInt?
   workshop                 Workshop?           @relation(fields: [workshopId], references: [id])
+  /// Huỷ lệnh theo SKU (đợt 1, 23/11/2026 - anh Nhân câu 2/4): dòng này đã bị Sếp duyệt huỷ. Dòng ở lại lệnh cũ làm lịch sử
+  /// (lệnh SX của nó status CANCELLED); dòng đơn bán được cấp 1 dòng MỚI (productionInvoiceId NULL) để KHSX lên lệnh lại -
+  /// mọi chỗ gom dòng theo salesOrderItemId phải bỏ dòng có cột này. Xem ProductionOrderCancelRequest.
+  cancelledAt              DateTime?
 
-  productionInvoice      ProductionInvoice?           @relation(fields: [productionInvoiceId], references: [id])
-  salesOrder             SalesOrder?                  @relation(fields: [salesOrderId], references: [id])
-  salesOrderItem         SalesOrderItem?              @relation(fields: [salesOrderItemId], references: [id])
-  mfgProduct             MfgProduct                   @relation(fields: [mfgProductId], references: [id])
-  productVariant         ProductVariant?              @relation(fields: [productVariantId], references: [id])
-  wireMaterial           Material?                    @relation("ProductionInvoiceItemWire", fields: [wireMaterialId], references: [id])
-  cushionMaterial        Material?                    @relation("ProductionInvoiceItemCushion", fields: [cushionMaterialId], references: [id])
-  requestedBy            User?                        @relation("PIItemRequestedBy", fields: [requestedById], references: [id])
-  qlsxBy                 User?                        @relation("PIItemQlsxBy", fields: [qlsxById], references: [id])
-  decidedBy              User?                        @relation("PIItemDecidedBy", fields: [decidedById], references: [id])
+  productionInvoice      ProductionInvoice?             @relation(fields: [productionInvoiceId], references: [id])
+  salesOrder             SalesOrder?                    @relation(fields: [salesOrderId], references: [id])
+  salesOrderItem         SalesOrderItem?                @relation(fields: [salesOrderItemId], references: [id])
+  mfgProduct             MfgProduct                     @relation(fields: [mfgProductId], references: [id])
+  productVariant         ProductVariant?                @relation(fields: [productVariantId], references: [id])
+  wireMaterial           Material?                      @relation("ProductionInvoiceItemWire", fields: [wireMaterialId], references: [id])
+  cushionMaterial        Material?                      @relation("ProductionInvoiceItemCushion", fields: [cushionMaterialId], references: [id])
+  requestedBy            User?                          @relation("PIItemRequestedBy", fields: [requestedById], references: [id])
+  qlsxBy                 User?                          @relation("PIItemQlsxBy", fields: [qlsxById], references: [id])
+  decidedBy              User?                          @relation("PIItemDecidedBy", fields: [decidedById], references: [id])
   stages                 ProductionInvoiceItemStage[]
   productionOrder        ProductionOrder?
   transferCheckResults   TransferCheckResult[]
@@ -1880,6 +1886,7 @@ model ProductionInvoiceItem {
   bookingLines           BookingLine[]
   // Phần A – Đợt 9 (YC2)
   deadlineChangeRequests DeadlineChangeRequest[]
+  cancelReplacementOf    ProductionOrderCancelRequest[] @relation("PoCancelReplacementItem")
 
   @@index([productionInvoiceId])
   @@index([mfgProductId])
@@ -2108,11 +2115,11 @@ model ProductionOrder {
   floorFinishedAt         DateTime?
   createdAt               DateTime                  @default(now())
 
-  productionInvoiceItem       ProductionInvoiceItem        @relation(fields: [productionInvoiceItemId], references: [id])
-  mfgProduct                  MfgProduct                   @relation(fields: [mfgProductId], references: [id])
-  bomRevision                 BomRevision                  @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
-  wireMaterial                Material?                    @relation("ProductionOrderWire", fields: [wireMaterialId], references: [id])
-  cushionMaterial             Material?                    @relation("ProductionOrderCushion", fields: [cushionMaterialId], references: [id])
+  productionInvoiceItem       ProductionInvoiceItem          @relation(fields: [productionInvoiceItemId], references: [id])
+  mfgProduct                  MfgProduct                     @relation(fields: [mfgProductId], references: [id])
+  bomRevision                 BomRevision                    @relation(fields: [bomRevisionId, mfgProductId], references: [id, mfgProductId])
+  wireMaterial                Material?                      @relation("ProductionOrderWire", fields: [wireMaterialId], references: [id])
+  cushionMaterial             Material?                      @relation("ProductionOrderCushion", fields: [cushionMaterialId], references: [id])
   cuttingProposals            CuttingProposal[]
   cuttingPlanCoverage         CuttingPlanCoverage?
   weavingIssues               WeavingIssue[]
@@ -2129,9 +2136,49 @@ model ProductionOrder {
   pieceStepBundles            PieceStepBundle[]
   materialInspectionRequests  MaterialInspectionRequest[]
   warehouseTransferPieceItems WarehouseTransferPieceItem[]
+  cancelRequests              ProductionOrderCancelRequest[]
 
   @@index([mfgProductId])
   @@map("production_orders")
+}
+
+// ─── Huỷ lệnh theo SKU - đợt 1 (23/11/2026, anh Nhân trả lời 7 câu) ─────────────────────────────────────────────────────
+// KHSX bấm "Đề nghị huỷ" 1 SKU (1 lệnh SX) kèm lý do, Sếp duyệt mới huỷ; huỷ được bất kỳ lúc nào trước khi giao hàng. Duyệt:
+// lệnh SX status CANCELLED + floorStage FINISHED (xưởng hết thấy, PI vẫn Kết thúc được), dòng SKU cũ cancelledAt, dòng đơn bán
+// có dòng SKU mới "chưa lên lệnh". "Mỗi lệnh ≤ 1 đề nghị PENDING" do unique index MỘT PHẦN trong migration (Prisma không khai được).
+enum ProductionOrderCancelStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  /// KHSX tự rút lại đề nghị trước khi Sếp quyết.
+  WITHDRAWN
+}
+
+model ProductionOrderCancelRequest {
+  id                BigInt                      @id @default(autoincrement())
+  productionOrderId BigInt
+  status            ProductionOrderCancelStatus @default(PENDING)
+  reason            String
+  requestedById     String
+  requestedAt       DateTime                    @default(now())
+  decidedById       String?
+  decidedAt         DateTime?
+  /// Lý do Sếp từ chối / ghi chú khi duyệt.
+  decisionNote      String?
+  /// Chụp lúc Sếp duyệt: số hàng của SKU đang nằm ở từng công đoạn (đoạn đã cắt, mảnh hàn/sơn, đã đóng gói...) - đợt 2 dùng để
+  /// đưa vào tồn cho lệnh khác. Xem OrderCancellationService.snapshotWip.
+  wipSnapshot       Json?
+  /// Dòng SKU mới cấp cho dòng đơn bán sau khi huỷ (để lên lệnh lại). NULL = dòng SKU tạo tay, không gắn dòng đơn.
+  replacementItemId BigInt?
+
+  productionOrder ProductionOrder        @relation(fields: [productionOrderId], references: [id])
+  requestedBy     User                   @relation("PoCancelRequestedBy", fields: [requestedById], references: [id])
+  decidedBy       User?                  @relation("PoCancelDecidedBy", fields: [decidedById], references: [id])
+  replacementItem ProductionInvoiceItem? @relation("PoCancelReplacementItem", fields: [replacementItemId], references: [id])
+
+  @@index([productionOrderId, status])
+  @@index([status])
+  @@map("production_order_cancel_requests")
 }
 
 /// 1 lần gọi solver cat_sat_iea. cat_sat_iea không lưu gì (stateless) - toàn bộ input/output

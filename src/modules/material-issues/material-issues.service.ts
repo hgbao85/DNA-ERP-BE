@@ -23,6 +23,7 @@ import {
   assertItemPiHasActiveFloorLocked,
 } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import { isCancelledOrder } from '../../common/utils/cancelled-order.util';
 import { paginate } from '../../common/utils/paginate.util';
 import {
   loadSkuPriorityHoldback,
@@ -393,6 +394,8 @@ export class MaterialIssuesService {
   /** "Cần xuất bao nhiêu" theo (material, stage) - query trực tiếp, không có bảng cache riêng. */
   async getIssuePlan(productionOrderId: string): Promise<MaterialIssuePlanItemResponseDto[]> {
     const order = await this.findOrderOrThrow(productionOrderId);
+    // Huỷ lệnh theo SKU (23/11/2026): SKU đã huỷ không còn gì để xuất (ghi đã bị chặn).
+    if (isCancelledOrder(order)) return [];
 
     const [consumableBoms, issues] = await Promise.all([
       this.prisma.consumableBom.findMany({

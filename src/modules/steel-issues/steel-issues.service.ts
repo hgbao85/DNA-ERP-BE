@@ -23,10 +23,13 @@ import {
   StepBundleStatus,
   StockLedgerRefType,
   SteelIssueStatus,
+  ProductionOrderStatus,
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import {
+  assertLoadedOrderNotCancelled,
+  assertOrderNotCancelled,
   assertPiHasActiveFloor,
   assertPiHasActiveFloorLocked,
 } from '../../common/utils/floor-gate.util';
@@ -46,6 +49,7 @@ import {
   writeFloorReport,
 } from '../../common/utils/floor-report.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import { NOT_CANCELLED_ORDER } from '../../common/utils/cancelled-order.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { isFamilyScope } from '../../common/utils/warehouse-family.util';
 import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
@@ -230,6 +234,8 @@ type OrderForBom = {
   bomRevisionId: bigint;
   quantity: number;
   floorStage: ProductionOrderFloorStage;
+  /** Huỷ lệnh theo SKU (23/11/2026). Mock cũ có thể thiếu -> coi như chưa huỷ. */
+  status?: ProductionOrderStatus;
 };
 
 /// Kho vật lý duy nhất liên quan (cat_sat_iea chỉ tính vật tư sắt) - cùng giá trị
@@ -948,6 +954,8 @@ export class SteelIssuesService {
         `SKU (lệnh sản xuất ${dto.productionOrderId}) không thuộc PI của lô sắt này`,
       );
     }
+    // Huỷ lệnh theo SKU (23/11/2026): cổng trên theo PI - SKU đã huỷ không nhận đợt cắt mới.
+    assertLoadedOrderNotCancelled(order, 'nhập đợt cắt');
 
     const specIds = dto.segments.map((seg) => parseBigIntId(seg.segmentSpecId));
     if (new Set(specIds.map(String)).size !== specIds.length) {
@@ -1709,6 +1717,9 @@ export class SteelIssuesService {
       throw new ConflictException('Đợt cắt này vừa được chốt để chấm - tải lại trang.');
     }
     await assertPiHasActiveFloor(this.prisma, bundle.steelIssue.productionInvoiceId, gateLabel);
+    if (bundle.productionOrderId != null) {
+      await assertOrderNotCancelled(this.prisma, bundle.productionOrderId, gateLabel);
+    }
 
     // Đổi trạng thái CÓ ĐIỀU KIỆN (đang CUTTING): 2 người gửi KCS cùng lúc hoặc đợt vừa bị hủy hết
     // thì chỉ 1 lời gọi đổi được, lời gọi còn lại nhận 409 - không ghi đè completedAt, không báo lần 2.
@@ -2097,8 +2108,13 @@ export class SteelIssuesService {
     const step = new Map<string, StepInputs>();
     if (invoiceIds.length === 0) return { cut, step };
 
+    // Huỷ lệnh theo SKU (23/11/2026): bỏ lệnh đã huỷ khỏi số cần. Đoạn đã làm của SKU huỷ vẫn nạp (dòng theo PI) - thành
+    // nhóm riêng trong byOrder, không cộng vào số của cỡ đoạn (xem buildPhoiProgress).
     const orderRows = await this.prisma.productionOrder.findMany({
-      where: { productionInvoiceItem: { productionInvoiceId: { in: invoiceIds } } },
+      where: {
+        productionInvoiceItem: { productionInvoiceId: { in: invoiceIds } },
+        ...NOT_CANCELLED_ORDER,
+      },
       select: {
         id: true,
         bomRevisionId: true,
@@ -2423,6 +2439,7 @@ export class SteelIssuesService {
 
     // Khoá (cỡ đoạn, SKU) - SKU 'none' = đợt/đánh giá CŨ chưa gắn SKU ở PI NHIỀU SKU (PI 1 SKU: tính cho SKU duy nhất).
     const orderKey = (id: bigint | null | undefined) => phoiOrderKey(orders, id);
+    const liveOrderKeys = new Set(orders.map((o) => o.id.toString()));
     const index = buildPhoiNeedIndex({
       orders,
       bomPieces,
@@ -2579,9 +2596,14 @@ export class SteelIssuesService {
             ? -1
             : Number(a.productionOrderId) - Number(b.productionOrderId),
       );
+      // Huỷ lệnh theo SKU (23/11/2026): nhóm của SKU đã huỷ (không có trong `orders`) vẫn hiện trong byOrder nhưng KHÔNG cộng
+      // vào số của cỡ đoạn - phần đã làm của SKU huỷ là dư, không bù cho SKU còn chạy.
+      const counted = byOrder.filter(
+        (o) => o.productionOrderId === null || liveOrderKeys.has(o.productionOrderId),
+      );
       const sum = (pick: (o: PhoiProgressOrderSegmentDto) => number) =>
-        byOrder.reduce((t, o) => t + pick(o), 0);
-      const concrete = byOrder.filter((o) => o.productionOrderId !== null);
+        counted.reduce((t, o) => t + pick(o), 0);
+      const concrete = counted.filter((o) => o.productionOrderId !== null);
       item.segments.push(
         new PhoiProgressSegmentDto({
           segmentSpecId: specKey,
@@ -2659,8 +2681,10 @@ export class SteelIssuesService {
         usableMm += bars * Math.max(i.barLengthMm - trimMm, 0);
       }
       // `done` mới = đã báo - thiếu: đoạn KCS ghi thiếu không có thật nên không tốn sắt.
+      // Cộng theo byOrder (gồm cả SKU đã huỷ - sg.done không gồm): đoạn của SKU huỷ cũng đã tốn sắt.
       const reportedMm = item.segments.reduce(
-        (t, sg) => t + sg.done * (sg.cutLengthMm + kerfMm),
+        (t, sg) =>
+          t + sg.byOrder.reduce((s, o) => s + o.done, 0) * (sg.cutLengthMm + kerfMm),
         0,
       );
       // Gợi ý cho P1b (chỉ đọc): còn phải cắt bao nhiêu đoạn (theo từng SKU, SKU đã dư không bù cho SKU còn thiếu),
@@ -2790,6 +2814,8 @@ export class SteelIssuesService {
         `SKU (lệnh sản xuất ${dto.productionOrderId}) không thuộc PI này`,
       );
     }
+    // Huỷ lệnh theo SKU (23/11/2026)
+    assertLoadedOrderNotCancelled(order, 'nhập công đoạn chi tiết');
     const requiredSteps = await this.resolveRequiredSteps(invoice.id, materialBigId);
     if (!requiredSteps.includes(dto.step)) {
       throw new BadRequestException(
@@ -3091,7 +3117,11 @@ export class SteelIssuesService {
     productionInvoiceId: bigint,
     materialId: bigint,
   ): Promise<ProcessStep[]> {
-    const orders = await this.findOrdersForInvoice(productionInvoiceId);
+    // Huỷ lệnh theo SKU (23/11/2026): công đoạn chỉ SKU đã huỷ cần thì không còn phải làm.
+    const orders = await this.prisma.productionOrder.findMany({
+      where: { productionInvoiceItem: { productionInvoiceId }, ...NOT_CANCELLED_ORDER },
+      select: { bomRevisionId: true },
+    });
     const set = new Set<ProcessStep>([ProcessStep.CAT]);
     if (orders.length === 0) return [...set];
 
@@ -3110,8 +3140,12 @@ export class SteelIssuesService {
     issues: SteelIssueRow[],
   ): Promise<Map<string, ProcessStep[]>> {
     const invoiceIds = [...new Set(issues.map((i) => i.productionInvoiceId))];
+    // Huỷ lệnh theo SKU (23/11/2026): cùng resolveRequiredSteps - bỏ lệnh đã huỷ.
     const orders = await this.prisma.productionOrder.findMany({
-      where: { productionInvoiceItem: { productionInvoiceId: { in: invoiceIds } } },
+      where: {
+        productionInvoiceItem: { productionInvoiceId: { in: invoiceIds } },
+        ...NOT_CANCELLED_ORDER,
+      },
       select: {
         bomRevisionId: true,
         productionInvoiceItem: { select: { productionInvoiceId: true } },
@@ -3171,8 +3205,9 @@ export class SteelIssuesService {
    */
   async getOrderSummary(productionInvoiceId: string): Promise<PiOrderSummaryResponseDto[]> {
     const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
+    // Huỷ lệnh theo SKU (23/11/2026): danh sách SKU Phôi làm - bỏ SKU đã huỷ.
     const orders = await this.prisma.productionOrder.findMany({
-      where: { productionInvoiceItem: { productionInvoiceId: invoice.id } },
+      where: { productionInvoiceItem: { productionInvoiceId: invoice.id }, ...NOT_CANCELLED_ORDER },
       orderBy: { id: 'asc' },
       select: {
         id: true,
@@ -3230,7 +3265,14 @@ export class SteelIssuesService {
             status: CuttingProposalStatus.APPROVED,
             OR: [
               { productionInvoiceId: invoice.id },
-              { productionOrder: { productionInvoiceItem: { productionInvoiceId: invoice.id } } },
+              // Huỷ lệnh theo SKU (23/11/2026): phương án neo SKU đã huỷ không còn là "cần xuất". Phương án neo PI (lệnh gộp)
+              // giữ nguyên - luồng huỷ đã tính lại hoặc chủ ý giữ (đã xuất sắt thì cắt hết, phần SKU huỷ thành dư).
+              {
+                productionOrder: {
+                  productionInvoiceItem: { productionInvoiceId: invoice.id },
+                  ...NOT_CANCELLED_ORDER,
+                },
+              },
             ],
           },
         },
@@ -3493,8 +3535,14 @@ export class SteelIssuesService {
         status: CuttingProposalStatus.APPROVED,
         OR: [
           { productionInvoiceId },
+          // Huỷ lệnh theo SKU (23/11/2026): phương án neo SKU đã huỷ không còn cho xuất sắt (cùng getIssuePlan).
           ...(productionOrderIds.length > 0
-            ? [{ productionOrderId: { in: productionOrderIds } }]
+            ? [
+                {
+                  productionOrderId: { in: productionOrderIds },
+                  productionOrder: NOT_CANCELLED_ORDER,
+                },
+              ]
             : []),
         ],
       },
@@ -3555,7 +3603,7 @@ export class SteelIssuesService {
   private async findOrdersForInvoice(productionInvoiceId: bigint): Promise<OrderForBom[]> {
     return this.prisma.productionOrder.findMany({
       where: { productionInvoiceItem: { productionInvoiceId } },
-      select: { id: true, bomRevisionId: true, quantity: true, floorStage: true },
+      select: { id: true, bomRevisionId: true, quantity: true, floorStage: true, status: true },
     });
   }
 

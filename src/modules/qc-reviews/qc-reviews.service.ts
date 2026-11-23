@@ -18,10 +18,7 @@ import {
 } from '../../generated/prisma/client';
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
-import {
-  assertOrderPiHasActiveFloor,
-  assertPiHasActiveFloor,
-} from '../../common/utils/floor-gate.util';
+import { assertOrderPiHasActiveFloor, assertPiHasActiveFloor, assertOrderNotCancelled } from '../../common/utils/floor-gate.util';
 import { processStepLabel } from '../../common/constants/process-steps.constant';
 
 /** Tên loại sắt kèm quy cách (vd 'Sắt vuông 6zem 15') - 1 lệnh có nhiều 'Sắt vuông 6zem' khác quy cách (17/11/2026). */
@@ -515,6 +512,9 @@ export class QcReviewsService {
       );
     }
     await assertPiHasActiveFloor(this.prisma, bundle.steelIssue.productionInvoiceId, 'duyệt KCS');
+    if (bundle.productionOrderId != null) {
+      await assertOrderNotCancelled(this.prisma, bundle.productionOrderId, 'duyệt KCS');
+    }
 
     const specIds = dto.segments.map((s) => parseBigIntId(s.segmentSpecId));
     const specs = await this.prisma.segmentSpec.findMany({ where: { id: { in: specIds } } });
@@ -739,6 +739,9 @@ export class QcReviewsService {
       );
     }
     await assertPiHasActiveFloor(this.prisma, bundle.productionInvoiceId, 'duyệt KCS');
+    if (bundle.productionOrderId != null) {
+      await assertOrderNotCancelled(this.prisma, bundle.productionOrderId, 'duyệt KCS');
+    }
 
     const specIds = dto.segments.map((s) => parseBigIntId(s.segmentSpecId));
     const [specs, doneInThisBundle] = await Promise.all([

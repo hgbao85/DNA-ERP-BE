@@ -18,6 +18,7 @@ import {
 } from '../../generated/prisma/client';
 import type { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import { NOT_CANCELLED_ORDER } from '../../common/utils/cancelled-order.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
@@ -506,8 +507,9 @@ export class FloorScanService {
         where: { id: piId },
         select: { id: true, code: true },
       }),
+      // Huỷ lệnh theo SKU (23/11/2026): SKU đã huỷ không còn để chọn báo.
       this.prisma.productionOrder.findMany({
-        where: { productionInvoiceItem: { productionInvoiceId: piId } },
+        where: { productionInvoiceItem: { productionInvoiceId: piId }, ...NOT_CANCELLED_ORDER },
         orderBy: { id: 'asc' },
         select: {
           id: true,

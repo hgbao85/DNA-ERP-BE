@@ -19,6 +19,8 @@ import { MaterialYieldRecipePurchaseService } from './material-yield-recipe-purc
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { ProductionInvoicesController } from './production-invoices.controller';
 import { ProductionInvoicesService } from './production-invoices.service';
+import { OrderCancellationController } from './order-cancellation/order-cancellation.controller';
+import { OrderCancellationService } from './order-cancellation/order-cancellation.service';
 
 @Module({
   imports: [
@@ -33,7 +35,13 @@ import { ProductionInvoicesService } from './production-invoices.service';
     WarehouseTransfersModule, // Người B – đổi xưởng (10/11/2026)
   ],
   // Phần A – Đợt 9 (YC2): lõi đổi mốc + Excel kế hoạch
-  controllers: [ProductionInvoicesController, DeadlineChangesController, DeadlinePlanController],
+  controllers: [
+    ProductionInvoicesController,
+    DeadlineChangesController,
+    DeadlinePlanController,
+    // Huỷ lệnh theo SKU - đợt 1 (23/11/2026)
+    OrderCancellationController,
+  ],
   providers: [
     ProductionInvoicesService,
     PieceMaterialYieldPurchaseService,
@@ -44,6 +52,7 @@ import { ProductionInvoicesService } from './production-invoices.service';
     DeadlineChangesService,
     { provide: DeadlineChangesPort, useExisting: DeadlineChangesService },
     DeadlinePlanExcelService,
+    OrderCancellationService,
   ],
   exports: [ProductionInvoicesService, DeadlineChangesService, DeadlineChangesPort],
 })

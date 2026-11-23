@@ -3,6 +3,7 @@ import {
   PurchaseRecomputeItem,
   eventFromPlan,
   planPurchaseRecompute,
+  planSignedLowering,
   toRecomputeItem,
 } from './purchase-recompute.util';
 
@@ -231,5 +232,46 @@ describe('eventFromPlan / toRecomputeItem', () => {
       receivedQty: 1,
       inSupplierOrder: false,
     });
+  });
+});
+
+// Huỷ lệnh theo SKU - đợt 1 (23/11/2026, anh Nhân câu 3).
+describe('planSignedLowering / lowerSignedOnDrop', () => {
+  it('mặc định (không cờ) KHÔNG hạ dòng đã ký', () => {
+    const plan = planPurchaseRecompute([item(1, S.PURCHASING, 100, null, 20)], 30);
+    expect(plan.demandDropped).toEqual({ neededQty: 50, signedQty: 100 });
+    expect(plan.signedLower).toEqual([]);
+  });
+
+  it('có cờ: hạ số cần về nhu cầu mới, orderQty trống thì ghi bằng số cũ (giữ số đã ký NCC)', () => {
+    const plan = planPurchaseRecompute([item(1, S.PURCHASING, 100, null, 20)], 30, {
+      lowerSignedOnDrop: true,
+    });
+    // cần = 30 còn phải mua + 20 đã nhận = 50
+    expect(plan.signedLower).toEqual([{ itemId: 1n, buyQty: 50, orderQty: 100 }]);
+  });
+
+  it('orderQty đã có (người mua làm tròn) thì không ghi lại orderQty', () => {
+    expect(planSignedLowering([item(1, S.PURCHASING, 406, 450, 0)], 300)).toEqual([
+      { itemId: 1n, buyQty: 300, orderQty: null },
+    ]);
+  });
+
+  it('nhiều dòng đã ký: hạ dòng mới ký trước, không xuống dưới số đã nhận', () => {
+    const rows = [item(1, S.PURCHASING, 60, null, 50), item(2, S.PURCHASING, 40, null, 10)];
+    // cần cũ 100, cần mới 55 -> muốn bớt 45: dòng 2 bớt 30 (xuống bằng đã nhận 10), dòng 1 bớt 10 (xuống bằng đã nhận 50); 5 còn lại không bớt được
+    expect(planSignedLowering(rows, 55)).toEqual([
+      { itemId: 2n, buyQty: 10, orderQty: 40 },
+      { itemId: 1n, buyQty: 50, orderQty: 60 },
+    ]);
+  });
+
+  it('nhu cầu không giảm thì không hạ gì', () => {
+    expect(planSignedLowering([item(1, S.PURCHASING, 100, null, 0)], 100)).toEqual([]);
+    expect(planSignedLowering([item(1, S.PURCHASING, 100, null, 0)], 120)).toEqual([]);
+  });
+
+  it('đã nhận đủ thì không hạ được (về tồn chung ngay lúc nhận)', () => {
+    expect(planSignedLowering([item(1, S.PURCHASING, 100, null, 100)], 0)).toEqual([]);
   });
 });

@@ -43,6 +43,7 @@ import {
   assertItemPiHasActiveFloorLocked,
 } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import { NOT_CANCELLED_ORDER } from '../../common/utils/cancelled-order.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { MaterialYieldIssuesService } from '../material-yield-issues/material-yield-issues.service';
@@ -1731,8 +1732,12 @@ export class ProductionBatchesService {
     if (withPi.length === 0) return result;
 
     const piIds = [...new Set(withPi.map((o) => o.productionInvoiceId))];
+    // Huỷ lệnh theo SKU (23/11/2026): SKU đã huỷ không giữ phần tiến độ chân nhôm của PI (không thì SKU còn lại không bao giờ đủ).
     const piOrders = await this.prisma.productionOrder.findMany({
-      where: { productionInvoiceItem: { productionInvoiceId: { in: piIds } } },
+      where: {
+        productionInvoiceItem: { productionInvoiceId: { in: piIds } },
+        ...NOT_CANCELLED_ORDER,
+      },
       select: {
         id: true,
         bomRevisionId: true,
@@ -1847,13 +1852,16 @@ export class ProductionBatchesService {
       }
     }
 
+    const liveOrderIds = new Set(piOrders.map((o) => o.id.toString()));
     for (const order of withPi) {
       const items: ProductionBatchMaterialYieldItemResponseDto[] = [];
       for (const recipe of recipes) {
         const planned = requiredOf(order.bomRevisionId, order.quantity, recipe.outputMaterialId);
         if (planned <= 0) continue;
         const key = piProgressKey(order.productionInvoiceId, recipe.id);
-        const piRequired = requiredByPi.get(key) ?? 0;
+        // Xem lại SKU đã huỷ: tính tỷ lệ như thể SKU vẫn trong PI (chỉ hiển thị, không ảnh hưởng SKU còn chạy).
+        const piRequired =
+          (requiredByPi.get(key) ?? 0) + (liveOrderIds.has(order.id.toString()) ? 0 : planned);
         const share = piRequired > 0 ? planned / piRequired : 0;
         items.push(
           new ProductionBatchMaterialYieldItemResponseDto({
