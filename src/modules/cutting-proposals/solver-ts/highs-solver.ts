@@ -78,13 +78,17 @@ export interface TwoStageInput {
   stage1Only?: boolean;
   /**
    * CS2 (anh Nhân 20/11/2026): cây lẻ trong kho - mỗi nhóm là các pattern cắt trên MỘT chiều dài cây lẻ, tổng số cây của nhóm
-   * ≤ `max` (số cây đang có). Có mặt thì giải thêm "tầng 0": ÍT CÂY MUA nhất (pattern không thuộc nhóm cây lẻ nào) - cây lẻ chỉ có
-   * ích khi bớt được cây phải mua. KHÔNG tối đa số cây lẻ (review Sang 21/11: 30 cây lẻ 5800 cho 20 đoạn 500 bị phá hết, mỗi cây
-   * 1 đoạn), cũng KHÔNG tối đa chiều dài cắt từ cây lẻ (đo 23/11: SAT-001 650×4 + 420×8 vẫn phải mua 1 cây 6000 mà còn cắt thêm
-   * 1 cây lẻ 5800 - 2 cây cho việc 1 cây làm được). Rồi 2 tầng thường với số cây mua ≤ số tầng 0 - tầng 1 min khúc thừa tự dùng
-   * ít cây lẻ nhất đủ bù. Chỉ đường 'direct' (nhiều chiều dài cây).
+   * ≤ `max` (số cây đang có). Có mặt thì giải thêm "tầng 0" (xem solveWithLengthCaps): xếp đoạn lên cây lẻ trước (min chiều dài
+   * cắt trên cây mua), rồi ít cây mua nhất - anh Nhân chốt 23/11 dùng cây lẻ kể cả khi không bớt được cây mua. Chỉ đường 'direct'
+   * (nhiều chiều dài cây).
    */
   lengthCaps?: Array<{ patterns: number[]; max: number }>;
+  /**
+   * CS2 "cây mua cuối" (anh Nhân 23/11): khi có cây lẻ, cho tối đa 1 cây mua cắt tự do (không theo ngưỡng hao hụt) phần còn thiếu
+   * sau khi xếp cây lẻ - chỉ khi có cắt cây lẻ. `usableS` = phần dùng được của chiều dài mua (đã scale); `maxSizes` = số cỡ tối đa
+   * trên 1 cây (null = không giới hạn). Cần cutCostS. Có bó: là 1 cây cắt tay. Nghiệm trả ở TwoStageResult.tail.
+   */
+  tailBar?: { usableS: number; maxSizes: number | null };
 }
 
 export interface BundleOptions {
@@ -190,6 +194,8 @@ export interface TwoStageResult {
   stage2: StageInfo & { fellBack: boolean };
   /** chỉ khi MC Tự động đi đường thu hẹp (solveBundled) */
   narrow?: NarrowInfo;
+  /** CS2: số đoạn từng cỡ trên cây mua cuối (xem TwoStageInput.tailBar) - chỉ khi nghiệm có dùng; `y` khi đó chỉ gồm cột pattern */
+  tail?: { counts: number[] };
 }
 
 interface Built {
@@ -219,6 +225,18 @@ interface Built {
   purchaseRow: number;
   /** CS2: số cây mua một cột dùng (factor nếu pattern KHÔNG thuộc nhóm cây lẻ, 0 nếu thuộc) */
   purchaseCoef: number[];
+  /** CS2 (anh Nhân 23/11): hàng "Σ chiều dài cắt trên cây MUA" (đoạn + lưỡi); -1 khi không có cây lẻ hoặc thiếu cutCostS */
+  purchaseLenRow: number;
+  /** CS2: chiều dài (đoạn + lưỡi, đã scale) một cột cắt trên cây mua; 0 với pattern cây lẻ */
+  purchaseLenCoef: number[];
+  /** CS2: hàng "Σ chiều dài cắt trên cây LẺ" (đoạn + lưỡi); cùng điều kiện với purchaseLenRow */
+  leftoverLenRow: number;
+  leftoverLenCoef: number[];
+  /**
+   * CS2 "cây mua cuối" (anh Nhân 23/11): chỉ số cột t_0 (số đoạn cỡ k trên cây mua cuối, n cột liền nhau, ngay sau là cột z = có
+   * dùng cây mua cuối hay không); -1 khi không có. Các cột này nằm SAU mọi cột pattern.
+   */
+  tailCol0: number;
 }
 
 /** Hệ số bó hợp lệ: nguyên, > 1, bỏ trùng, giảm dần (như app cũ `sorted(set(factors), reverse=True)`). */
@@ -244,11 +262,33 @@ function build(highs: Highs, inp: TwoStageInput): Built {
   caps.forEach((cg, g) => cg.patterns.forEach((p) => capGroupOf.set(p, g)));
   // CS2: có cây lẻ thì thêm 1 hàng "Σ cây mua" sau các hàng cây lẻ (tầng 0 tối thiểu hàng này, rồi chốt cận trên).
   const purchaseRow = caps.length > 0 ? capRow0 + caps.length : -1;
-  const numRows = capRow0 + caps.length + (purchaseRow >= 0 ? 1 : 0);
+  const purchaseLenRow = purchaseRow >= 0 && inp.cutCostS ? purchaseRow + 1 : -1;
+  const leftoverLenRow = purchaseLenRow >= 0 ? purchaseLenRow + 1 : -1;
+  // CS2 cây mua cuối: 1 cây mua (chiều dài mua) cắt TỰ DO các cỡ, không cần nằm trong ngưỡng hao hụt - phần còn thiếu sau khi
+  // xếp cây lẻ. Biến t_k (số đoạn cỡ k) + z (0/1) thay cho liệt kê kiểu cắt: không phát sinh thêm pattern. Hàng: knap Σ cost·t ≤
+  // usable·z; gate z ≤ Σ cây lẻ đã dùng (không cắt cây lẻ thì không có cây mua cuối - bài thường giữ nguyên); có giới hạn số cỡ/cây
+  // thì thêm u_k (0/1): t_k ≤ ub_k·u_k, Σu ≤ maxSizes.
+  // MC Tự động: cây mua cuối là 1 cây CẮT TAY (tính vào giới hạn maxManualBars); cột của nó không có trong `columns` (chỉ pattern).
+  const tail = inp.tailBar && purchaseLenRow >= 0 && inp.cutCostS ? inp.tailBar : null;
+  const tailMaxSizes = tail?.maxSizes != null && tail.maxSizes < n ? tail.maxSizes : null;
+  const knapRow = tail ? leftoverLenRow + 1 : -1;
+  const gateRow = tail ? knapRow + 1 : -1;
+  const sizeRow0 = tailMaxSizes !== null ? gateRow + 1 : -1;
+  const sizeCountRow = tailMaxSizes !== null ? sizeRow0 + n : -1;
+  const numRows =
+    capRow0 +
+    caps.length +
+    (purchaseRow >= 0 ? 1 : 0) +
+    (purchaseLenRow >= 0 ? 2 : 0) +
+    (tail ? 2 : 0) +
+    (tailMaxSizes !== null ? n + 1 : 0);
   const factors = bundle ?? [1];
-  const numCols = P * factors.length;
+  const tailCol0 = tail ? P * factors.length : -1;
+  const numCols = P * factors.length + (tail ? n + 1 + (tailMaxSizes !== null ? n : 0) : 0);
   const capCoef = new Array<number>(numCols).fill(0);
   const purchaseCoef = new Array<number>(numCols).fill(0);
+  const purchaseLenCoef = new Array<number>(numCols).fill(0);
+  const leftoverLenCoef = new Array<number>(numCols).fill(0);
 
   const colLower = new Array<number>(numCols).fill(0);
   const colUpper = new Array<number>(numCols);
@@ -265,10 +305,12 @@ function build(highs: Highs, inp: TwoStageInput): Built {
     // cap = số CÂY tối đa của pattern p (không cỡ nào vượt demand + maxSurplus)
     let cap = Infinity;
     let tot = 0;
+    let len = 0;
     for (let k = 0; k < n; k++) {
       if (c[k] > 0) {
         cap = Math.min(cap, Math.floor((demands[k] + maxSurplus) / c[k]));
         tot += c[k];
+        len += c[k] * (inp.cutCostS?.[k] ?? 0);
       }
     }
     for (const f of factors) {
@@ -291,10 +333,24 @@ function build(highs: Highs, inp: TwoStageInput): Built {
         indices.push(capRows[g]);
         values.push(f);
         capCoef[col] = f;
+        if (leftoverLenRow >= 0 && len > 0) {
+          indices.push(leftoverLenRow);
+          values.push(len * f);
+          leftoverLenCoef[col] = len * f;
+        }
+        if (gateRow >= 0) {
+          indices.push(gateRow);
+          values.push(-f);
+        }
       } else if (purchaseRow >= 0) {
         indices.push(purchaseRow);
         values.push(f);
         purchaseCoef[col] = f;
+        if (purchaseLenRow >= 0 && len > 0) {
+          indices.push(purchaseLenRow);
+          values.push(len * f);
+          purchaseLenCoef[col] = len * f;
+        }
       }
       starts.push(indices.length);
       // Có bó: cận trên số bó = ceil(cap / f) như app cũ (safe_div_ceil) - bó cuối có thể vượt cap
@@ -304,6 +360,56 @@ function build(highs: Highs, inp: TwoStageInput): Built {
       wastes[col] = patterns[p].waste * f;
       columns.push({ pattern: p, factor: f });
       col++;
+    }
+  }
+
+  if (tail) {
+    const cost = inp.cutCostS!;
+    const tailUb = (k: number) =>
+      Math.max(
+        0,
+        Math.min(demands[k] + maxSurplus, Math.floor(tail.usableS / Math.max(1, cost[k]))),
+      );
+    for (let k = 0; k < n; k++) {
+      indices.push(k, purchaseLenRow, knapRow);
+      values.push(1, cost[k], cost[k]);
+      if (tailMaxSizes !== null) {
+        indices.push(sizeRow0 + k);
+        values.push(1);
+      }
+      starts.push(indices.length);
+      colUpper[col] = tailUb(k);
+      pieces[col] = 1;
+      wastes[col] = -cost[k];
+      purchaseLenCoef[col] = cost[k];
+      col++;
+    }
+    if (useLb) {
+      indices.push(sumRow);
+      values.push(1);
+    }
+    if (useManual) {
+      indices.push(manualRow);
+      values.push(1);
+    }
+    indices.push(purchaseRow, knapRow, gateRow);
+    values.push(1, -tail.usableS, 1);
+    starts.push(indices.length);
+    colUpper[col] = 1;
+    pieces[col] = 0;
+    wastes[col] = tail.usableS;
+    purchaseCoef[col] = 1;
+    col++;
+    if (tailMaxSizes !== null) {
+      for (let k = 0; k < n; k++) {
+        indices.push(sizeRow0 + k, sizeCountRow);
+        values.push(-tailUb(k), 1);
+        starts.push(indices.length);
+        colUpper[col] = 1;
+        pieces[col] = 0;
+        wastes[col] = 0;
+        col++;
+      }
     }
   }
 
@@ -329,6 +435,26 @@ function build(highs: Highs, inp: TwoStageInput): Built {
     rowLower[purchaseRow] = 0;
     rowUpper[purchaseRow] = highs.infinity;
   }
+  if (purchaseLenRow >= 0) {
+    rowLower[purchaseLenRow] = 0;
+    rowUpper[purchaseLenRow] = highs.infinity;
+    rowLower[leftoverLenRow] = 0;
+    rowUpper[leftoverLenRow] = highs.infinity;
+  }
+  if (tail) {
+    rowLower[knapRow] = -highs.infinity;
+    rowUpper[knapRow] = 0;
+    rowLower[gateRow] = -highs.infinity;
+    rowUpper[gateRow] = 0;
+  }
+  if (tailMaxSizes !== null) {
+    for (let k = 0; k < n; k++) {
+      rowLower[sizeRow0 + k] = -highs.infinity;
+      rowUpper[sizeRow0 + k] = 0;
+    }
+    rowLower[sizeCountRow] = 0;
+    rowUpper[sizeCountRow] = tailMaxSizes;
+  }
 
   return {
     numCols,
@@ -349,6 +475,11 @@ function build(highs: Highs, inp: TwoStageInput): Built {
     capCoef,
     purchaseRow,
     purchaseCoef,
+    purchaseLenRow,
+    purchaseLenCoef,
+    leftoverLenRow,
+    leftoverLenCoef,
+    tailCol0,
   };
 }
 
@@ -1604,31 +1735,78 @@ function solveBundled(highs: Highs, inp: TwoStageInput): TwoStageResult {
 }
 
 /**
- * CS2 (anh Nhân 20/11/2026: "ưu tiên dùng cây lẻ trước khi dùng cây mua"): tầng 0 = min Σ cây MUA (trong giới hạn số cây lẻ từng
- * chiều dài và ràng buộc nhu cầu như thường), rồi CHỐT cận trên số cây mua = số tầng 0 và giải 2 tầng thường (min khúc thừa, rồi
- * min đoạn dư) - tầng 1 tự dùng ít cây lẻ nhất đủ bù phần không phải mua; cây lẻ không bớt được cây mua nào thì không bị cắt.
- * Bản đầu (20/11) tối đa số CÂY lẻ rồi chốt làm cận dưới: kiểu cắt 1 đoạn/cây cũng hợp lệ nên phá hết cây lẻ (review Sang 21/11).
- * Hao hụt vượt ngưỡng do cây lẻ thì phía trên báo như thường (KHSX xin đặc cách - câu 2b). Tầng 0 vô nghiệm = cả bài vô nghiệm.
+ * CS2 - cây lẻ kho Phôi dùng TRƯỚC (anh Nhân chốt 23/11/2026, câu 1 chọn B: "phải xếp cắt trên số cây còn tồn trong kho Phôi trước,
+ * phần đoạn còn thiếu mới tính sang cây 6 m mua mới; các cây 6 m đó cũng phải tính cắt cho hết để giảm số cây phải mua"):
+ *  - tầng 0a: min Σ chiều dài cắt trên cây MUA (đoạn + lưỡi) = xếp được nhiều đoạn nhất lên cây lẻ (trong giới hạn số cây lẻ từng
+ *    chiều dài), kể cả khi không bớt được cây mua nào (để dọn kho cây lẻ). Tối thiểu chiều dài cây MUA chứ không tối đa chiều dài
+ *    cây lẻ: nhồi đoạn dư lên cây lẻ không làm giảm chiều dài cây mua nên không được thưởng;
+ *  - chốt CẬN DƯỚI chiều dài cắt trên cây lẻ tương ứng (không chốt chiều dài cây mua: cây mua vẫn được thêm đoạn dư cho hết cây);
+ *  - tầng 0b: min Σ cây MUA (phần còn thiếu cắt gọn trên ít cây mua nhất);
+ *  - chốt cả 2 rồi 2 tầng thường (min khúc thừa, rồi min đoạn dư).
+ * Phần còn thiếu thường không vừa khít các kiểu cắt trong ngưỡng: cho thêm 1 "cây mua cuối" cắt tự do (TwoStageInput.tailBar) -
+ * ví dụ anh Nhân chọn: cắt cây lẻ 5,8 m, phần còn thiếu cắt sang 1 cây 6 m còn thừa khúc dài.
+ * Lịch sử: 20/11 tối đa số CÂY lẻ -> cắt 1 đoạn/cây phá hết cây lẻ (review Sang 21/11); 21-23/11 chỉ min cây mua -> cây lẻ không bớt
+ * được cây mua thì bỏ không (anh Nhân không chọn). Thiếu cutCostS (chỉ test cũ) thì bỏ tầng 0a.
+ * Hao hụt vượt ngưỡng do cây lẻ / cây mua cuối thì phía trên báo như thường (KHSX xin đặc cách - câu 2b). Tầng 0a vô nghiệm = cả bài
+ * vô nghiệm.
  */
 function solveWithLengthCaps(highs: Highs, b: Built, inp: TwoStageInput): TwoStageResult {
-  const s0 = runModel(highs, b, {
-    colCost: b.purchaseCoef,
-    timeLimitSec: Math.max(1, inp.timeLimitSec * 0.3),
-  });
-  if (!s0.y) {
-    return {
-      y: null,
-      ...(b.columns ? { columns: b.columns } : {}),
-      strategy: 'direct',
-      stage1: { ...emptyStage(s0.status), seconds: s0.seconds, dualBound: null, trace: [] },
-      stage2: { ...emptyStage('error'), fellBack: false },
-    };
-  }
-  let purchased = 0;
-  for (let c = 0; c < b.numCols; c++) purchased += b.purchaseCoef[c] * Math.round(s0.y[c]);
   const rowUpper = b.rowUpper.slice();
-  rowUpper[b.purchaseRow] = purchased;
-  return solveDirect(highs, { ...b, rowUpper }, { ...inp, warmStart: false });
+  const sum = (coef: number[], y: number[]) => {
+    let t = 0;
+    for (let c = 0; c < b.numCols; c++) t += coef[c] * Math.round(y[c]);
+    return t;
+  };
+  const fail = (status: StageStatus, seconds: number): TwoStageResult => ({
+    y: null,
+    ...(b.columns ? { columns: b.columns } : {}),
+    strategy: 'direct',
+    stage1: { ...emptyStage(status), seconds, dualBound: null, trace: [] },
+    stage2: { ...emptyStage('error'), fellBack: false },
+  });
+  const rowLower = b.rowLower.slice();
+  // Hệ số đã scale có thể lẻ: nới chút tương đối để chính nghiệm vừa tìm không bị loại vì sai số dấu phẩy động.
+  const tol = (v: number) => Math.max(1e-6, Math.abs(v) * 1e-9);
+  if (b.purchaseLenRow >= 0) {
+    const s0a = runModel(highs, b, {
+      colCost: b.purchaseLenCoef,
+      timeLimitSec: Math.max(1, inp.timeLimitSec * 0.15),
+    });
+    if (!s0a.y) return fail(s0a.status, s0a.seconds);
+    // Chiều dài cây lẻ phải dùng = ít nhất có thể khi cây mua chỉ cắt L* (bỏ đoạn dư "trung tính" nằm trên cây lẻ ở nghiệm 0a), rồi
+    // CHỐT CẬN DƯỚI chiều dài cây lẻ thay vì cận trên chiều dài cây mua: cây mua sau đó được cắt thêm đoạn dư cho hết cây (anh Nhân:
+    // "các cây 6 m đó cũng phải tính cắt cho hết") trong giới hạn đoạn dư như thường.
+    const L = sum(b.purchaseLenCoef, s0a.y);
+    const capLen = b.rowUpper.slice();
+    capLen[b.purchaseLenRow] = L + tol(L);
+    const s0a2 = runModel(
+      highs,
+      { ...b, rowUpper: capLen },
+      {
+        colCost: b.leftoverLenCoef,
+        timeLimitSec: Math.max(1, inp.timeLimitSec * 0.1),
+        start: s0a.y,
+      },
+    );
+    const LL = sum(b.leftoverLenCoef, s0a2.y ?? s0a.y);
+    rowLower[b.leftoverLenRow] = LL - tol(LL);
+  }
+  const s0b = runModel(
+    highs,
+    { ...b, rowLower },
+    { colCost: b.purchaseCoef, timeLimitSec: Math.max(1, inp.timeLimitSec * 0.15) },
+  );
+  if (!s0b.y) return fail(s0b.status, s0b.seconds);
+  rowUpper[b.purchaseRow] = sum(b.purchaseCoef, s0b.y);
+  const r = solveDirect(highs, { ...b, rowLower, rowUpper }, { ...inp, warmStart: false });
+  if (b.tailCol0 < 0 || !r.y) return r;
+  const y = r.y.map((v) => Math.round(v));
+  const n = inp.demands.length;
+  return {
+    ...r,
+    y: y.slice(0, b.tailCol0),
+    ...(y[b.tailCol0 + n] > 0 ? { tail: { counts: y.slice(b.tailCol0, b.tailCol0 + n) } } : {}),
+  };
 }
 
 /** Bài con chỉ gồm các pattern `idx` (chỉ số gốc), nhóm cây lẻ đánh lại chỉ số. */
@@ -1657,7 +1835,9 @@ function remapColumns(r: TwoStageResult, idx: number[]): TwoStageResult {
  * CS2 + MC Tự động (review Sang 21/11, đo 23/11): có cây lẻ mà đi thẳng solveWithLengthCaps trên bài bó đầy đủ thì loại sắt lớn hết giờ
  * không ra nghiệm (I5 V15 12 cỡ / 27.300 đoạn + 3 cây lẻ 5800: 20 s không nghiệm; không cây lẻ 1801 cây nhờ đường thu hẹp). Nên:
  * (1) giải bài CÂY MUA bằng đường thường (thu hẹp bó); (2) giải bài có cây lẻ trên tập nhỏ = pattern (1) dùng + mọi pattern cây lẻ.
- * Nghiệm (1) nằm trong tập (2) (cây lẻ = 0) nên (2) không tệ hơn về số cây mua; (2) không ra nghiệm thì dùng (1) - không cây lẻ.
+ * Nghiệm (1) nằm trong tập (2) (cây lẻ = 0) nên (2) luôn khả thi; (2) không ra nghiệm thì dùng (1) - không cây lẻ. Giới hạn: tập (2)
+ * chỉ có pattern cây mua của nghiệm (1), nên phần còn thiếu sau khi xếp cây lẻ có thể không cắt gọn bằng tập đó - khi ấy cây lẻ được
+ * dùng ít hơn đường đầy đủ (chấp nhận: ca bó + cây lẻ hiếm, đường đầy đủ hết giờ).
  */
 function solveBundledWithLengthCaps(highs: Highs, inp: TwoStageInput): TwoStageResult {
   const capped = new Set((inp.lengthCaps ?? []).flatMap((g) => g.patterns));

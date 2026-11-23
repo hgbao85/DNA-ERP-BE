@@ -52,7 +52,8 @@ export interface OptimizeMaterialOptions {
   laserMinTailMm?: number;
   /**
    * CS2 (anh Nhân 20/11/2026): cây lẻ trong kho Phôi của xưởng làm lệnh - { chiều dài (mm): số cây đang có }. Chiều dài này phải
-   * có trong `stockLengths`; số cây dùng ≤ số đang có và được ưu tiên dùng hết trước (xem TwoStageInput.lengthCaps).
+   * có trong `stockLengths`; số cây dùng ≤ số đang có, đoạn được xếp lên cây lẻ trước rồi mới tới cây mua (anh Nhân 23/11,
+   * xem TwoStageInput.lengthCaps).
    */
   lengthCaps?: Record<number, number>;
 }
@@ -309,8 +310,21 @@ export function optimizeMaterial(
       max,
     }))
     .filter((g) => g.patterns.length > 0);
+  // CS2 cây mua cuối (anh Nhân 23/11): phần còn thiếu sau khi xếp cây lẻ được cắt trên 1 cây mua tự do (không theo ngưỡng). Chỉ khi
+  // có đúng 1 chiều dài mua. MC Tự động: cây đó cắt tay (tính vào số cây cắt tay tối đa).
+  const purchaseLengths = stockLengths.filter((S) => !cappedSet.has(S));
+  const tailLength =
+    lengthCaps.length > 0 && purchaseLengths.length === 1 ? purchaseLengths[0] : null;
   const res = solveTwoStage(highs, {
     ...(lengthCaps.length > 0 ? { lengthCaps } : {}),
+    ...(tailLength !== null
+      ? {
+          tailBar: {
+            usableS: scale(tailLength) - scale(trim),
+            maxSizes: hardCap ?? mctdCap ?? (limitedSizesUsed ? MAX_SIZES_PER_BAR : null),
+          },
+        }
+      : {}),
     patterns: ipPatterns,
     demands,
     maxSurplus,
@@ -410,6 +424,32 @@ export function optimizeMaterial(
       ...(bundlesPerPattern ? { bundles: bundlesPerPattern[p] } : {}),
     });
   }
+  let tailManualBars = 0;
+  if (res.tail && tailLength !== null) {
+    const S_s = scale(tailLength);
+    let usedS = 0;
+    for (let k = 0; k < n; k++) usedS += res.tail.counts[k] * (scale(cutLengths[k]) + kerfS);
+    const waste = S_s - scale(trim) - usedS;
+    barsByLength.set(tailLength, (barsByLength.get(tailLength) ?? 0) + 1);
+    totalPurchasedS += S_s;
+    totalLeftoverS += waste;
+    for (let k = 0; k < n; k++) produced[k] += res.tail.counts[k];
+    // Trùng kiểu cắt đã có (cùng chiều dài + cùng số đoạn) thì cộng vào dòng đó - không ra 2 dòng giống nhau.
+    const key = res.tail.counts.join(',');
+    const same = plan.find((p) => p.stock_length === tailLength && p.counts.join(',') === key);
+    if (same) {
+      same.bars += 1;
+      if (same.bundles) same.bundles['1'] = (same.bundles['1'] ?? 0) + 1;
+    } else
+      plan.push({
+        stock_length: tailLength,
+        counts: res.tail.counts,
+        bars: 1,
+        waste_per_bar: waste / SCALING_FACTOR,
+        ...(bundlesPerPattern ? { bundles: { '1': 1 } } : {}),
+      });
+    if (bundlesPerPattern) tailManualBars = 1;
+  }
   let bundleSummary: BundleSummary | undefined;
   if (bundle && bundlesPerPattern) {
     let totalBundles = 0;
@@ -424,8 +464,8 @@ export function optimizeMaterial(
         (a, b) => b - a,
       ),
       total_bundles: totalBundles,
-      manual_bars: manualBars,
-      total_cuts: totalBundles + manualBars,
+      manual_bars: manualBars + tailManualBars,
+      total_cuts: totalBundles + manualBars + tailManualBars,
       max_sizes_per_pattern: hardCap ?? mctdCap ?? MCTD_MAX_SIZES_PER_PATTERN,
     };
   }
