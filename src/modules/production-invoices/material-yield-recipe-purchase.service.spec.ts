@@ -171,7 +171,11 @@ describe('MaterialYieldRecipePurchaseService', () => {
         sourceType: PurchaseProposalSource.MATERIAL_YIELD_RECIPE,
         productionInvoiceId: 1n,
         warehouseCode: 'kho-nhom',
-        items: { create: [{ materialId: 80n, buyQty: 7, actualStock: 0, appliedWastePct: 0 }] },
+        items: {
+          create: [
+            { materialId: 80n, buyQty: 7, actualStock: 0, appliedWastePct: 0, requiredQty: 7 },
+          ],
+        },
       },
       include: { items: true },
     });
@@ -311,7 +315,7 @@ describe('MaterialYieldRecipePurchaseService', () => {
     expect(prisma.purchaseProposal.create).not.toHaveBeenCalled();
     expect(prisma.purchaseProposalItem.update).toHaveBeenCalledWith({
       where: { id: 950n },
-      data: { buyQty: 7, actualStock: 0, appliedWastePct: 0 },
+      data: { buyQty: 7, actualStock: 0, appliedWastePct: 0, requiredQty: 7 },
     });
     expect(result[0].purchaseProposalId).toBe('900');
   });
@@ -340,7 +344,14 @@ describe('MaterialYieldRecipePurchaseService', () => {
 
     expect(prisma.purchaseProposalItem.update).not.toHaveBeenCalled();
     expect(prisma.purchaseProposalItem.create).toHaveBeenCalledWith({
-      data: { proposalId: 900n, materialId: 80n, buyQty: 4, actualStock: 0, appliedWastePct: 0 },
+      data: {
+        proposalId: 900n,
+        materialId: 80n,
+        buyQty: 4,
+        actualStock: 0,
+        appliedWastePct: 0,
+        requiredQty: 7,
+      },
     });
   });
 
