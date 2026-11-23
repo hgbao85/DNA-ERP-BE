@@ -51,6 +51,44 @@ export interface PurchaseRecomputePlan {
   } | null;
   /** Nhu cầu mới thấp hơn số đã ký (PURCHASING) -> báo người mua + Giám đốc, KHÔNG sửa dòng đã ký. */
   demandDropped: { neededQty: number; signedQty: number } | null;
+  /** CHỈ khi gọi với `lowerSignedOnDrop` (luồng huỷ lệnh theo SKU): hạ số CẦN MUA (buyQty) của dòng đã ký xuống nhu cầu mới, xem
+   *  `planSignedLowering`. Rỗng khi không gọi với cờ hoặc nhu cầu không giảm. */
+  signedLower: SignedLowering[];
+}
+
+/**
+ * Huỷ lệnh theo SKU (đợt 1, 23/11/2026 - anh Nhân câu 3): dòng mua ĐÃ ký NCC mà nhu cầu giảm vì huỷ SKU thì người mua liên hệ NCC
+ * - bớt được thì "Đóng phần thiếu", không bớt được thì hàng về vào TỒN CHUNG. Hai việc đó chỉ đúng khi buyQty (số CẦN cho lệnh) của
+ * dòng đã ký hạ xuống nhu cầu mới: phân bổ nhận hàng chỉ cộng vào giữ chỗ của lệnh tới buyQty (phần vượt thành tồn chung), và
+ * "Đóng phần thiếu" tạo dòng mua bù = buyQty − đã nhận. Số ĐÃ ký với NCC (effectiveOrderQty) giữ nguyên: orderQty trống thì ghi
+ * bằng số cũ. Hạ dòng mới ký trước, mỗi dòng không xuống dưới số đã nhận.
+ */
+export interface SignedLowering {
+  itemId: bigint;
+  buyQty: number;
+  /** Ghi orderQty = số này (giữ nguyên số đã ký); null = orderQty đã có sẵn, không đổi. */
+  orderQty: number | null;
+}
+
+export function planSignedLowering(
+  signed: readonly PurchaseRecomputeItem[],
+  neededQty: number,
+): SignedLowering[] {
+  let excess = signed.reduce((s, i) => s + i.buyQty, 0) - neededQty;
+  if (excess <= EPS) return [];
+  const out: SignedLowering[] = [];
+  for (const it of sortItemsById(signed).reverse()) {
+    if (excess <= EPS) break;
+    const cut = Math.min(excess, Math.max(0, it.buyQty - it.receivedQty));
+    if (cut <= EPS) continue;
+    excess -= cut;
+    out.push({
+      itemId: it.id,
+      buyQty: Math.round((it.buyQty - cut) * 1e4) / 1e4,
+      orderQty: it.orderQty == null ? it.buyQty : null,
+    });
+  }
+  return out;
 }
 
 type NumLike = number | { toNumber(): number };
@@ -126,12 +164,15 @@ export function isUnsignedStatus(status: PurchaseProposalStatus): boolean {
 export function planPurchaseRecompute(
   items: PurchaseRecomputeItem[],
   newBuyQty: number,
+  /** Luồng huỷ lệnh theo SKU: hạ buyQty dòng đã ký xuống nhu cầu mới (xem `planSignedLowering`). Mặc định không. */
+  opts: { lowerSignedOnDrop?: boolean } = {},
 ): PurchaseRecomputePlan {
   const plan: PurchaseRecomputePlan = {
     update: null,
     create: null,
     orderQtyReset: null,
     demandDropped: null,
+    signedLower: [],
   };
   const signed = items.filter((i) => i.status === PurchaseProposalStatus.PURCHASING);
   const unsigned = items.filter((i) => UNSIGNED.has(i.status));
@@ -166,6 +207,7 @@ export function planPurchaseRecompute(
       neededQty,
       signedQty: signed.reduce((s, i) => s + effectiveOrderQty(i.buyQty, i.orderQty), 0),
     };
+    if (opts.lowerSignedOnDrop) plan.signedLower = planSignedLowering(signed, neededQty);
   }
 
   const target = unsigned[0];
@@ -182,6 +224,19 @@ export function planPurchaseRecompute(
     plan.create = { buyQty: need, toPurchased: false };
   }
   return plan;
+}
+
+/** Ghi `plan.signedLower` (luồng huỷ lệnh theo SKU) trong transaction tính lại của service gọi. */
+export async function applySignedLowering(
+  tx: { purchaseProposalItem: { update(args: object): Promise<unknown> } },
+  lowerings: readonly SignedLowering[],
+): Promise<void> {
+  for (const l of lowerings) {
+    await tx.purchaseProposalItem.update({
+      where: { id: l.itemId },
+      data: { buyQty: l.buyQty, ...(l.orderQty != null ? { orderQty: l.orderQty } : {}) },
+    });
+  }
 }
 
 export interface PurchaseRecomputeEvent {

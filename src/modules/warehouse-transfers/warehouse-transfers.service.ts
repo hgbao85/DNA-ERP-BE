@@ -20,6 +20,7 @@ import {
 import { Paginated } from '../../common/dto/paginated-response.dto';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import { isCancelledOrder } from '../../common/utils/cancelled-order.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { sortOrderBy } from '../../common/utils/sort-order-by.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
@@ -740,6 +741,9 @@ export class WarehouseTransfersService {
 
     const items: PieceTransferPlanItemResponseDto[] = [];
     for (const order of orders) {
+      // Huỷ lệnh theo SKU (23/11/2026): mảnh của SKU đã huỷ giữ nguyên ở kho công đoạn (anh Nhân câu 6/7) - không đề xuất chuyển;
+      // lập phiếu cho SKU này vì thế cũng bị chặn ở bước so số (suggestedQty 0).
+      if (isCancelledOrder(order)) continue;
       const pieces = bomPiecesByRevision.get(order.bomRevisionId.toString()) ?? [];
       for (const bp of pieces) {
         // needsHan=false, needsSon=true là tổ hợp không hợp lệ về nghiệp vụ (Sơn phải sau Hàn) -

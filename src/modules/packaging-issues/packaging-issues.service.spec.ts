@@ -569,7 +569,7 @@ describe('PackagingIssuesService', () => {
       await expect(service.create('1', dto, 'user-1', null)).rejects.toThrow(ConflictException);
       expect(prisma.productionInvoiceItem.findUniqueOrThrow).toHaveBeenCalledWith({
         where: { id: 21n },
-        select: { productionInvoiceId: true },
+        select: { productionInvoiceId: true, cancelledAt: true },
       });
       expect(prisma.packagingIssue.create).not.toHaveBeenCalled();
     });

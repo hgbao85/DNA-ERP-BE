@@ -13,6 +13,7 @@ import { CreateMaterialYieldRecipeDto } from './dto/create-material-yield-recipe
 import { MaterialYieldRecipeDemandItemResponseDto } from './dto/material-yield-recipe-demand-item-response.dto';
 import { MaterialYieldRecipeResponseDto } from './dto/material-yield-recipe-response.dto';
 import { UpdateMaterialYieldRecipeDto } from './dto/update-material-yield-recipe.dto';
+import { NOT_CANCELLED_ORDER } from '../../common/utils/cancelled-order.util';
 
 const RECIPE_INCLUDE = {
   outputMaterial: { include: { warehouse: true } },
@@ -201,7 +202,7 @@ export class MaterialYieldRecipesService {
     const requiredByMaterial = new Map<string, number>();
     if (outputMaterialIds.length === 0) return requiredByMaterial;
     const orders = await db.productionOrder.findMany({
-      where: { productionInvoiceItem: { productionInvoiceId: piId } },
+      where: { productionInvoiceItem: { productionInvoiceId: piId }, ...NOT_CANCELLED_ORDER },
       select: { id: true, bomRevisionId: true, quantity: true },
     });
     if (orders.length === 0) return requiredByMaterial;

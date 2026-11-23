@@ -25,7 +25,9 @@ import {
   planPurchaseRecompute,
   sortItemsById,
   toRecomputeItem,
+  applySignedLowering,
 } from '../../common/utils/purchase-recompute.util';
+import { NOT_CANCELLED_ORDER } from '../../common/utils/cancelled-order.util';
 import { PURCHASE_TX_OPTIONS } from './purchase-tx-options';
 
 /**
@@ -50,6 +52,8 @@ export class PieceMaterialYieldPurchaseService {
 
   async computeAndUpsertProposals(
     productionInvoiceId: string,
+    /** Huỷ lệnh theo SKU (23/11/2026): hạ buyQty dòng đã ký xuống nhu cầu mới - xem planSignedLowering. */
+    opts: { lowerSignedOnDrop?: boolean } = {},
   ): Promise<PieceMaterialYieldPurchaseResultDto[]> {
     const piBigId = parseBigIntId(productionInvoiceId);
     const pi = await this.prisma.productionInvoice.findUnique({ where: { id: piBigId } });
@@ -62,7 +66,7 @@ export class PieceMaterialYieldPurchaseService {
     // PI trước tính năng này (chỉ có getPieceTransferPlan/listTransferCheckPieces, cả 2 đều theo
     // từng productionOrderId riêng lẻ).
     const orders = await this.prisma.productionOrder.findMany({
-      where: { productionInvoiceItem: { productionInvoiceId: piBigId } },
+      where: { productionInvoiceItem: { productionInvoiceId: piBigId }, ...NOT_CANCELLED_ORDER },
     });
     if (orders.length === 0) {
       return [];
@@ -336,7 +340,8 @@ export class PieceMaterialYieldPurchaseService {
         const detachedOrderIds: (bigint | null | undefined)[] = []; // MUA5 19/11
         for (const c of computed) {
           const group = itemsByMaterial.get(c.materialIdStr) ?? [];
-          const plan = planPurchaseRecompute(group.map(toRecomputeItem), c.buyQty);
+          const plan = planPurchaseRecompute(group.map(toRecomputeItem), c.buyQty, opts);
+          await applySignedLowering(tx, plan.signedLower);
           if (plan.update) {
             const updateItemId = plan.update.itemId;
             if (plan.update.toPurchased) {

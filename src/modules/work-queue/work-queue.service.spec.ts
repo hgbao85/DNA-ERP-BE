@@ -54,6 +54,7 @@ describe('WorkQueueService', () => {
     materialYieldStepBundle: { count: jest.Mock };
     productionBatch: { count: jest.Mock };
     deadlineChangeBatch: { count: jest.Mock }; // Phần A – Đợt 9
+    productionOrderCancelRequest: { count: jest.Mock }; // Huỷ lệnh theo SKU 23/11
   };
   let cuttingProposalsService: { countNeedsAction: jest.Mock };
   let salesOrdersService: { countReadyToShip: jest.Mock };
@@ -82,6 +83,7 @@ describe('WorkQueueService', () => {
       materialYieldStepBundle: { count: jest.fn().mockResolvedValue(0) },
       productionBatch: { count: jest.fn().mockResolvedValue(0) },
       deadlineChangeBatch: { count: jest.fn().mockResolvedValue(0) },
+      productionOrderCancelRequest: { count: jest.fn().mockResolvedValue(0) },
     };
     cuttingProposalsService = { countNeedsAction: jest.fn().mockResolvedValue(0) };
     salesOrdersService = { countReadyToShip: jest.fn().mockResolvedValue(0) };
@@ -422,6 +424,20 @@ describe('WorkQueueService', () => {
       });
       expect(result.counts).not.toHaveProperty('bossDeadlineChange');
       expect(prisma.deadlineChangeBatch.count).not.toHaveBeenCalled();
+    });
+  });
+
+  // Huỷ lệnh theo SKU (23/11/2026)
+  describe('bossOrderCancel', () => {
+    it('Sếp: = số đề nghị huỷ PENDING; vai khác không có khoá', async () => {
+      prisma.productionOrderCancelRequest.count.mockResolvedValue(2);
+      const boss = await service.getWorkQueue({ roles: ['BOSS'], warehouseScope: null });
+      expect(boss.counts.bossOrderCancel).toBe(2);
+      expect(prisma.productionOrderCancelRequest.count).toHaveBeenCalledWith({
+        where: { status: 'PENDING' },
+      });
+      const khsx = await service.getWorkQueue({ roles: ['PRODUCTION_PLANNER'], warehouseScope: null });
+      expect(khsx.counts).not.toHaveProperty('bossOrderCancel');
     });
   });
 

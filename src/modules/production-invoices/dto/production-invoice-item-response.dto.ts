@@ -117,6 +117,13 @@ export class ProductionInvoiceItemResponseDto {
   @Type(() => ItemWorkshopDto)
   workshop!: ItemWorkshopDto | null;
 
+  /** Huỷ lệnh theo SKU (23/11/2026): thời điểm Sếp duyệt huỷ dòng này (null = đang chạy). Dòng huỷ ở lại lệnh cũ làm lịch sử. */
+  @Expose() @ApiPropertyOptional({ nullable: true }) cancelledAt?: Date | null;
+  /** Đề nghị huỷ đang chờ Sếp (null = không có). Chỉ findAll/findOne nạp, nơi khác undefined. */
+  @Expose()
+  @ApiPropertyOptional({ nullable: true })
+  pendingCancelRequest?: { id: string; reason: string; requestedAt: Date } | null;
+
   /**
    * Phần A – Đợt 9 (YC2): yêu cầu đổi mốc đang chờ Sếp duyệt lại của dòng (null = không có). Chỉ findAll/findOne nạp (và route sửa mốc
    * 1 SKU), nơi khác để undefined.

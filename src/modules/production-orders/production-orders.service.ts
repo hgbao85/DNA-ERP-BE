@@ -448,10 +448,12 @@ export class ProductionOrdersService {
   private async throwFloorStageConflict(id: bigint, action: string): Promise<never> {
     const current = await this.prisma.productionOrder.findUnique({
       where: { id },
-      select: { floorStage: true },
+      select: { floorStage: true, status: true },
     });
     throw new ConflictException(
-      current?.floorStage === 'FINISHED'
+      current?.status === 'CANCELLED'
+        ? `Lệnh xưởng ${id} đã bị huỷ (Sếp duyệt huỷ) - không ${action} được nữa`
+        : current?.floorStage === 'FINISHED'
         ? `Lệnh xưởng ${id} đã Kết thúc - không ${action} được nữa (Kết thúc không hoàn tác được)`
         : `Lệnh xưởng ${id} đang ở trạng thái ${current?.floorStage ?? 'không rõ'} - không ${action} được. Tải lại trang.`,
     );
@@ -514,7 +516,7 @@ export class ProductionOrdersService {
    * 1 lượt thấy "đã xong hết" (mỗi lượt đã commit floorStage của mình trước khi đếm) và việc nhả idempotent.
    * Best-effort - lỗi chỉ log, không được làm hỏng việc Kết thúc đã ghi (cùng recordFloorChange).
    */
-  private async releaseReservationsIfPiFinished(productionInvoiceItemId: bigint): Promise<void> {
+  async releaseReservationsIfPiFinished(productionInvoiceItemId: bigint): Promise<void> {
     let piId: bigint | null;
     try {
       const item = await this.prisma.productionInvoiceItem.findUniqueOrThrow({

@@ -283,6 +283,38 @@ export interface DeadlineChangeDecidedNotificationParams {
   requestedById: string;
 }
 
+// ─── Huỷ lệnh theo SKU - đợt 1 (23/11/2026) ────────────────────────────────────────────────────────────────────────────
+/** KHSX đề nghị huỷ 1 SKU của lệnh đã duyệt - chờ Sếp. */
+export interface PoCancelPendingNotificationParams {
+  lenhCode: string;
+  factoryCode: string;
+  requestedByName: string;
+  reason: string;
+}
+
+/** Sếp quyết đề nghị huỷ - báo KHSX người đề nghị. */
+export interface PoCancelDecidedNotificationParams {
+  lenhCode: string;
+  factoryCode: string;
+  approved: boolean;
+  note?: string;
+  requestedById: string;
+}
+
+/** SKU đã huỷ - báo QLSX (dừng xưởng) + KHSX + Mua hàng (dòng đã ký NCC: liên hệ bớt hoặc nhận về tồn chung). */
+export interface PoCancelledNotificationParams {
+  lenhCode: string;
+  factoryCode: string;
+  reason: string;
+  /** Số dòng mua đã ký NCC của lệnh còn chờ hàng về (người mua phải liên hệ NCC). */
+  signedLineCount: number;
+}
+
+export interface PoCancelReplanKeptNotificationParams {
+  lenhCode: string;
+  reason: string;
+}
+
 const deadlineChangeCodes = (codes: string[]) =>
   codes.slice(0, 3).join(', ') + (codes.length > 3 ? '…' : '');
 
@@ -2174,6 +2206,73 @@ const notificationTypeDefinitions = {
     link: () => ({ module: 'production_plan', page: 'lenh-sx' }),
     recipients: (p: DeadlineChangeDecidedNotificationParams) => ({ userIds: [p.requestedById] }),
   } satisfies NotificationTypeDef<DeadlineChangeDecidedNotificationParams>,
+
+  // ─── Huỷ lệnh theo SKU - đợt 1 (23/11/2026) ──────────────────────────────────────────────────────────────────────────
+  /** Đề nghị huỷ 1 SKU chờ Sếp. Tự đóng khi Sếp quyết hoặc KHSX rút lại. */
+  PO_CANCEL_PENDING: {
+    category: 'ACTION_REQUIRED',
+    severity: 'WARNING',
+    entityType: 'PRODUCTION_ORDER',
+    title: (p: PoCancelPendingNotificationParams) =>
+      `Đề nghị huỷ lệnh ${p.lenhCode} (${p.factoryCode})`,
+    message: (p: PoCancelPendingNotificationParams) =>
+      `${p.requestedByName} đề nghị huỷ SKU ${p.factoryCode} của lệnh ${p.lenhCode}. Lý do: ${p.reason}`,
+    link: () => ({ module: 'boss', page: 'cho-duyet', params: { filter: 'huy-lenh' } }),
+    recipients: () => ({ roles: [BUSINESS_ROLES.BOSS] }),
+  } satisfies NotificationTypeDef<PoCancelPendingNotificationParams>,
+
+  /** Sếp đã quyết đề nghị huỷ - báo KHSX người đề nghị (đích danh). */
+  PO_CANCEL_DECIDED: {
+    category: 'RESULT',
+    severity: 'INFO',
+    entityType: 'PRODUCTION_ORDER',
+    title: (p: PoCancelDecidedNotificationParams) =>
+      p.approved
+        ? `Sếp đã duyệt huỷ lệnh ${p.lenhCode} (${p.factoryCode})`
+        : `Sếp từ chối huỷ lệnh ${p.lenhCode} (${p.factoryCode})`,
+    message: (p: PoCancelDecidedNotificationParams) =>
+      p.approved
+        ? `SKU ${p.factoryCode} đã về "chưa lên lệnh" - lên lệnh lại ở màn gom lệnh.${p.note ? ` Ghi chú: ${p.note}` : ''}`
+        : `Lệnh vẫn chạy tiếp. Lý do: ${p.note ?? '(không ghi)'}`,
+    link: () => ({ module: 'production_plan', page: 'lenh-sx' }),
+    recipients: (p: PoCancelDecidedNotificationParams) => ({ userIds: [p.requestedById] }),
+  } satisfies NotificationTypeDef<PoCancelDecidedNotificationParams>,
+
+  /** SKU đã bị huỷ - xưởng dừng làm, Mua hàng xử lý dòng đã ký NCC (anh Nhân câu 3: bớt được thì Đóng phần thiếu, không bớt
+   *  được thì nhận về tồn chung). */
+  PO_CANCELLED: {
+    category: 'INFO',
+    severity: 'WARNING',
+    entityType: 'PRODUCTION_ORDER',
+    title: (p: PoCancelledNotificationParams) => `Lệnh ${p.lenhCode} (${p.factoryCode}) đã huỷ`,
+    message: (p: PoCancelledNotificationParams) =>
+      `Sếp đã duyệt huỷ SKU ${p.factoryCode}. Lý do: ${p.reason}. Xưởng dừng làm SKU này; hàng đã làm ra giữ nguyên tại kho công đoạn.` +
+      (p.signedLineCount > 0
+        ? ` Có ${p.signedLineCount} dòng mua đã ký NCC chưa về đủ: người mua liên hệ NCC - bớt được thì "Đóng phần thiếu", không bớt được thì nhận về tồn chung.`
+        : ''),
+    link: () => ({ module: 'production_plan', page: 'lenh-sx' }),
+    recipients: () => ({
+      roles: [
+        BUSINESS_ROLES.PRODUCTION_MANAGER,
+        BUSINESS_ROLES.PRODUCTION_PLANNER,
+        BUSINESS_ROLES.PURCHASER,
+      ],
+    }),
+  } satisfies NotificationTypeDef<PoCancelledNotificationParams>,
+
+  /** Lệnh gộp huỷ 1 SKU: phương án cắt tính lại cho phần còn lại không dùng được (vượt ngưỡng / vô nghiệm / lỗi) -> đang GIỮ phương
+   *  án cũ (cắt hết, phần SKU huỷ thành dư). KHSX tự quyết "Tính lại" (xin đặc cách) hay giữ. */
+  PO_CANCEL_REPLAN_KEPT: {
+    category: 'ACTION_REQUIRED',
+    severity: 'WARNING',
+    entityType: 'PRODUCTION_INVOICE',
+    title: (p: PoCancelReplanKeptNotificationParams) =>
+      `Lệnh ${p.lenhCode}: giữ phương án cắt cũ sau khi huỷ SKU`,
+    message: (p: PoCancelReplanKeptNotificationParams) =>
+      `Phương án cắt tính lại cho các SKU còn lại không dùng được (${p.reason}). Đang giữ phương án cũ: tổ cắt cắt hết, phần của SKU huỷ thành dư. Muốn đổi thì vào "Tính lại" của lệnh.`,
+    link: () => ({ module: 'production_plan', page: 'lenh-sx' }),
+    recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_PLANNER] }),
+  } satisfies NotificationTypeDef<PoCancelReplanKeptNotificationParams>,
 };
 
 /** Danh mục loại thông báo - 1 nguồn duy nhất cho text/link/mức độ/người nhận (mục 5.2 changelog

@@ -623,6 +623,8 @@ export class SalesOrdersService {
         where: {
           mfgProductId: item.mfgProductId,
           productionInvoiceId: { not: null },
+          // Huỷ lệnh theo SKU (23/11/2026): dòng SKU đã huỷ chỉ còn là lịch sử của lệnh cũ - không tính.
+          cancelledAt: null,
           OR: [
             { salesOrderItemId: item.id },
             { salesOrderItemId: null, salesOrderId: order.id },
@@ -652,7 +654,7 @@ export class SalesOrdersService {
       // Sếp đã duyệt lệnh sản xuất của dòng này thì lệnh đã chốt dây/nệm - đổi ở đây không còn tác
       // dụng (mua hàng/xuất đan đọc từ lệnh), nên chặn thay vì để đơn hàng và lệnh lệch nhau.
       const approved = await tx.productionInvoiceItem.findFirst({
-        where: { salesOrderItemId: item.id, productionOrder: { isNot: null } },
+        where: { salesOrderItemId: item.id, productionOrder: { isNot: null }, cancelledAt: null },
         select: { id: true },
       });
       if (approved) {
@@ -697,7 +699,7 @@ export class SalesOrdersService {
       });
       // KHSX vừa gom dòng này trong lúc Sales sửa -> huỷ cả lần sửa, không để đơn và lệnh lệch số.
       const pinned = await tx.productionInvoiceItem.findFirst({
-        where: { salesOrderItemId: item.id, productionInvoiceId: { not: null } },
+        where: { salesOrderItemId: item.id, productionInvoiceId: { not: null }, cancelledAt: null },
         select: { id: true },
       });
       if (pinned) {
@@ -709,7 +711,7 @@ export class SalesOrdersService {
     if (choiceChanged) {
       // Giữ bản sao ở dòng lệnh sản xuất (chưa duyệt) khớp với dòng đơn - lệnh chốt từ đó khi duyệt.
       await tx.productionInvoiceItem.updateMany({
-        where: { salesOrderItemId: item.id },
+        where: { salesOrderItemId: item.id, cancelledAt: null },
         data: { wireMaterialId, cushionMaterialId },
       });
     }
@@ -1000,6 +1002,8 @@ export class SalesOrdersService {
     if (orderIds.length === 0) return [];
     return this.prisma.productionInvoiceItem.findMany({
       where: {
+        // Huỷ lệnh theo SKU (23/11/2026): giai đoạn dòng đơn đọc từ dòng SKU đang chạy (dòng mới cấp sau huỷ), bỏ dòng đã huỷ.
+        cancelledAt: null,
         OR: [
           { salesOrderId: { in: orderIds } },
           { productionInvoice: { salesOrderId: { in: orderIds } } },

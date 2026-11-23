@@ -31,6 +31,7 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { assertItemPiHasActiveFloor } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import { isCancelledOrder } from '../../common/utils/cancelled-order.util';
 import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import { paginate } from '../../common/utils/paginate.util';
 import {
@@ -914,6 +915,9 @@ export class WeavingIssuesService {
   /** "Cần xuất đan bao nhiêu" theo mảnh - query trực tiếp, không có bảng cache riêng. */
   async getIssuePlan(productionOrderId: string): Promise<WeavingIssuePlanItemResponseDto[]> {
     const order = await this.findOrderOrThrow(productionOrderId);
+    // Huỷ lệnh theo SKU (23/11/2026): màn xuất đan không còn đề xuất xuất cho SKU đã huỷ (ghi đã bị chặn). Bản batch giữ nguyên -
+    // Bảng thống kê / sản lượng ngày dùng nó làm mẫu số tiến độ của đúng các lệnh đã chọn.
+    if (isCancelledOrder(order)) return [];
     return (await this.getIssuePlanBatch([order.id.toString()]))[order.id.toString()] ?? [];
   }
 

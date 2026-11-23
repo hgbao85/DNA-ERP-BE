@@ -24,6 +24,7 @@ import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { PIN_CLAIM_HOURS } from '../../common/utils/pin.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
+import { NOT_CANCELLED_ORDER } from '../../common/utils/cancelled-order.util';
 import {
   WorkshopScope,
   WorkshopScopeService,
@@ -590,8 +591,9 @@ export class FloorAdminService {
       if (!items) throw new Error(`Không tính được tiến độ Phôi của PI ${key}`);
       phoi = items;
     }
+    // Huỷ lệnh theo SKU (23/11/2026): bỏ lệnh đã huỷ - không thì tổ không bao giờ "đủ số" (phoiDoneAt không được ghi).
     const orderRows = await this.prisma.productionOrder.findMany({
-      where: { productionInvoiceItem: { productionInvoiceId } },
+      where: { productionInvoiceItem: { productionInvoiceId }, ...NOT_CANCELLED_ORDER },
       select: { id: true, wireMaterial: true, cushionMaterial: true },
       orderBy: { id: 'asc' },
     });

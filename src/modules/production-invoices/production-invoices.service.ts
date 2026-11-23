@@ -26,7 +26,7 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { nextProductionInvoiceCode } from '../../common/utils/production-invoice-code.util';
-import { assertPiHasActiveFloor } from '../../common/utils/floor-gate.util';
+import { assertPiHasActiveFloor, assertItemNotCancelled } from '../../common/utils/floor-gate.util';
 import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
@@ -170,6 +170,8 @@ const PROPOSAL_STATUS_INCLUDE = {
           cuttingProposals: { orderBy: { requestedAt: 'desc' as const }, take: 1 },
           // Phần A – Đợt 2
           _count: { select: { materialYieldIssues: true } },
+          // Huỷ lệnh theo SKU (23/11/2026)
+          cancelRequests: { where: { status: 'PENDING' as const }, take: 1 },
         },
       },
     },
@@ -2483,18 +2485,26 @@ export class ProductionInvoicesService {
    * án có sẵn). Best-effort, tách try/catch riêng để lỗi nguồn này không che nguồn kia. `context`
    * chỉ để ghi log ("PI item 12" / "merged PI 3").
    */
-  private async computeNonSteelPurchaseProposals(
+  async computeNonSteelPurchaseProposals(
     piId: bigint,
     context: string,
-    opts: { rethrow?: boolean } = {},
+    /** lowerSignedOnDrop: luồng huỷ lệnh theo SKU (23/11/2026) - xem planSignedLowering. */
+    opts: { rethrow?: boolean; lowerSignedOnDrop?: boolean } = {},
   ): Promise<void> {
+    // Chỉ luồng huỷ lệnh truyền thêm tuỳ chọn - lời gọi thường giữ nguyên chữ ký cũ (1 tham số).
+    const recomputeOpts: [{ lowerSignedOnDrop: true }] | [] = opts.lowerSignedOnDrop
+      ? [{ lowerSignedOnDrop: true }]
+      : [];
     // Admin bấm "Tạo lại dòng mua ngoài sắt" (opts.rethrow) cần biết nguồn nào vẫn lỗi; đường tự động sau khi Sếp duyệt vẫn chỉ log.
     const failed: string[] = [];
     // Tính lại nhu cầu mua nguyên liệu "vật tư thành phẩm" (PieceMaterialYield, vd thanh nhôm/tấm
     // sắt lá) cho CẢ PI mỗi khi có thêm 1 SKU được duyệt, không phải nút bấm riêng (không có màn
     // hình riêng, xem changelog 2026-08-22 mục 15).
     try {
-      await this.pieceMaterialYieldPurchaseService.computeAndUpsertProposals(piId.toString());
+      await this.pieceMaterialYieldPurchaseService.computeAndUpsertProposals(
+        piId.toString(),
+        ...recomputeOpts,
+      );
     } catch (error) {
       failed.push('pat/vật tư thành phẩm theo mảnh');
       this.logger.error(
@@ -2506,7 +2516,10 @@ export class ProductionInvoicesService {
     // Quyết định nghiệp vụ 2026-08-22: tự động hoàn toàn, bỏ qua bước kiểm tra kho thủ công -
     // người mua hàng được gán (Material.buyerId) thấy đề xuất ngay khi SKU được duyệt.
     try {
-      await this.consumableMaterialPurchaseService.computeAndUpsertProposals(piId.toString());
+      await this.consumableMaterialPurchaseService.computeAndUpsertProposals(
+        piId.toString(),
+        ...recomputeOpts,
+      );
     } catch (error) {
       failed.push('vật tư tiêu hao');
       this.logger.error(
@@ -2518,7 +2531,10 @@ export class ProductionInvoicesService {
     // (vd chân nhôm, MaterialYieldRecipe) - phần Mua hàng còn thiếu của tính năng 2026-10-01, mirror
     // 2 nhánh trên (tự động hoàn toàn, không chờ thao tác thủ công nào).
     try {
-      await this.materialYieldRecipePurchaseService.computeAndUpsertProposals(piId.toString());
+      await this.materialYieldRecipePurchaseService.computeAndUpsertProposals(
+        piId.toString(),
+        ...recomputeOpts,
+      );
     } catch (error) {
       failed.push('chân nhôm/vật tư thành phẩm không gắn mảnh');
       this.logger.error(
@@ -3329,6 +3345,7 @@ export class ProductionInvoicesService {
     const item = await this.findItemOrThrow(pi.id, itemId);
     const productionOrder = await this.findProductionOrderOrThrow(item.id, itemId);
     await assertPiHasActiveFloor(this.prisma, pi.id, 'ghi nhận chuyền kiểm');
+    await assertItemNotCancelled(this.prisma, item.id, 'ghi nhận chuyền kiểm');
     const pieceBigId = parseBigIntId(dto.pieceId);
 
     const bomPiece = await this.prisma.bomPiece.findUnique({
@@ -3582,6 +3599,7 @@ export class ProductionInvoicesService {
     const item = await this.findItemOrThrow(pi.id, itemId);
     const productionOrder = await this.findProductionOrderOrThrow(item.id, itemId);
     await assertPiHasActiveFloor(this.prisma, pi.id, 'ghi nhận đóng gói');
+    await assertItemNotCancelled(this.prisma, item.id, 'ghi nhận đóng gói');
     // L4 16/11: đọc "đã đóng" + ghi trong 1 transaction dưới khoá theo SKU - 2 lần báo cùng lúc không vượt trần.
     const packedSoFar = await this.prisma.$transaction(async (tx) => {
       await lockBusinessKey(tx, `packaging:${item.id}`);
@@ -3800,6 +3818,15 @@ export class ProductionInvoicesService {
         ? activeRevisionByProduct.get(productionOrder.mfgProductId.toString()) !==
           productionOrder.bomRevisionId
         : null;
+      // Huỷ lệnh theo SKU (23/11/2026): đề nghị huỷ đang chờ Sếp (tối đa 1/lệnh).
+      const pendingCancel = productionOrder?.cancelRequests?.[0];
+      itemDto.pendingCancelRequest = pendingCancel
+        ? {
+            id: pendingCancel.id.toString(),
+            reason: pendingCancel.reason,
+            requestedAt: pendingCancel.requestedAt,
+          }
+        : null;
     });
     return dto;
   }
@@ -3895,6 +3922,8 @@ export class ProductionInvoicesService {
       })),
       // Phần A – Đợt 9 (YC2): chỉ có khi truy vấn nạp `deadlineChangeRequests` (findAll / findOne); nơi khác để undefined.
       pendingDeadlineChange: this.pendingRefOfItem(item),
+      // Huỷ lệnh theo SKU (23/11/2026)
+      cancelledAt: item.cancelledAt ?? null,
     });
   }
 

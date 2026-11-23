@@ -95,6 +95,7 @@ import { bestWasteAcrossStockLengths } from './best-fill.util';
 import { resolveMaterialStockLengths } from './solver-ts/stock-length-grid';
 import type { StockLengthsByMaterial } from '../../common/validators/stock-lengths-by-material.validator';
 import { frameDeadlineOf } from '../../common/utils/frame-deadline.util';
+import { NOT_CANCELLED_ORDER, isCancelledOrder } from '../../common/utils/cancelled-order.util';
 import { WarehouseLike, WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import {
   checkMergeRules,
@@ -3584,6 +3585,50 @@ export class CuttingProposalsService {
     proposalId: bigint,
     response: SolverProposeResponse,
   ): Promise<string | null> {
+    const qualityReason = await this.solutionQualityBlockReason(response);
+    if (qualityReason) return qualityReason;
+    return this.anchorBlockReason(proposalId);
+  }
+
+  /**
+   * Huỷ lệnh theo SKU - đợt 1 (23/11/2026, anh Nhân câu 2 + user chốt): lệnh GỘP huỷ 1 SKU khi CHƯA xuất sắt thì tính lại phương
+   * án cho các SKU còn lại (requestForInvoice) - phương án mới luôn bị cổng tự duyệt chặn vì lệnh đã có phương án APPROVED, nên
+   * luồng huỷ gọi hàm này trong onComplete để duyệt thay. CHỈ duyệt khi phương án mới "sạch" (cắt được, không vượt ngưỡng hao
+   * hụt - cùng 2 nhánh đầu của cổng tự duyệt); không sạch thì giữ phương án cũ (cắt hết, phần SKU huỷ thành dư) và trả lý do để
+   * báo KHSX. approve() tự thay phương án cũ (SUPERSEDED + nhả giữ chỗ cũ + giữ chỗ / tính lại dòng mua sắt theo phương án mới).
+   */
+  async approveCancellationReplan(
+    proposalId: bigint,
+    actorUserId: string | null,
+  ): Promise<{ approved: boolean; reason?: string }> {
+    const proposal = await this.prisma.cuttingProposal.findUnique({
+      where: { id: proposalId },
+      select: { status: true, rawResponse: true, errorMessage: true },
+    });
+    if (!proposal) return { approved: false, reason: `không tìm thấy phương án ${proposalId}` };
+    if (proposal.status !== CuttingProposalStatus.DRAFT) {
+      return {
+        approved: false,
+        reason:
+          proposal.status === CuttingProposalStatus.FAILED
+            ? `tính lại lỗi: ${proposal.errorMessage ?? 'không rõ'}`
+            : `phương án mới ở trạng thái ${proposal.status}`,
+      };
+    }
+    const response = proposal.rawResponse as unknown as SolverProposeResponse | null;
+    if (!response?.purchase_plan) {
+      return { approved: false, reason: 'phương án mới không có kết quả solver' };
+    }
+    const qualityReason = await this.solutionQualityBlockReason(response);
+    if (qualityReason) return { approved: false, reason: qualityReason };
+    await this.approve(proposalId.toString(), actorUserId);
+    return { approved: true };
+  }
+
+  /** 2 nhánh đầu của cổng tự duyệt: vật tư vô nghiệm / vượt ngưỡng hao hụt. */
+  private async solutionQualityBlockReason(
+    response: SolverProposeResponse,
+  ): Promise<string | null> {
     const infeasibleIds = response.purchase_plan
       .filter((line) => !line.feasible)
       .map((line) => line.material);
@@ -3624,7 +3669,11 @@ export class CuttingProposalsService {
         );
       }
     }
+    return null;
+  }
 
+  /** Các nhánh còn lại của cổng tự duyệt: neo hỏng / đã có phương án duyệt / chiều dài cây xung đột. */
+  private async anchorBlockReason(proposalId: bigint): Promise<string | null> {
     const proposal = await this.prisma.cuttingProposal.findUniqueOrThrow({
       where: { id: proposalId },
       select: { productionOrderId: true, productionInvoiceId: true },
@@ -3698,6 +3747,8 @@ export class CuttingProposalsService {
             await tx.productionOrder.findMany({
               where: {
                 productionInvoiceItem: { productionInvoiceId: proposal.productionInvoiceId },
+                // Huỷ lệnh theo SKU (23/11/2026): lệnh đã huỷ không nhận quyền phủ của phương án mới.
+                ...NOT_CANCELLED_ORDER,
               },
               select: { id: true },
             })
@@ -3911,14 +3962,29 @@ export class CuttingProposalsService {
    * Gọi từ CẢ autoApproveBlockReason() (chặn SỚM ngay khi tự-duyệt, hiện lý do rõ trên displayReason)
    * LẪN approve() (chặn cả đường thủ công POST .../approve - cổng autoApproveBlockReason() KHÔNG
    * bảo vệ đường đó, xem docstring hàm này).
+   *
+   * 23/11/2026 (bắt được khi thử sống huỷ lệnh theo SKU): bỏ qua phương án APPROVED CÙNG NEO với phương án đang xét - đó là bản
+   * cũ mà approve() sắp đánh SUPERSEDED (cùng transaction), không phải "SKU khác". Trước đây "Tính lại" lệnh gộp ra cỡ cây khác
+   * với bản cũ luôn bị chặn ở đây.
    */
   private async findConflictingStockLengthReason(
     proposalId: bigint,
     targetProductionInvoiceId: bigint | null,
-    db: Pick<PrismaServiceType, 'cuttingProposalLine' | 'material'> = this.prisma,
+    db: Pick<PrismaServiceType, 'cuttingProposalLine' | 'material' | 'cuttingProposal'> = this
+      .prisma,
   ): Promise<string | null> {
     // Không neo PI nào - không có "SKU khác cùng đợt" nào để đối chiếu.
     if (!targetProductionInvoiceId) return null;
+
+    const self = await db.cuttingProposal.findUnique({
+      where: { id: proposalId },
+      select: { productionOrderId: true, productionInvoiceId: true },
+    });
+    const sameAnchor: Prisma.CuttingProposalWhereInput | null = self?.productionOrderId
+      ? { productionOrderId: self.productionOrderId }
+      : self?.productionInvoiceId
+        ? { productionInvoiceId: self.productionInvoiceId, productionOrderId: null }
+        : null;
 
     const myLines = await db.cuttingProposalLine.findMany({
       where: { cuttingProposalId: proposalId, bestStockLengthMm: { not: null } },
@@ -3945,6 +4011,7 @@ export class CuttingProposalsService {
               },
             },
           ],
+          ...(sameAnchor ? { NOT: sameAnchor } : {}),
         },
       },
       select: { materialId: true, bestStockLengthMm: true },
@@ -4600,7 +4667,9 @@ export class CuttingProposalsService {
 
     const orders = pi.items
       .map((it) => ({ order: it.productionOrder, code: it.mfgProduct.factoryCode }))
-      .filter((x): x is { order: NonNullable<typeof x.order>; code: string } => x.order !== null);
+      .filter((x): x is { order: NonNullable<typeof x.order>; code: string } => x.order !== null)
+      // Huỷ lệnh theo SKU (23/11/2026): tính lại phương án sau khi huỷ chỉ gồm các SKU còn chạy.
+      .filter(({ order }) => !isCancelledOrder(order));
     if (orders.length === 0) {
       throw new NotFoundException(
         `Đợt gộp ${pi.code} chưa có lệnh sản xuất nào (SKU phải được duyệt trước khi tính phương án cắt)`,

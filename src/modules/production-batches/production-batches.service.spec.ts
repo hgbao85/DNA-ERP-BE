@@ -460,7 +460,7 @@ describe('ProductionBatchesService', () => {
       );
       expect(prisma.productionInvoiceItem.findUniqueOrThrow).toHaveBeenCalledWith({
         where: { id: 20n },
-        select: { productionInvoiceId: true },
+        select: { productionInvoiceId: true, cancelledAt: true },
       });
       expect(prisma.productionOrder.findFirst).toHaveBeenCalledWith({
         where: {
