@@ -457,6 +457,44 @@ describe('FloorReviewService.listOpen', () => {
 
   // ─── P1 (18/11/2026): KCS xem đợt đang mở, không lọc xưởng; piActive / blockedReason; pat + chân nhôm; stoppedPis ───
 
+  // Huỷ lệnh theo SKU (23/11/2026): KCS không chấm được đợt của SKU đã huỷ (409) - BE không trả đợt đang mở của lệnh huỷ và
+  // trả id lệnh huỷ để FE ẩn đợt chờ chấm lấy từ API danh sách riêng.
+  describe('huỷ lệnh theo SKU', () => {
+    it('lọc đợt của lệnh đã huỷ (giữ đợt cũ chưa gắn SKU) + trả cancelledOrderIds', async () => {
+      prisma.productionOrder.findMany.mockImplementation((args: { where?: { status?: string } }) =>
+        Promise.resolve(
+          args.where?.status === 'CANCELLED'
+            ? [{ id: 99n }]
+            : [{ ...order, productionInvoiceItem: { productionInvoiceId: 45n } }],
+        ),
+      );
+      const res = await service.listOpen('PHOI');
+      const nullableFilter = {
+        OR: [{ productionOrderId: null }, { productionOrder: { status: { not: 'CANCELLED' } } }],
+      };
+      expect(prisma.cutBundle.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining(nullableFilter) }),
+      );
+      expect(prisma.stepBatch.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining(nullableFilter) }),
+      );
+      expect(prisma.productionBatch.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            AND: [{ productionOrder: { status: { not: 'CANCELLED' } } }],
+          }),
+        }),
+      );
+      expect(res.cancelledOrderIds).toEqual(['99']);
+    });
+
+    it('tổ Hàn/Sơn cũng trả cancelledOrderIds', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([{ id: 7n }]);
+      const res = await service.listOpen('HAN');
+      expect(res.cancelledOrderIds).toEqual(['7']);
+    });
+  });
+
   describe('P1 - phạm vi xưởng', () => {
     const scopedTo1 = () =>
       getScope.mockResolvedValue({
@@ -799,7 +837,11 @@ describe('FloorReviewService.listOpen', () => {
         expect.objectContaining({
           where: {
             pieceStepBundleId: null,
-            productionOrder: { productionInvoiceItem: { productionInvoiceId: 45n } },
+            // Huỷ lệnh theo SKU (23/11/2026): bỏ đợt của lệnh đã huỷ.
+            AND: [
+              { productionOrder: { status: { not: 'CANCELLED' } } },
+              { productionOrder: { productionInvoiceItem: { productionInvoiceId: 45n } } },
+            ],
           },
         }),
       );

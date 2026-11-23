@@ -10,8 +10,28 @@ export const NOT_CANCELLED_ORDER = {
 } satisfies Prisma.ProductionOrderWhereInput;
 
 /** Cùng điều kiện, dùng ở query đi từ ProductionInvoiceItem (dòng SKU đã huỷ có cancelledAt). */
-export const NOT_CANCELLED_ITEM = { cancelledAt: null } satisfies Prisma.ProductionInvoiceItemWhereInput;
+export const NOT_CANCELLED_ITEM = {
+  cancelledAt: null,
+} satisfies Prisma.ProductionInvoiceItemWhereInput;
 
 export function isCancelledOrder(order: { status: ProductionOrderStatus }): boolean {
   return order.status === ProductionOrderStatus.CANCELLED;
+}
+
+/**
+ * Điều kiện cho dòng xưởng GẮN lệnh SX (đợt cắt, lô mảnh, nhóm công đoạn...): bỏ dòng của lệnh đã huỷ. Bản `Nullable` cho cột
+ * productionOrderId nullable (dòng cũ chưa gắn SKU vẫn giữ) - `productionOrder: { status: { not } }` một mình loại mất dòng NULL.
+ * Dùng ở danh sách / số đếm KCS (huỷ lệnh theo SKU, 23/11/2026): đợt của SKU đã huỷ KCS không chấm được (409) nên không hiện.
+ */
+export function orderNotCancelled() {
+  return { productionOrder: { status: { not: ProductionOrderStatus.CANCELLED } } };
+}
+
+export function orderNotCancelledNullable() {
+  return {
+    OR: [
+      { productionOrderId: null },
+      { productionOrder: { status: { not: ProductionOrderStatus.CANCELLED } } },
+    ],
+  };
 }

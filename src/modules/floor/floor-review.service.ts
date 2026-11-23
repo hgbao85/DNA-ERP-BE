@@ -12,6 +12,7 @@ import {
   ProcessStep,
   ProductionBatchStatus,
   Prisma,
+  ProductionOrderStatus,
 } from '../../generated/prisma/client';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { writeFloorReport } from '../../common/utils/floor-report.util';
@@ -27,6 +28,10 @@ import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { FloorWorkerStage } from './dto/floor-worker.dto';
 import { filterByQueueWorkshop, queueWorkshopIdOfPi } from './floor-queue-workshop.util';
 import { blockedReasonOf, listKcsPendingItems, piHasActiveSkuWhere } from './kcs-pending.util';
+import {
+  orderNotCancelled,
+  orderNotCancelledNullable,
+} from '../../common/utils/cancelled-order.util';
 
 const USER_NAME = { select: { firstName: true, lastName: true, username: true } } as const;
 const fullName = (u: { firstName: string; lastName: string; username: string } | null) =>
@@ -145,7 +150,13 @@ export class FloorReviewService {
       where: {
         stage: stage as MfgStage,
         status: ProductionBatchStatus.OPEN,
-        ...(piId && { productionOrder: { productionInvoiceItem: { productionInvoiceId: piId } } }),
+        // Huỷ lệnh theo SKU (23/11/2026): đợt của SKU đã huỷ không chấm được - không hiện.
+        AND: [
+          orderNotCancelled(),
+          ...(piId
+            ? [{ productionOrder: { productionInvoiceItem: { productionInvoiceId: piId } } }]
+            : []),
+        ],
       },
       orderBy: { reportedAt: 'asc' },
       include: {
@@ -172,6 +183,14 @@ export class FloorReviewService {
       (b) => b.productionOrder.productionInvoiceItem.productionInvoice?.id,
     );
     const stoppedPis = await this.loadStoppedPis(stage, piId, workshopId);
+    // Huỷ lệnh theo SKU (23/11/2026): id lệnh SX đã huỷ - FE ẩn đợt CHỜ CHẤM (AWAITING_QC, lấy từ API danh sách riêng) của các
+    // lệnh này; đợt đang mở đã lọc ở BE ngay trên. Huỷ hiếm nên tập này nhỏ.
+    const cancelledOrderIds = (
+      await this.prisma.productionOrder.findMany({
+        where: { status: ProductionOrderStatus.CANCELLED },
+        select: { id: true },
+      })
+    ).map((o) => o.id.toString());
 
     if (stage !== MfgStage.PHOI) {
       const activePis = await this.loadActivePiSet(
@@ -185,6 +204,7 @@ export class FloorReviewService {
         pieceStepGroups: [],
         materialYieldGroups: [],
         stoppedPis,
+        cancelledOrderIds,
       };
     }
 
@@ -193,6 +213,7 @@ export class FloorReviewService {
         this.prisma.cutBundle.findMany({
           where: {
             status: CutBundleStatus.CUTTING,
+            ...orderNotCancelledNullable(),
             ...(piId && { steelIssue: { productionInvoiceId: piId } }),
           },
           orderBy: { createdAt: 'asc' },
@@ -212,7 +233,11 @@ export class FloorReviewService {
           },
         }),
         this.prisma.stepBatch.findMany({
-          where: { stepBundleId: null, ...(piId && { productionInvoiceId: piId }) },
+          where: {
+            stepBundleId: null,
+            ...orderNotCancelledNullable(),
+            ...(piId && { productionInvoiceId: piId }),
+          },
           orderBy: { createdAt: 'asc' },
           include: {
             reportedBy: USER_NAME,
@@ -229,9 +254,12 @@ export class FloorReviewService {
         this.prisma.pieceStepBatch.findMany({
           where: {
             pieceStepBundleId: null,
-            ...(piId && {
-              productionOrder: { productionInvoiceItem: { productionInvoiceId: piId } },
-            }),
+            AND: [
+              orderNotCancelled(),
+              ...(piId
+                ? [{ productionOrder: { productionInvoiceItem: { productionInvoiceId: piId } } }]
+                : []),
+            ],
           },
           orderBy: { reportedAt: 'asc' },
           include: {
@@ -439,6 +467,7 @@ export class FloorReviewService {
       pieceStepGroups: this.mapPieceStepGroups(pieceStepBatches, piecePlans, activePis),
       materialYieldGroups: this.mapMaterialYieldGroups(yieldBatches, yieldNeed, activePis),
       stoppedPis,
+      cancelledOrderIds,
     };
   }
 
