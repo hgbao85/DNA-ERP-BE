@@ -2898,6 +2898,7 @@ describe('CuttingProposalsService', () => {
                 materialId: 30n,
                 buyQty: 72,
                 actualStock: 0,
+                requiredQty: 72,
                 stockLengthMm: 5900,
                 status: 'NEW',
                 purchasedAt: undefined,

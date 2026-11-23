@@ -544,6 +544,10 @@ export class SupplierOrdersService {
               receiveWarehouseCode: it.receiveWarehouseCode,
               buyQty: reorderQty,
               actualStock: 0,
+              // Phiếu đề xuất (23/11): dòng mua lại phần thiếu - "định mức" của nó đúng bằng phần mua lại, hao hụt đã nằm
+              // trong số mua của dòng gốc nên không cộng lần 2.
+              requiredQty: reorderQty,
+              appliedWastePct: 0,
               reorderOfItemId: it.id,
             },
           });
@@ -594,27 +598,14 @@ export class SupplierOrdersService {
       orderCode: this.lenhCodeOf(it, codes) ?? '—',
       buyQty: it.buyQty.toNumber(),
       purchaseQty: effectiveOrderQty(it.buyQty.toNumber(), it.orderQty?.toNumber()),
+      // 23/11/2026: tồn LÚC TÍNH (không đọc tồn lúc in - lúc in đã gồm hàng mua về cho chính dòng này), định mức lúc tính,
+      // % hao hụt đã áp (dòng cũ chưa lưu thì lấy % hiện tại của vật tư). Xem buildPrintRows.
+      actualStock: it.actualStock.toNumber(),
+      requiredQty: it.requiredQty?.toNumber() ?? null,
+      wastePct:
+        it.appliedWastePct?.toNumber() ?? it.material.purchaseWastePercentage?.toNumber() ?? 0,
     }));
-    // Tồn kho hiện tại theo vật tư + quy cách + chiều dài cây, chỉ kho thật (không tính kho ảo).
-    const quants = await this.prisma.stockQuant.groupBy({
-      by: ['materialId', 'spec', 'stockLengthMm'],
-      where: {
-        materialId: { in: [...new Set(order.items.map((it) => it.materialId))] },
-        warehouse: { isVirtual: false },
-      },
-      _sum: { qty: true },
-    });
-    const stockByKey = new Map(
-      quants.map((q) => [
-        `${q.materialId}|${q.spec}|${q.stockLengthMm}`,
-        q._sum.qty?.toNumber() ?? 0,
-      ]),
-    );
-    const materialIdByCode = new Map(order.items.map((it) => [it.material.code, it.materialId]));
-    const rows = buildPrintRows(inputs, (it) => {
-      const materialId = materialIdByCode.get(it.materialCode);
-      return stockByKey.get(`${materialId}|${it.spec ?? ''}|${it.stockLengthMm ?? 0}`) ?? 0;
-    });
+    const rows = buildPrintRows(inputs);
     const code = supplierOrderCode(order.seq, order.year);
     const buffer = await renderPrintWorkbook(
       {

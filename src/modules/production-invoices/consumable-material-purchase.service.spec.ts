@@ -327,6 +327,7 @@ describe('ConsumableMaterialPurchaseService', () => {
               buyQty: 120,
               actualStock: 0,
               appliedWastePct: 0,
+              requiredQty: 120,
               receiveWarehouseCode: null,
               status: undefined,
               purchasedAt: undefined,
@@ -649,6 +650,7 @@ describe('ConsumableMaterialPurchaseService', () => {
         buyQty: 120,
         actualStock: 0,
         appliedWastePct: 0,
+        requiredQty: 120,
         receiveWarehouseCode: null,
       },
     });
@@ -674,6 +676,7 @@ describe('ConsumableMaterialPurchaseService', () => {
         buyQty: 120,
         actualStock: 0,
         appliedWastePct: 0,
+        requiredQty: 120,
         receiveWarehouseCode: null,
         status: undefined,
         purchasedAt: undefined,

@@ -380,6 +380,7 @@ export class ConsumableMaterialPurchaseService {
                 buyQty: c.buyQty,
                 actualStock: c.actualStock,
                 appliedWastePct: c.appliedWastePct,
+                requiredQty: c.required,
                 receiveWarehouseCode: c.receiveWarehouseCode,
                 status: c.buyQty === 0 ? PurchaseProposalStatus.PURCHASED : undefined,
                 purchasedAt: c.buyQty === 0 ? new Date() : undefined,
@@ -436,6 +437,7 @@ export class ConsumableMaterialPurchaseService {
                 buyQty: plan.update.buyQty,
                 actualStock: c.actualStock,
                 appliedWastePct: c.appliedWastePct,
+                requiredQty: c.required,
                 receiveWarehouseCode: c.receiveWarehouseCode,
                 ...(plan.update.clearOrderQty ? { orderQty: null } : {}),
                 // Đủ tồn: đóng dòng và rời khỏi đơn đặt hàng nháp nếu đang nằm trong đơn (13/11/2026).
@@ -458,6 +460,7 @@ export class ConsumableMaterialPurchaseService {
                 buyQty: plan.create.buyQty,
                 actualStock: c.actualStock,
                 appliedWastePct: c.appliedWastePct,
+                requiredQty: c.required,
                 receiveWarehouseCode: c.receiveWarehouseCode,
                 status: plan.create.toPurchased ? PurchaseProposalStatus.PURCHASED : undefined,
                 purchasedAt: plan.create.toPurchased ? new Date() : undefined,

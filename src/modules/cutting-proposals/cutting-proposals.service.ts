@@ -2811,6 +2811,8 @@ export class CuttingProposalsService {
             materialId: bigint;
             buyQty: number;
             actualStock: number;
+            /** Số cây chiều dài mua theo phương án (in cột "Số lượng theo Định mức" của phiếu đề xuất, 23/11). */
+            requiredQty: number;
             stockLengthMm: number | null;
             receiveWarehouseCode?: string;
           }[] = [];
@@ -2848,6 +2850,7 @@ export class CuttingProposalsService {
             );
             let onHand = 0;
             let buyQty = 0;
+            const requiredBars = barsByLength.get(purchaseLengthMm) ?? 0;
             for (const [lengthMm, bars] of [...barsByLength].sort((x, y) => x[0] - y[0])) {
               const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
               SELECT "qty" FROM "stock_quant"
@@ -2900,6 +2903,7 @@ export class CuttingProposalsService {
               materialId: line.materialId,
               buyQty,
               actualStock: onHand,
+              requiredQty: requiredBars,
               stockLengthMm: line.bestStockLengthMm,
               // Chỉ ghi khi khác kho mặc định (Đợt 7: lệnh xưởng Phước An).
               ...(receiveWarehouseCode ? { receiveWarehouseCode } : {}),
@@ -3012,6 +3016,7 @@ export class CuttingProposalsService {
                     buyQty: linePlanned,
                     ...(write.clearOrderQty ? { orderQty: null } : {}),
                     actualStock: it.actualStock,
+                    requiredQty: it.requiredQty,
                     stockLengthMm: it.stockLengthMm,
                     ...(it.receiveWarehouseCode
                       ? { receiveWarehouseCode: it.receiveWarehouseCode }
@@ -3040,6 +3045,7 @@ export class CuttingProposalsService {
                     materialId: it.materialId,
                     buyQty: planned,
                     actualStock: it.actualStock,
+                    requiredQty: it.requiredQty,
                     stockLengthMm: it.stockLengthMm,
                     ...(it.receiveWarehouseCode
                       ? { receiveWarehouseCode: it.receiveWarehouseCode }
@@ -3062,6 +3068,7 @@ export class CuttingProposalsService {
                     materialId: it.materialId,
                     buyQty: planned,
                     actualStock: it.actualStock,
+                    requiredQty: it.requiredQty,
                     stockLengthMm: it.stockLengthMm,
                     ...(it.receiveWarehouseCode
                       ? { receiveWarehouseCode: it.receiveWarehouseCode }

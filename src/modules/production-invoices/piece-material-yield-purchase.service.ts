@@ -224,6 +224,7 @@ export class PieceMaterialYieldPurchaseService {
       actualStock: number;
       buyQty: number;
       appliedWastePct: number;
+      requiredQty: number;
     }[] = [];
 
     let proposal!: { id: bigint; status: PurchaseProposalStatus };
@@ -294,6 +295,7 @@ export class PieceMaterialYieldPurchaseService {
           actualStock,
           buyQty,
           appliedWastePct: wastePct,
+          requiredQty: acc.bars,
         });
         await this.stockReservationsService.reserveOrAdjust(tx, {
           warehouseId,
@@ -319,6 +321,7 @@ export class PieceMaterialYieldPurchaseService {
                 buyQty: c.buyQty,
                 actualStock: c.actualStock,
                 appliedWastePct: c.appliedWastePct,
+                requiredQty: c.requiredQty,
                 ...receiveWarehouseOf(c.materialIdStr),
                 status: c.buyQty === 0 ? PurchaseProposalStatus.PURCHASED : undefined,
                 purchasedAt: c.buyQty === 0 ? new Date() : undefined,
@@ -353,6 +356,7 @@ export class PieceMaterialYieldPurchaseService {
                 buyQty: plan.update.buyQty,
                 actualStock: c.actualStock,
                 appliedWastePct: c.appliedWastePct,
+                requiredQty: c.requiredQty,
                 ...receiveWarehouseOf(c.materialIdStr),
                 ...(plan.update.clearOrderQty ? { orderQty: null } : {}),
                 // Đủ tồn: đóng dòng và rời khỏi đơn đặt hàng nháp nếu đang nằm trong đơn (13/11/2026).
@@ -374,6 +378,7 @@ export class PieceMaterialYieldPurchaseService {
                 buyQty: plan.create.buyQty,
                 actualStock: c.actualStock,
                 appliedWastePct: c.appliedWastePct,
+                requiredQty: c.requiredQty,
                 ...receiveWarehouseOf(c.materialIdStr),
                 status: plan.create.toPurchased ? PurchaseProposalStatus.PURCHASED : undefined,
                 purchasedAt: plan.create.toPurchased ? new Date() : undefined,
