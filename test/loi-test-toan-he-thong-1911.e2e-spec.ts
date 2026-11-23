@@ -625,10 +625,22 @@ describe('Lỗi test toàn hệ thống 19/11 (e2e, DB test thật)', () => {
     });
 
     it('POST /warehouse-transfers/1/confirm có dòng thiếu receivedQty -> "Dòng 1: thiếu ...", không tên tiếng Anh', async () => {
-      const res = await call('admin', 'post', '/warehouse-transfers/1/confirm', {
-        signedSlipUrls: ['https://example.invalid/phieu.jpg'],
-        items: [{ id: '1' }],
-      });
+      // Từ 20/11 ảnh phiếu ký phải là tệp hệ thống đã tải lên (IsSystemUploadUrl) - dùng URL hợp lệ để chỉ còn đúng lỗi thiếu số
+      // thực nhận (Sang báo 23/11: URL giả làm ra thêm câu "ảnh phiếu đã ký phải là tệp đã tải lên...").
+      const prevCloud = process.env.CLOUDINARY_CLOUD_NAME;
+      process.env.CLOUDINARY_CLOUD_NAME = 'dna-test-cloud-1911';
+      let res: Awaited<ReturnType<typeof call>>;
+      try {
+        res = await call('admin', 'post', '/warehouse-transfers/1/confirm', {
+          signedSlipUrls: [
+            'https://res.cloudinary.com/dna-test-cloud-1911/image/upload/v1/dna-erp/t315/phieu.jpg',
+          ],
+          items: [{ id: '1' }],
+        });
+      } finally {
+        if (prevCloud === undefined) delete process.env.CLOUDINARY_CLOUD_NAME;
+        else process.env.CLOUDINARY_CLOUD_NAME = prevCloud;
+      }
       expect(res.status).toBe(400);
       const ms = messages(res);
       expect(ms).toHaveLength(1);
