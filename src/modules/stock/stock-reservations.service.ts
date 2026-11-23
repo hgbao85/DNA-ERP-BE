@@ -531,7 +531,9 @@ export class StockReservationsService {
         : fullPool;
     if (pool.length === 0 && fullPool.length > 0) {
       throw new BadRequestException(
-        `Lệnh không giữ chỗ cây dài ${len}mm cho vật tư ${input.materialId} - chỉ giữ cây ${[...new Set(fullPool.map((r) => r.stockLengthMm))].join(' / ')}mm, xuất đúng chiều dài phương án cắt`,
+        // 23/11/2026 (thử sống cây lẻ): phương án có cây lẻ + cây mua thì cây mua (vd 6000) chưa có giữ chỗ tới khi hàng mua về -
+        // câu cũ "xuất đúng chiều dài phương án cắt" làm thủ kho tưởng chọn sai chiều dài.
+        `Lệnh chưa có hàng giữ chỗ cây dài ${len}mm cho vật tư ${input.materialId} (đang giữ cây ${[...new Set(fullPool.map((r) => r.stockLengthMm))].join(' / ')}mm) - cây chiều dài này chưa mua về kho thì chờ nhận hàng rồi xuất; nếu phương án cắt không dùng chiều dài này thì chọn lại chiều dài`,
       );
     }
     if (pool.length === 0) {

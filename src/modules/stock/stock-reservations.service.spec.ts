@@ -1009,7 +1009,7 @@ describe('StockReservationsService', () => {
             warehouseId: 6n,
             stockLengthMm: 6000,
           }),
-        ).rejects.toThrow(/chỉ giữ cây 5800mm/);
+        ).rejects.toThrow(/đang giữ cây 5800mm/);
       });
     });
 
