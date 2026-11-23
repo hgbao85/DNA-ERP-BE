@@ -21,4 +21,10 @@ export interface AppClsStore extends ClsStore {
   ip?: string;
   /** Chỉ có khi SERVER_TIMING_ENABLED bật. */
   timing?: RequestTiming;
+  /**
+   * B5 (23/11/2026): client của transaction tương tác đang chạy - chỉ có bên trong callback của
+   * `prisma.$transaction(async (tx) => ...)` (createExtendedPrismaClient bọc sẵn). Extension audit-log ghi nhật ký
+   * qua client này để nhật ký commit / rollback CÙNG dữ liệu nghiệp vụ. Kiểu `unknown` để tránh vòng import.
+   */
+  prismaTx?: unknown;
 }

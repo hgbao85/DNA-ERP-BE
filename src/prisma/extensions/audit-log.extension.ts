@@ -173,16 +173,45 @@ export function withAuditLog(cls: ClsService<AppClsStore>) {
     // Prisma's generic `Exact` machinery can't structurally verify the extended
     // client against a plain PrismaClient pick, even though it's a superset at
     // runtime - cast once here rather than fighting it at every call site.
-    const auditLogClient = client as unknown as Pick<PrismaClient, 'auditLog'>;
+    /**
+     * B5 (23/11/2026): client dùng để đọc "trước khi sửa" và ghi nhật ký cho ĐÚNG câu lệnh đang chạy. Câu lệnh nằm trong
+     * transaction tương tác (Prisma báo qua `__internalParams.transaction.kind === 'itx'`) -> dùng client của chính transaction
+     * đó (createExtendedPrismaClient đặt vào CLS `prismaTx`): nhật ký commit / rollback cùng dữ liệu, không mở kết nối thứ 2,
+     * "trước khi sửa" thấy cả thay đổi trước đó trong cùng transaction. Câu lệnh ngoài transaction (kể cả câu cố ý chạy ngoài
+     * trong lúc một transaction đang mở) -> client gốc như trước.
+     */
+    const dbFor = (params: unknown): DynamicDelegateClient => {
+      const t = (params as { __internalParams?: { transaction?: { kind?: string } } })
+        .__internalParams?.transaction;
+      if (t?.kind === 'itx' && cls.isActive()) {
+        const tx: unknown = cls.get('prismaTx');
+        if (tx) return tx;
+      }
+      return client;
+    };
+    const auditClient = (db: DynamicDelegateClient) =>
+      db as unknown as Pick<PrismaClient, 'auditLog'>;
+    /** Bản ghi trước khi sửa / xoá. Client của transaction là client ngoài cùng nên lớp xoá mềm ép `deletedAt = null` - dòng
+     *  đã xoá mềm (vd đang khôi phục) không đọc được trong transaction thì đọc lại bằng client gốc (trạng thái đã commit). */
+    const readBefore = async (db: DynamicDelegateClient, model: string, where: unknown) => {
+      const modelKey = toModelKey(model);
+      const row: unknown = await db[modelKey].findFirst({ where }).catch(() => null);
+      if (row != null || db === client || !SOFT_DELETE_MODELS.has(model)) return row;
+      const committed: unknown = await (client as DynamicDelegateClient)[modelKey]
+        .findFirst({ where })
+        .catch(() => null);
+      return committed;
+    };
 
     return client.$extends({
       name: 'audit-log',
       query: {
         $allModels: {
-          async create({ model, args, query }) {
+          async create(params) {
+            const { model, args, query } = params;
             const result = await query(args);
             if (AUDITED_MODELS.has(model)) {
-              await writeAuditLog(auditLogClient, cls, {
+              await writeAuditLog(auditClient(dbFor(params)), cls, {
                 action: AuditAction.CREATE,
                 tableName: model,
                 recordId: extractId(result),
@@ -191,17 +220,16 @@ export function withAuditLog(cls: ClsService<AppClsStore>) {
             }
             return result;
           },
-          async update({ model, args, query }) {
+          async update(params) {
+            const { model, args, query } = params;
+            const db = dbFor(params);
             let before: unknown = null;
             if (AUDITED_MODELS.has(model)) {
-              const modelKey = toModelKey(model);
-              before = await (client as DynamicDelegateClient)[modelKey]
-                .findFirst({ where: args.where })
-                .catch(() => null);
+              before = await readBefore(db, model, args.where);
             }
             const result = await query(args);
             if (AUDITED_MODELS.has(model)) {
-              await writeAuditLog(auditLogClient, cls, {
+              await writeAuditLog(auditClient(db), cls, {
                 action: AuditAction.UPDATE,
                 tableName: model,
                 recordId: extractId(result) !== 'unknown' ? extractId(result) : extractId(before),
@@ -211,21 +239,20 @@ export function withAuditLog(cls: ClsService<AppClsStore>) {
             }
             return result;
           },
-          async delete({ model, args, query }) {
+          async delete(params) {
+            const { model, args, query } = params;
             // Soft-deletable models never reach a real DELETE: the soft-delete extension
             // rewrites the operation into an UPDATE before it gets here, which is where
             // it's logged instead. Logging it again here would double-count the action.
             const shouldAudit = AUDITED_MODELS.has(model) && !SOFT_DELETE_MODELS.has(model);
+            const db = dbFor(params);
             let before: unknown = null;
             if (shouldAudit) {
-              const modelKey = toModelKey(model);
-              before = await (client as DynamicDelegateClient)[modelKey]
-                .findFirst({ where: args.where })
-                .catch(() => null);
+              before = await readBefore(db, model, args.where);
             }
             const result = await query(args);
             if (shouldAudit) {
-              await writeAuditLog(auditLogClient, cls, {
+              await writeAuditLog(auditClient(db), cls, {
                 action: AuditAction.DELETE,
                 tableName: model,
                 recordId: extractId(before) !== 'unknown' ? extractId(before) : extractId(result),
