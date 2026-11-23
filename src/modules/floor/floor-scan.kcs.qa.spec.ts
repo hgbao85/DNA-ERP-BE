@@ -10,6 +10,7 @@ import { RealtimeService } from '../../realtime/realtime.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { CutAllocationService } from './cut-allocation.service';
 import { FloorScanService } from './floor-scan.service';
+import type { FloorStageService } from './floor-stage.service';
 
 /**
  * UB13 (P1 "KCS tự chuyển", tester-unit #1) - màn quét chuyển NGUYÊN maxNow của tiến độ BE; số trên màn = số phép chặn nhận.
@@ -393,15 +394,6 @@ function build(world: World, kind: 'CUT' | 'STEP') {
   };
   const scanPrisma = {
     workstation: { findUnique: jest.fn().mockResolvedValue(machine) },
-    floorQueueEntry: {
-      findMany: jest.fn().mockResolvedValue([
-        {
-          status: 'RUNNING',
-          productionInvoiceId: PI,
-          productionInvoice: { code: 'PI-1' },
-        },
-      ]),
-    },
     warehouse: { findUnique: jest.fn().mockResolvedValue({ workshopId: 1n }) },
     workshop: { findFirst: jest.fn().mockResolvedValue({ id: 1n }) },
     productionOrder: {
@@ -431,15 +423,37 @@ function build(world: World, kind: 'CUT' | 'STEP') {
     getBatchPlanBatch: jest.fn().mockResolvedValue({}),
     recordProductionBatch: jest.fn(),
   };
+  // 23/11/2026: lệnh 1 nằm trong bảng chia (Phôi) và trong tập lệnh Hàn / Sơn làm được.
   const cutAllocation = {
-    getMachineWork: jest.fn().mockResolvedValue({ rows: [] }),
-    getWorkshopAllocationPis: jest.fn().mockResolvedValue([]),
+    getMachineWork: jest.fn().mockResolvedValue({
+      rows: [
+        {
+          id: '1',
+          seq: 1,
+          productionInvoiceId: String(PI),
+          piCode: 'PI-1',
+          barCount: 10,
+          barsDoneEst: 0,
+        },
+      ],
+    }),
+    getWorkshopAllocationPis: jest
+      .fn()
+      .mockResolvedValue([{ productionInvoiceId: String(PI), code: 'PI-1' }]),
+  };
+  const stages = {
+    listReportablePis: jest
+      .fn()
+      .mockResolvedValue([
+        { productionInvoiceId: PI, code: 'PI-1', deadline: null, missingPieces: 0 },
+      ]),
   };
   const service = new FloorScanService(
     scanPrisma as unknown as PrismaServiceType,
     steelIssues,
     productionBatches as unknown as ProductionBatchesService,
     cutAllocation as unknown as CutAllocationService,
+    stages as unknown as FloorStageService,
   );
   return { service, scanPrisma, steelPrisma, productionBatches };
 }
@@ -632,9 +646,6 @@ describe('UB13 floor-scan: số trên màn quét = số phép chặn nhận (QA)
         isActive: true,
         workshopId: 1n,
       });
-      b.scanPrisma.floorQueueEntry.findMany.mockResolvedValue([
-        { status: 'RUNNING', productionInvoiceId: PI, productionInvoice: { code: 'PI-1' } },
-      ]);
       const item = (pieceId: string, over: Record<string, number>) => ({
         pieceId,
         pieceCode: `M${pieceId}`,
@@ -756,6 +767,7 @@ describe('UB13 floor-scan.myOutput: kcs của lần báo (AC41, QA)', () => {
       {} as unknown as SteelIssuesService,
       {} as unknown as ProductionBatchesService,
       {} as unknown as CutAllocationService,
+      {} as unknown as FloorStageService,
     );
     return { service, prisma };
   }

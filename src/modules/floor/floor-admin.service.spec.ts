@@ -19,7 +19,6 @@ jest.mock('./kcs-pending.util', () => ({
 const listPending = listKcsPendingItems as jest.MockedFunction<typeof listKcsPendingItems>;
 
 const PHU_AN = 1n;
-const PHUOC_AN = 2n;
 
 describe('FloorAdminService', () => {
   let tx: {
@@ -52,7 +51,7 @@ describe('FloorAdminService', () => {
     user: { findUnique: jest.Mock };
     floorQueueEntry: { findMany: jest.Mock; delete: jest.Mock; findUnique: jest.Mock };
     floorReport: { count: jest.Mock };
-    productionInvoice: { findUnique: jest.Mock; findMany: jest.Mock };
+    productionInvoice: { findUnique: jest.Mock; findMany: jest.Mock; updateMany: jest.Mock };
     productionOrder: { findMany: jest.Mock; count: jest.Mock };
     productionBatch: { groupBy: jest.Mock };
     cutBundle: { count: jest.Mock };
@@ -145,7 +144,11 @@ describe('FloorAdminService', () => {
         findUnique: jest.fn(),
       },
       floorReport: { count: jest.fn().mockResolvedValue(0) },
-      productionInvoice: { findUnique: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
+      productionInvoice: {
+        findUnique: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
       productionOrder: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn() },
       productionBatch: { groupBy: jest.fn().mockResolvedValue([]) },
       cutBundle: { count: jest.fn().mockResolvedValue(0) },
@@ -161,13 +164,6 @@ describe('FloorAdminService', () => {
       new WorkshopScopeService(prisma as unknown as PrismaServiceType),
     );
   });
-
-  /** QLSX gắn xưởng `id` (Phước An có paintWorkshop = Phú An). */
-  const scopedTo = (id: bigint, name: string, paintsFor: bigint[] = []) =>
-    prisma.user.findUnique.mockResolvedValue({
-      workshopId: id,
-      workshop: { name, paintsFor: paintsFor.map((x) => ({ id: x })) },
-    });
 
   describe('createWorkstation', () => {
     it('máy cắt/công đoạn phụ/nhận sắt chỉ thuộc tổ Phôi; STEP phải có công đoạn khác Cắt', async () => {
@@ -676,609 +672,24 @@ describe('FloorAdminService', () => {
     });
   });
 
-  describe('advance ("Chuyển PI tiếp")', () => {
-    it('PI đang chạy -> DONE, PI đầu hàng đợi -> RUNNING', async () => {
-      tx.floorQueueEntry.findFirst
-        .mockResolvedValueOnce({ id: 1n, status: 'RUNNING' })
-        .mockResolvedValueOnce({ id: 2n, status: 'QUEUED' });
-
-      await service.advance('PHOI', 'qlsx-1', '1');
-
-      expect(tx.floorQueueEntry.update).toHaveBeenNthCalledWith(1, {
-        where: { id: 1n },
-        data: expect.objectContaining({ status: 'DONE', endedById: 'qlsx-1' }) as unknown,
-      });
-      expect(tx.floorQueueEntry.update).toHaveBeenNthCalledWith(2, {
-        where: { id: 2n },
-        data: expect.objectContaining({ status: 'RUNNING', startedById: 'qlsx-1' }) as unknown,
+  describe('autoCompletePhoi (xong Phôi ghi phoiDoneAt, 23/11/2026)', () => {
+    it('ghi phoiDoneAt chỉ khi còn trống (UPDATE có điều kiện) và trả true khi vừa ghi', async () => {
+      const now = new Date('2026-11-23T03:00:00Z');
+      await expect(service.autoCompletePhoi(45n, now)).resolves.toBe(true);
+      expect(prisma.productionInvoice.updateMany).toHaveBeenCalledWith({
+        where: { id: 45n, phoiDoneAt: null },
+        data: { phoiDoneAt: now },
       });
     });
 
-    it('hàng đợi trống -> 409', async () => {
-      tx.floorQueueEntry.findFirst.mockResolvedValue(null);
-      await expect(service.advance('HAN', 'q', '1')).rejects.toThrow(ConflictException);
-    });
-
-    describe('expectedRunningPiId (màn QLSX cũ không đóng nhầm lệnh kế)', () => {
-      const MSG =
-        'Lệnh đang chạy của tổ Phôi đã đổi (hệ thống có thể vừa tự chuyển) - tải lại màn rồi xem lại';
-      const running = (piId: bigint) => ({ id: 1n, status: 'RUNNING', productionInvoiceId: piId });
-
-      it('khớp lệnh đang chạy -> chạy như cũ', async () => {
-        tx.floorQueueEntry.findFirst
-          .mockResolvedValueOnce(running(10n))
-          .mockResolvedValueOnce({ id: 2n, status: 'QUEUED' });
-        await service.advance('PHOI', 'q', '1', '10');
-        expect(tx.floorQueueEntry.update).toHaveBeenCalledTimes(2);
-      });
-
-      it('khác lệnh đang chạy (hệ thống vừa tự chuyển) -> 409 đúng câu, không dòng nào đổi', async () => {
-        tx.floorQueueEntry.findFirst
-          .mockResolvedValueOnce(running(11n))
-          .mockResolvedValueOnce({ id: 3n, status: 'QUEUED' });
-        const call = service.advance('PHOI', 'q', '1', '10');
-        await expect(call).rejects.toThrow(ConflictException);
-        await expect(call).rejects.toThrow(MSG);
-        expect(tx.floorQueueEntry.update).not.toHaveBeenCalled();
-      });
-
-      it('câu 409 ghi đúng tên tổ Hàn / Sơn', async () => {
-        tx.floorQueueEntry.findFirst.mockResolvedValue(null);
-        await expect(service.advance('HAN', 'q', '1', '10')).rejects.toThrow(
-          /^Lệnh đang chạy của tổ Hàn đã đổi/,
-        );
-        await expect(service.advance('SON', 'q', '1', '10')).rejects.toThrow(
-          /^Lệnh đang chạy của tổ Sơn đã đổi/,
-        );
-      });
-
-      it('có truyền mà tổ không có lệnh RUNNING -> 409', async () => {
-        tx.floorQueueEntry.findFirst
-          .mockResolvedValueOnce(null)
-          .mockResolvedValueOnce({ id: 2n, status: 'QUEUED' });
-        await expect(service.advance('PHOI', 'q', '1', '10')).rejects.toThrow(MSG);
-        expect(tx.floorQueueEntry.update).not.toHaveBeenCalled();
-      });
-
-      it('null (màn thấy tổ chưa chạy lệnh nào) mà đã có lệnh chạy -> 409, không đóng nhầm', async () => {
-        tx.floorQueueEntry.findFirst
-          .mockResolvedValueOnce(running(10n))
-          .mockResolvedValueOnce({ id: 2n, status: 'QUEUED' });
-        await expect(service.advance('PHOI', 'q', '1', null)).rejects.toThrow(MSG);
-        expect(tx.floorQueueEntry.update).not.toHaveBeenCalled();
-      });
-
-      it('null và đúng là chưa có lệnh chạy -> bắt đầu lệnh đầu hàng đợi', async () => {
-        tx.floorQueueEntry.findFirst
-          .mockResolvedValueOnce(null)
-          .mockResolvedValueOnce({ id: 2n, status: 'QUEUED' });
-        await service.advance('PHOI', 'q', '1', null);
-        expect(tx.floorQueueEntry.update).toHaveBeenCalledTimes(1);
-      });
-
-      it('việc so khớp nằm SAU khoá hàng đợi (lockBusinessKey) và trong transaction', async () => {
-        const order: string[] = [];
-        tx.$executeRaw.mockImplementation(() => {
-          order.push('lock');
-          return Promise.resolve(0);
-        });
-        tx.floorQueueEntry.findFirst.mockImplementation(() => {
-          order.push('read');
-          return Promise.resolve(running(11n));
-        });
-        await expect(service.advance('PHOI', 'q', '1', '10')).rejects.toThrow(ConflictException);
-        expect(order[0]).toBe('lock');
-        expect(order).toContain('read');
-        expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-      });
+    it('lệnh đã có phoiDoneAt (gọi chồng) -> không ghi đè, trả false', async () => {
+      prisma.productionInvoice.updateMany.mockResolvedValue({ count: 0 });
+      await expect(service.autoCompletePhoi(45n)).resolves.toBe(false);
     });
   });
 
-  describe('autoCompletePhoi (xong Phôi tự tính, Sếp chốt 14/11 câu 8)', () => {
-    const phoi = (status: string) => ({ id: 1n, stage: 'PHOI', workshopId: 2n, status });
-    const lockedKey = () => JSON.stringify((tx.$executeRaw.mock.calls as unknown[][])[0] ?? []);
-
-    it('dòng RUNNING -> DONE (endedById null), PI đầu hàng đợi của đúng xưởng -> RUNNING', async () => {
-      prisma.floorQueueEntry.findUnique.mockResolvedValue(phoi('RUNNING'));
-      tx.floorQueueEntry.findUnique.mockResolvedValue(phoi('RUNNING'));
-      tx.floorQueueEntry.findFirst.mockResolvedValue({
-        id: 7n,
-        productionInvoice: { code: 'PI-77' },
-      });
-
-      const r = await service.autoCompletePhoi(1n);
-
-      expect(r).toEqual({ closed: true, nextPiCode: 'PI-77' });
-      expect(lockedKey()).toContain('floor-queue:PHOI:2');
-      expect(tx.floorQueueEntry.update).toHaveBeenNthCalledWith(1, {
-        where: { id: 1n },
-        data: expect.objectContaining({ status: 'DONE', endedById: null }) as unknown,
-      });
-      expect(tx.floorQueueEntry.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { stage: 'PHOI', workshopId: 2n, status: 'QUEUED' },
-        }) as unknown,
-      );
-      expect(tx.floorQueueEntry.update).toHaveBeenNthCalledWith(2, {
-        where: { id: 7n },
-        data: expect.objectContaining({ status: 'RUNNING', startedById: null }) as unknown,
-      });
-    });
-
-    it('RUNNING nhưng hàng đợi không còn PI chờ -> chỉ đóng', async () => {
-      prisma.floorQueueEntry.findUnique.mockResolvedValue(phoi('RUNNING'));
-      tx.floorQueueEntry.findUnique.mockResolvedValue(phoi('RUNNING'));
-      tx.floorQueueEntry.findFirst.mockResolvedValue(null);
-      expect(await service.autoCompletePhoi(1n)).toEqual({ closed: true, nextPiCode: null });
-      expect(tx.floorQueueEntry.update).toHaveBeenCalledTimes(1);
-    });
-
-    it('dòng QUEUED -> DONE, không kéo PI khác lên chạy', async () => {
-      prisma.floorQueueEntry.findUnique.mockResolvedValue(phoi('QUEUED'));
-      tx.floorQueueEntry.findUnique.mockResolvedValue(phoi('QUEUED'));
-      expect(await service.autoCompletePhoi(1n)).toEqual({ closed: true, nextPiCode: null });
-      expect(tx.floorQueueEntry.update).toHaveBeenCalledTimes(1);
-      expect(tx.floorQueueEntry.update).toHaveBeenCalledWith({
-        where: { id: 1n },
-        data: expect.objectContaining({ status: 'DONE', endedById: null }) as unknown,
-      });
-      expect(tx.floorQueueEntry.findFirst).not.toHaveBeenCalled();
-    });
-
-    it('gọi lại khi đã DONE (hoặc dòng không còn) -> không làm gì', async () => {
-      prisma.floorQueueEntry.findUnique.mockResolvedValue(phoi('RUNNING'));
-      tx.floorQueueEntry.findUnique.mockResolvedValue(phoi('DONE'));
-      expect(await service.autoCompletePhoi(1n)).toEqual({ closed: false, nextPiCode: null });
-      expect(tx.floorQueueEntry.update).not.toHaveBeenCalled();
-    });
-
-    it('tổ không phải Phôi -> không mở transaction', async () => {
-      prisma.floorQueueEntry.findUnique.mockResolvedValue({ ...phoi('RUNNING'), stage: 'HAN' });
-      expect(await service.autoCompletePhoi(1n)).toEqual({ closed: false, nextPiCode: null });
-      expect(prisma.$transaction).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('ensurePhoiQueued (máy cắt rảnh tự kéo lệnh, đợt C3)', () => {
-    beforeEach(() => {
-      prisma.productionInvoice.findUnique.mockResolvedValue({ code: 'PI-77' });
-    });
-
-    it('lệnh chưa có dòng hàng đợi Phôi -> thêm QUEUED cuối hàng, queuedById null', async () => {
-      tx.floorQueueEntry.findUnique.mockResolvedValue(null);
-      tx.floorQueueEntry.aggregate.mockResolvedValue({ _max: { position: 4 } });
-
-      const added = await service.ensurePhoiQueued([77n, 77n]);
-
-      expect(added).toEqual(['PI-77']);
-      expect(tx.floorQueueEntry.create).toHaveBeenCalledTimes(1);
-      expect(tx.floorQueueEntry.create).toHaveBeenCalledWith({
-        data: {
-          stage: 'PHOI',
-          productionInvoiceId: 77n,
-          workshopId: PHU_AN,
-          position: 5,
-          queuedById: null,
-        },
-      });
-      expect(JSON.stringify((tx.$executeRaw.mock.calls as unknown[][])[0] ?? [])).toContain(
-        `floor-queue:PHOI:${PHU_AN}`,
-      );
-    });
-
-    it('3 lệnh, lệnh giữa lỗi -> lệnh cuối vẫn được xếp, rồi ném lỗi tổng hợp', async () => {
-      prisma.productionInvoice.findUnique.mockImplementation(
-        ({ where }: { where: { id: bigint } }) => {
-          if (where.id === 2n) return Promise.reject(new Error('db'));
-          return Promise.resolve({ code: `PI-${where.id}` });
-        },
-      );
-      tx.floorQueueEntry.findUnique.mockResolvedValue(null);
-      tx.floorQueueEntry.aggregate.mockResolvedValue({ _max: { position: 0 } });
-
-      await expect(service.ensurePhoiQueued([1n, 2n, 3n])).rejects.toThrow('2');
-
-      expect(tx.floorQueueEntry.create).toHaveBeenCalledTimes(2);
-      const ids = (
-        tx.floorQueueEntry.create.mock.calls as [{ data: { productionInvoiceId: bigint } }][]
-      ).map((c) => c[0].data.productionInvoiceId);
-      expect(ids).toEqual([1n, 3n]);
-    });
-
-    it('đã có dòng (bất kỳ trạng thái) -> bỏ qua', async () => {
-      tx.floorQueueEntry.findUnique.mockResolvedValue({ id: 3n });
-      expect(await service.ensurePhoiQueued([77n])).toEqual([]);
-      expect(tx.floorQueueEntry.create).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('reopenLast ("Mở lại PI vừa chuyển" - hoàn tác Chuyển PI tiếp nhầm)', () => {
-    const entry = (id: bigint, code: string) => ({
-      id,
-      productionInvoiceId: id + 40n,
-      productionInvoice: { code },
-    });
-
-    it('trả PI đang chạy (chưa ai báo) về hàng đợi TRƯỚC, rồi mở lại PI vừa đóng', async () => {
-      tx.floorQueueEntry.findFirst
-        .mockResolvedValueOnce(entry(1n, 'PI-A')) // DONE gần nhất
-        .mockResolvedValueOnce(entry(2n, 'PI-B')); // đang RUNNING
-      tx.floorReport.count.mockResolvedValue(0);
-
-      await service.reopenLast('q', 'PHOI', '1');
-
-      expect(tx.floorQueueEntry.findFirst).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({
-          orderBy: [{ endedAt: 'desc' }, { id: 'desc' }],
-        }) as unknown,
-      );
-      expect(tx.floorReport.count).toHaveBeenCalledWith({
-        where: { productionInvoiceId: 42n, workstation: { stage: 'PHOI' } },
-      });
-      // Thứ tự quan trọng: mỗi tổ đúng 1 dòng RUNNING (partial unique index).
-      expect(tx.floorQueueEntry.update).toHaveBeenNthCalledWith(1, {
-        where: { id: 2n },
-        data: { status: 'QUEUED', startedAt: null, startedById: null },
-      });
-      expect(tx.floorQueueEntry.update).toHaveBeenNthCalledWith(2, {
-        where: { id: 1n },
-        data: { status: 'RUNNING', endedAt: null, endedById: null },
-      });
-    });
-
-    it('tổ đang không chạy PI nào (chuyển khi hết hàng đợi) -> chỉ mở lại PI vừa đóng', async () => {
-      tx.floorQueueEntry.findFirst
-        .mockResolvedValueOnce(entry(1n, 'PI-A'))
-        .mockResolvedValueOnce(null);
-
-      await service.reopenLast('q', 'HAN', '1');
-
-      expect(tx.floorReport.count).not.toHaveBeenCalled();
-      expect(tx.floorQueueEntry.update).toHaveBeenCalledTimes(1);
-      expect(tx.floorQueueEntry.update).toHaveBeenCalledWith({
-        where: { id: 1n },
-        data: { status: 'RUNNING', endedAt: null, endedById: null },
-      });
-    });
-
-    it('PI đang chạy đã có lần báo -> 409 nêu số lần báo và cách báo bù, không sửa gì', async () => {
-      tx.floorQueueEntry.findFirst
-        .mockResolvedValueOnce(entry(1n, 'PI-A'))
-        .mockResolvedValueOnce(entry(2n, 'PI-B'));
-      tx.floorReport.count.mockResolvedValue(3);
-
-      const err = await service.reopenLast('q', 'PHOI', '1').catch((e: unknown) => e);
-
-      expect(err).toBeInstanceOf(ConflictException);
-      expect((err as Error).message).toContain('PI-B đã có 3 lần báo');
-      expect((err as Error).message).toContain('Bù lỗi');
-      expect(tx.floorQueueEntry.update).not.toHaveBeenCalled();
-    });
-
-    it('chưa chuyển PI nào -> 409', async () => {
-      tx.floorQueueEntry.findFirst.mockResolvedValueOnce(null);
-      await expect(service.reopenLast('q', 'SON', '1')).rejects.toThrow(ConflictException);
-      expect(tx.floorQueueEntry.update).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('enqueue - lời báo khi PI đã có dòng', () => {
-    beforeEach(() => {
-      prisma.productionInvoice.findUnique.mockResolvedValue({ id: 45n, code: 'PI-45' });
-      prisma.productionOrder.count.mockResolvedValue(1);
-    });
-
-    it('PI đã chạy xong ở tổ: nói rõ không xếp lại được + cách mở lại / báo bù', async () => {
-      tx.floorQueueEntry.findUnique.mockResolvedValue({ id: 1n, status: 'DONE' });
-      const err = await service.enqueue('PHOI', '45', 'q').catch((e: unknown) => e);
-      expect(err).toBeInstanceOf(ConflictException);
-      expect((err as Error).message).toContain('đã chạy xong');
-      expect((err as Error).message).toContain('Mở lại');
-    });
-
-    it('PI đang chờ / đang chạy: vẫn là "đã có trong hàng đợi"', async () => {
-      tx.floorQueueEntry.findUnique.mockResolvedValue({ id: 1n, status: 'QUEUED' });
-      await expect(service.enqueue('PHOI', '45', 'q')).rejects.toThrow('đã có trong hàng đợi');
-    });
-
-    it('dòng mới mang xưởng của PI; vị trí = max trong CÙNG (tổ, xưởng) + 1; khoá theo (tổ, xưởng)', async () => {
-      prisma.productionInvoiceItem.findMany.mockResolvedValue([
-        { productionInvoiceId: 45n, workshopId: PHUOC_AN },
-      ]);
-      tx.floorQueueEntry.findUnique.mockResolvedValue(null);
-      tx.floorQueueEntry.aggregate.mockResolvedValue({ _max: { position: 4 } });
-
-      await service.enqueue('PHOI', '45', 'q');
-
-      expect(tx.floorQueueEntry.aggregate).toHaveBeenCalledWith({
-        where: { stage: 'PHOI', workshopId: PHUOC_AN },
-        _max: { position: true },
-      });
-      expect(tx.floorQueueEntry.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          stage: 'PHOI',
-          productionInvoiceId: 45n,
-          workshopId: PHUOC_AN,
-          position: 5,
-        }) as unknown,
-      });
-      expect(tx.$executeRaw).toHaveBeenCalled();
-    });
-
-    it('Sơn của Phước An vào hàng đợi Phú An (nơi sơn)', async () => {
-      prisma.productionInvoiceItem.findMany.mockResolvedValue([
-        { productionInvoiceId: 45n, workshopId: PHUOC_AN },
-      ]);
-      prisma.workshop.findMany.mockResolvedValue([{ id: PHUOC_AN, paintWorkshopId: PHU_AN }]);
-      tx.floorQueueEntry.findUnique.mockResolvedValue(null);
-
-      await service.enqueue('SON', '45', 'q');
-
-      expect(tx.floorQueueEntry.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({ stage: 'SON', workshopId: PHU_AN }) as unknown,
-      });
-    });
-
-    it('PI chưa có xưởng -> xưởng mặc định (xưởng của kho phoi-son-han)', async () => {
-      tx.floorQueueEntry.findUnique.mockResolvedValue(null);
-      await service.enqueue('HAN', '45', 'q');
-      expect(tx.floorQueueEntry.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({ workshopId: PHU_AN }) as unknown,
-      });
-    });
-
-    it('QLSX gắn xưởng khác xưởng hàng đợi của PI -> 403, không ghi', async () => {
-      scopedTo(PHU_AN, 'Phú An');
-      prisma.productionInvoiceItem.findMany.mockResolvedValue([
-        { productionInvoiceId: 45n, workshopId: PHUOC_AN },
-      ]);
-      await expect(service.enqueue('PHOI', '45', 'q')).rejects.toThrow(ForbiddenException);
-      expect(tx.floorQueueEntry.create).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('hàng đợi theo xưởng (đợt C1)', () => {
-    it('advance: chỉ tác động hàng đợi của đúng xưởng (khoá + truy vấn theo xưởng)', async () => {
-      tx.floorQueueEntry.findFirst
-        .mockResolvedValueOnce({ id: 1n, status: 'RUNNING' })
-        .mockResolvedValueOnce({ id: 2n, status: 'QUEUED' });
-
-      await service.advance('PHOI', 'q', '2');
-
-      expect(tx.floorQueueEntry.findFirst).toHaveBeenNthCalledWith(1, {
-        where: { stage: 'PHOI', workshopId: PHUOC_AN, status: 'RUNNING' },
-      });
-      expect(tx.floorQueueEntry.findFirst).toHaveBeenNthCalledWith(2, {
-        where: { stage: 'PHOI', workshopId: PHUOC_AN, status: 'QUEUED' },
-        orderBy: { position: 'asc' },
-      });
-    });
-
-    it('người không gắn xưởng thiếu workshopId -> 400 "Chọn xưởng" (advance và reopen), không mở transaction', async () => {
-      await expect(service.advance('PHOI', 'q')).rejects.toThrow(
-        new BadRequestException('Chọn xưởng'),
-      );
-      await expect(service.reopenLast('q', 'PHOI')).rejects.toThrow(BadRequestException);
-      expect(prisma.$transaction).not.toHaveBeenCalled();
-    });
-
-    it('QLSX gắn xưởng: mặc định xưởng mình; gọi xưởng khác -> 403', async () => {
-      scopedTo(PHU_AN, 'Phú An');
-      tx.floorQueueEntry.findFirst.mockResolvedValue(null);
-      await expect(service.advance('PHOI', 'q')).rejects.toThrow(ConflictException); // hàng đợi trống = đã chạy vào xưởng mình
-      expect(tx.floorQueueEntry.findFirst).toHaveBeenCalledWith({
-        where: { stage: 'PHOI', workshopId: PHU_AN, status: 'RUNNING' },
-      });
-      await expect(service.advance('PHOI', 'q', '2')).rejects.toThrow(ForbiddenException);
-      await expect(service.reopenLast('q', 'PHOI', '2')).rejects.toThrow(ForbiddenException);
-    });
-
-    it('listQueue: QLSX gắn xưởng luôn lọc xưởng mình, truyền xưởng khác -> 403; không gắn xưởng không truyền = mọi xưởng', async () => {
-      scopedTo(PHUOC_AN, 'Phước An');
-      await service.listQueue('q', 'PHOI');
-      expect(prisma.floorQueueEntry.findMany).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          where: { stage: 'PHOI', workshopId: PHUOC_AN },
-        }) as unknown,
-      );
-      await expect(service.listQueue('q', 'PHOI', '1')).rejects.toThrow(ForbiddenException);
-
-      prisma.user.findUnique.mockResolvedValue({ workshopId: null, workshop: null });
-      await service.listQueue('q', 'PHOI');
-      expect(prisma.floorQueueEntry.findMany).toHaveBeenLastCalledWith(
-        expect.objectContaining({ where: { stage: 'PHOI' } }) as unknown,
-      );
-      await service.listQueue('q', 'PHOI', '2');
-      expect(prisma.floorQueueEntry.findMany).toHaveBeenLastCalledWith(
-        expect.objectContaining({ where: { stage: 'PHOI', workshopId: 2n } }) as unknown,
-      );
-    });
-
-    it('dòng trả về có workshopId + workshopName', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([
-        {
-          id: 1n,
-          stage: 'PHOI',
-          status: 'QUEUED',
-          productionInvoiceId: 45n,
-          workshopId: PHUOC_AN,
-          workshop: { id: PHUOC_AN, name: 'Phước An' },
-          position: 1,
-          queuedAt: new Date(),
-          startedAt: null,
-          endedAt: null,
-          productionInvoice: { id: 45n, code: 'PI-45' },
-          startedBy: null,
-          endedBy: null,
-        },
-      ]);
-      const [e] = await service.listQueue('q', 'PHOI');
-      expect(e).toMatchObject({ workshopId: '2', workshopName: 'Phước An' });
-    });
-
-    it('reorder: các dòng khác xưởng -> 400; QLSX xưởng khác -> 403; so khớp đúng QUEUED của (tổ, xưởng)', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([
-        { id: 3n, stage: 'PHOI', workshopId: PHU_AN },
-        { id: 2n, stage: 'PHOI', workshopId: PHUOC_AN },
-      ]);
-      await expect(service.reorder('q', 'PHOI', ['3', '2'])).rejects.toThrow(BadRequestException);
-
-      const phuocAnRows = [
-        { id: 3n, stage: 'PHOI', workshopId: PHUOC_AN },
-        { id: 2n, stage: 'PHOI', workshopId: PHUOC_AN },
-      ];
-      prisma.floorQueueEntry.findMany.mockResolvedValue(phuocAnRows);
-      scopedTo(PHU_AN, 'Phú An');
-      await expect(service.reorder('q', 'PHOI', ['3', '2'])).rejects.toThrow(ForbiddenException);
-
-      prisma.user.findUnique.mockResolvedValue({ workshopId: null, workshop: null });
-      prisma.floorQueueEntry.findMany.mockResolvedValueOnce(phuocAnRows);
-      prisma.floorQueueEntry.findMany.mockResolvedValue([]);
-      tx.floorQueueEntry.findMany.mockResolvedValue([
-        { id: 2n, position: 7 },
-        { id: 3n, position: 8 },
-      ]);
-      await service.reorder('q', 'PHOI', ['3', '2']);
-      expect(tx.floorQueueEntry.findMany).toHaveBeenCalledWith({
-        where: { stage: 'PHOI', workshopId: PHUOC_AN, status: 'QUEUED' },
-        select: { id: true, position: true },
-      });
-    });
-
-    it('removeEntry: kiểm phạm vi theo xưởng của dòng', async () => {
-      prisma.floorQueueEntry.findUnique.mockResolvedValue({
-        id: 3n,
-        stage: 'HAN',
-        status: 'QUEUED',
-        workshopId: PHUOC_AN,
-      });
-      scopedTo(PHU_AN, 'Phú An');
-      await expect(service.removeEntry('q', '3')).rejects.toThrow(ForbiddenException);
-      expect(tx.floorQueueEntry.deleteMany).not.toHaveBeenCalled();
-
-      scopedTo(PHUOC_AN, 'Phước An');
-      await service.removeEntry('q', '3');
-      expect(tx.floorQueueEntry.deleteMany).toHaveBeenCalledWith({
-        where: { id: 3n, status: 'QUEUED' },
-      });
-      expect(prisma.floorQueueEntry.delete).not.toHaveBeenCalled();
-    });
-
-    it('PH3 19/11: removeEntry xoá trong khoá hàng đợi; dòng vừa thành RUNNING (xoá có điều kiện ra 0) -> 409', async () => {
-      prisma.floorQueueEntry.findUnique.mockResolvedValue({
-        id: 3n,
-        stage: 'HAN',
-        status: 'QUEUED',
-        workshopId: PHUOC_AN,
-      });
-      scopedTo(PHUOC_AN, 'Phước An');
-      tx.floorQueueEntry.deleteMany.mockResolvedValueOnce({ count: 0 });
-      await expect(service.removeEntry('q', '3')).rejects.toThrow(/vừa bắt đầu chạy/);
-      // khoá nghiệp vụ của đúng hàng đợi (tổ, xưởng) lấy trước khi xoá
-      const lockSql = (tx.$executeRaw.mock.calls as unknown[][])
-        .concat(tx.$queryRaw.mock.calls as unknown[][])
-        .map((c) => c.slice(1).join('|'));
-      expect(lockSql.join(' ')).toContain('floor-queue:HAN:');
-    });
-
-    describe('queueCandidates', () => {
-      const pi = (id: bigint, code: string) => ({
-        id,
-        code,
-        deadline: null,
-        items: [{ productionOrder: { floorStage: 'ACTIVE' } }],
-      });
-
-      beforeEach(() => {
-        prisma.productionInvoice.findMany.mockResolvedValue([pi(10n, 'PI-A'), pi(11n, 'PI-B')]);
-        prisma.productionInvoiceItem.findMany.mockResolvedValue([
-          { productionInvoiceId: 10n, workshopId: PHUOC_AN },
-          { productionInvoiceId: 11n, workshopId: PHU_AN },
-        ]);
-        prisma.workshop.findMany.mockImplementation(
-          ({ where }: { where: { id: { in: bigint[] } } }) =>
-            Promise.resolve(
-              where.id.in.map((id) => ({
-                id,
-                name: id === PHU_AN ? 'Phú An' : 'Phước An',
-                paintWorkshopId: id === PHUOC_AN ? PHU_AN : null,
-              })),
-            ),
-        );
-      });
-
-      it('không gắn xưởng + không truyền xưởng: mọi PI, kèm xưởng hàng đợi', async () => {
-        const rows = await service.queueCandidates('q', 'PHOI');
-        expect(rows.map((r) => [r.code, r.workshopId, r.workshopName])).toEqual([
-          ['PI-A', '2', 'Phước An'],
-          ['PI-B', '1', 'Phú An'],
-        ]);
-      });
-
-      it('lọc theo xưởng; QLSX gắn xưởng lấy xưởng mình, truyền xưởng khác -> 403', async () => {
-        const phuoc = await service.queueCandidates('q', 'PHOI', '2');
-        expect(phuoc.map((r) => r.code)).toEqual(['PI-A']);
-
-        scopedTo(PHU_AN, 'Phú An');
-        const mine = await service.queueCandidates('q', 'PHOI');
-        expect(mine.map((r) => r.code)).toEqual(['PI-B']);
-        await expect(service.queueCandidates('q', 'PHOI', '2')).rejects.toThrow(ForbiddenException);
-      });
-
-      it('tổ Sơn: PI của Phước An thuộc hàng đợi Phú An', async () => {
-        const son = await service.queueCandidates('q', 'SON', '1');
-        expect(son.map((r) => r.code)).toEqual(['PI-A', 'PI-B']);
-        expect(son.every((r) => r.workshopId === '1')).toBe(true);
-      });
-    });
-  });
-
-  it('reorder: danh sách gửi lên khác tập PI đang chờ -> 409 (người khác vừa sửa)', async () => {
-    tx.floorQueueEntry.findMany.mockResolvedValue([
-      { id: 2n, position: 2 },
-      { id: 3n, position: 3 },
-    ]);
-    prisma.floorQueueEntry.findMany.mockResolvedValue([
-      { id: 3n, stage: 'PHOI', workshopId: PHU_AN },
-      { id: 2n, stage: 'PHOI', workshopId: PHU_AN },
-    ]);
-    await expect(service.reorder('q', 'PHOI', ['3', '2', '9'])).rejects.toThrow(ConflictException);
-    prisma.floorQueueEntry.findMany.mockResolvedValue([
-      { id: 3n, stage: 'PHOI', workshopId: PHU_AN },
-    ]);
-    await expect(service.reorder('q', 'PHOI', ['3'])).rejects.toThrow(ConflictException);
-    prisma.floorQueueEntry.findMany.mockResolvedValueOnce([
-      { id: 3n, stage: 'PHOI', workshopId: PHU_AN },
-      { id: 2n, stage: 'PHOI', workshopId: PHU_AN },
-    ]);
-    prisma.floorQueueEntry.findMany.mockResolvedValue([]);
-    await service.reorder('q', 'PHOI', ['3', '2']);
-    expect(tx.floorQueueEntry.update).toHaveBeenCalledWith({
-      where: { id: 3n },
-      data: { position: 2 },
-    });
-  });
-
-  describe('listQueue - tiến độ PI đang chạy (nhắc "đủ số, chuyển PI tiếp")', () => {
-    const running = (stage: string) => ({
-      id: 1n,
-      stage,
-      status: 'RUNNING',
-      productionInvoiceId: 45n,
-      position: 1,
-      queuedAt: new Date(),
-      startedAt: new Date(),
-      endedAt: null,
-      productionInvoice: { id: 45n, code: 'PI-45' },
-      workshopId: PHU_AN,
-      workshop: { id: PHU_AN, name: 'Phú An' },
-      startedBy: null,
-      endedBy: null,
-    });
-
+  describe('computeProgress - tiến độ tổ trên 1 lệnh', () => {
     it('Phôi: mỗi cỡ đoạn chặn trần ở số cần - báo vượt cỡ này không che cỡ khác còn thiếu', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running('PHOI')]);
       steelIssues.getPhoiProgressBatch.mockResolvedValue({
         45: [
           {
@@ -1292,7 +703,7 @@ describe('FloorAdminService', () => {
         ],
       });
 
-      const [e] = await service.listQueue('q', 'PHOI');
+      const e = { progress: await service.computeProgress('PHOI', 45n) };
 
       expect(e.progress).toMatchObject({
         required: 120,
@@ -1306,7 +717,6 @@ describe('FloorAdminService', () => {
     });
 
     it('Phôi: tính cả công đoạn phụ + trừ lỗi KCS; breakdown theo công đoạn; loại sắt chưa nhận được đếm', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running('PHOI')]);
       steelIssues.getPhoiProgressBatch.mockResolvedValue({
         45: [
           {
@@ -1322,7 +732,7 @@ describe('FloorAdminService', () => {
         ],
       });
 
-      const [e] = await service.listQueue('q', 'PHOI');
+      const e = { progress: await service.computeProgress('PHOI', 45n) };
 
       expect(e.progress).toMatchObject({
         required: 250,
@@ -1333,14 +743,13 @@ describe('FloorAdminService', () => {
         complete: false,
         missing: { lines: 3, materialsNotReceived: 1 },
       });
-      expect(e.progress!.breakdown.map((b) => [b.step, b.required, b.reported])).toEqual([
+      expect(e.progress.breakdown.map((b) => [b.step, b.required, b.reported])).toEqual([
         ['CAT', 150, 96],
         ['UON', 100, 0],
       ]);
     });
 
     it('P1: KCS ghi thiếu đã trừ khỏi done (done = thô - thiếu), lỗi trừ tiếp -> được tính = done - lỗi; "cần" gồm cả phần cắt lại', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running('PHOI')]);
       steelIssues.getPhoiProgressBatch.mockResolvedValue({
         45: [
           {
@@ -1361,7 +770,7 @@ describe('FloorAdminService', () => {
         ],
       });
 
-      const [e] = await service.listQueue('q', 'PHOI');
+      const e = { progress: await service.computeProgress('PHOI', 45n) };
 
       expect(e.progress).toMatchObject({
         required: 103,
@@ -1374,20 +783,8 @@ describe('FloorAdminService', () => {
       });
     });
 
-    it('Phôi: thiếu PI trong kết quả batch (PI lỗi) → progress null, không coi là xong', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running('PHOI')]);
-      steelIssues.getPhoiProgressBatch.mockResolvedValue({});
-
-      const [e] = await service.listQueue('q', 'PHOI');
-
-      expect(e.progress).toBeNull();
-    });
-
     it('Phôi: mảnh Phôi + vật tư thành phẩm vào công đoạn PIECE', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running('PHOI')]);
-      prisma.productionOrder.findMany
-        .mockResolvedValueOnce([]) // hasActiveFloor
-        .mockResolvedValueOnce([{ id: 41n }]);
+      prisma.productionOrder.findMany.mockResolvedValueOnce([{ id: 41n }]);
       productionBatches.getBatchPlanBatch.mockResolvedValue({
         '41': {
           items: [{ plannedQty: 10, passedQty: 4, awaitingQcQty: 3, openQty: 3 }],
@@ -1395,26 +792,23 @@ describe('FloorAdminService', () => {
         },
       });
 
-      const [e] = await service.listQueue('q', 'PHOI');
+      const e = { progress: await service.computeProgress('PHOI', 45n) };
 
       expect(productionBatches.getBatchPlanBatch).toHaveBeenCalledWith(['41'], 'PHOI');
-      expect(e.progress!.breakdown).toEqual([
+      expect(e.progress.breakdown).toEqual([
         expect.objectContaining({ step: 'PIECE', required: 20, reported: 15, percent: 75 }),
       ]);
     });
 
     it('Hàn: tính cả đợt chưa gửi KCS; đủ số thì complete', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running('HAN')]);
-      prisma.productionOrder.findMany
-        .mockResolvedValueOnce([]) // PI có SKU đang chạy (hasActiveFloor)
-        .mockResolvedValueOnce([{ id: 41n }]); // các SKU của PI
+      prisma.productionOrder.findMany.mockResolvedValueOnce([{ id: 41n }]); // các SKU của PI
       productionBatches.getBatchPlanBatch.mockResolvedValue({
         '41': {
           items: [{ pieceId: '73', plannedQty: 60, passedQty: 40, awaitingQcQty: 10, openQty: 20 }],
         },
       });
 
-      const [e] = await service.listQueue('q', 'HAN');
+      const e = { progress: await service.computeProgress('HAN', 45n) };
 
       expect(steelIssues.getPhoiProgressBatch).not.toHaveBeenCalled();
       expect(e.progress).toMatchObject({
@@ -1427,10 +821,7 @@ describe('FloorAdminService', () => {
     });
 
     it('Hàn: mảnh có failedQty (KCS chấm lỗi chưa bù) -> tiến độ / còn thiếu như cũ, chỉ thêm số Lỗi', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running('HAN')]);
-      prisma.productionOrder.findMany
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ id: 41n }]);
+      prisma.productionOrder.findMany.mockResolvedValueOnce([{ id: 41n }]);
       // Cần 40, KCS chấm đợt 10 lỗi 4 (đạt 36), chưa bù.
       productionBatches.getBatchPlanBatch.mockResolvedValue({
         '41': {
@@ -1447,7 +838,7 @@ describe('FloorAdminService', () => {
         },
       });
 
-      const [e] = await service.listQueue('q', 'HAN');
+      const e = { progress: await service.computeProgress('HAN', 45n) };
 
       expect(e.progress).toMatchObject({
         required: 40,
@@ -1461,51 +852,14 @@ describe('FloorAdminService', () => {
     });
 
     it('% chưa đủ không làm tròn lên 100', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running('HAN')]);
-      prisma.productionOrder.findMany
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ id: 41n }]);
+      prisma.productionOrder.findMany.mockResolvedValueOnce([{ id: 41n }]);
       productionBatches.getBatchPlanBatch.mockResolvedValue({
         '41': { items: [{ plannedQty: 1000, passedQty: 999, awaitingQcQty: 0, openQty: 0 }] },
       });
 
-      const [e] = await service.listQueue('q', 'HAN');
+      const e = { progress: await service.computeProgress('HAN', 45n) };
 
       expect(e.progress).toMatchObject({ percent: 99, complete: false });
-    });
-
-    it('canReopen chỉ ở dòng DONE đóng gần nhất; tắt khi PI đang chạy đã có lần báo', async () => {
-      const done = (id: bigint, endedAt: string) => ({
-        ...running('PHOI'),
-        id,
-        status: 'DONE',
-        productionInvoiceId: id + 100n,
-        endedAt: new Date(endedAt),
-        productionInvoice: { id: id + 100n, code: `PI-${id}` },
-      });
-      prisma.floorQueueEntry.findMany.mockResolvedValue([
-        running('PHOI'),
-        done(2n, '2026-10-13T01:00:00Z'),
-        done(3n, '2026-10-13T02:00:00Z'),
-      ]);
-      steelIssues.getPhoiProgressBatch.mockResolvedValue({ 45: [] });
-
-      prisma.floorReport.count.mockResolvedValue(0);
-      let list = await service.listQueue('q', 'PHOI');
-      expect(list.filter((e) => e.canReopen).map((e) => e.id)).toEqual(['3']);
-
-      prisma.floorReport.count.mockResolvedValue(2);
-      list = await service.listQueue('q', 'PHOI');
-      expect(list.some((e) => e.canReopen)).toBe(false);
-    });
-
-    it('lỗi khi tính tiến độ không làm hỏng danh sách (progress = null)', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running('PHOI')]);
-      steelIssues.getPhoiProgressBatch.mockRejectedValue(new Error('boom'));
-
-      const [e] = await service.listQueue('q', 'PHOI');
-
-      expect(e.progress).toBeNull();
     });
   });
 

@@ -1,7 +1,5 @@
 import {
   CuttingProposalStatus,
-  FloorQueueStatus,
-  MfgStage,
   Prisma,
   ProductionInvoiceStatus,
   WorkstationKind,
@@ -18,11 +16,7 @@ export const ROW_GUARD_SELECT = (workshopId: bigint) =>
     productionInvoice: {
       select: {
         status: true,
-        floorQueueEntries: {
-          where: { stage: MfgStage.PHOI, status: FloorQueueStatus.DONE },
-          select: { id: true },
-          take: 1,
-        },
+        phoiDoneAt: true,
         items: {
           where: { workshopId, productionOrder: { isNot: null } },
           select: { id: true },
@@ -42,7 +36,7 @@ export function isGuardedRowStale(row: GuardedRow): boolean {
     row.cuttingProposal.status !== CuttingProposalStatus.APPROVED ||
     pi.status === ProductionInvoiceStatus.DONE ||
     pi.status === ProductionInvoiceStatus.CANCELLED ||
-    pi.floorQueueEntries.length > 0 ||
+    pi.phoiDoneAt != null ||
     pi.items.length === 0 ||
     !row.workstation.isActive ||
     // Máy đã chuyển xưởng / không còn là máy cắt: bảng (loadSnapshot) cũng coi là dòng cũ.

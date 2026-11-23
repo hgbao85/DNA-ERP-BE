@@ -9,7 +9,6 @@ import {
 } from '@nestjs/common';
 import {
   CutBundleStatus,
-  FloorQueueStatus,
   MfgStage,
   ProductionBatchStatus,
   ProductionOrderFloorStage,
@@ -31,15 +30,27 @@ import {
   workstationQueueWorkshopId,
 } from './floor-queue-workshop.util';
 import { pieceMaxNow } from './floor-review.service';
+import { FloorStageService, type StagePi } from './floor-stage.service';
 
 const STAGE_LABEL: Record<string, string> = { PHOI: 'Phôi', HAN: 'Hàn', SON: 'Sơn' };
+
+/** Lệnh Hàn / Sơn trả cho màn quét (contract D5). */
+function toStagePiDto(p: StagePi) {
+  return {
+    productionInvoiceId: p.productionInvoiceId.toString(),
+    code: p.code,
+    deadline: p.deadline?.toISOString() ?? null,
+    missingPieces: p.missingPieces,
+  };
+}
 
 const fullName = (u: { firstName: string; lastName: string; username?: string } | null) =>
   u ? `${u.lastName} ${u.firstName}`.trim() || u.username || null : null;
 
 /**
  * Màn quét của công nhân (2026-10-13, QR tại máy - changelog-2026-10-08-ke-hoach-tem-qr-bo-sat-phoi.md mục 22).
- * Mã QR định danh MÁY (không chứa PI); PI lấy từ hàng đợi của tổ (FloorQueueEntry RUNNING). Mọi lần báo đi qua
+ * Mã QR định danh MÁY (không chứa PI); từ 23/11/2026 hàng đợi xưởng đã bỏ: Phôi lấy lệnh từ bảng chia máy cắt, Hàn / Sơn
+ * lấy tập lệnh làm được (FloorStageService, D2) và công nhân tự chọn. Mọi lần báo đi qua
  * ĐÚNG các hàm báo cũ (recordCutBatch/recordStepBatch/recordProductionBatch/receive) - tổng số, tiến độ, KCS
  * không đổi; ở đây chỉ thêm: kiểm máy–tổ–PI, ghi máy vào sổ, bắt buộc Idempotency-Key (điện thoại ở xưởng hay
  * mất sóng rồi gửi lại).
@@ -53,9 +64,13 @@ export class FloorScanService {
     private readonly steelIssues: SteelIssuesService,
     private readonly productionBatches: ProductionBatchesService,
     private readonly cutAllocation: CutAllocationService,
+    private readonly stages: FloorStageService,
   ) {}
 
-  /** Quét mã -> máy + PI đang chạy của tổ (+ PI cũ còn bù lỗi được) + dữ liệu để chọn SKU/cỡ đoạn/mảnh. */
+  /**
+   * Quét mã -> máy + lệnh làm được + dữ liệu để chọn SKU/cỡ đoạn/mảnh. Phôi: `allocationPis` theo bảng chia máy cắt; Hàn / Sơn:
+   * `stagePis` (D2, 23/11/2026) công nhân tự chọn. `runningPi` luôn null và `reworkPis` luôn [] (giữ trường cho FE cũ).
+   */
   async getContext(qrToken: string, user: AuthenticatedUser, productionInvoiceId?: string) {
     const ws = await this.resolveWorkstation(qrToken, user);
     const workstation = this.toWorkstation(ws);
@@ -64,45 +79,31 @@ export class FloorScanService {
       return { workstation, steelToReceive: await this.listSteelToReceive(ws.workshopId) };
     }
 
-    // Máy cắt: kèm việc chia cho máy này (đợt C0) + ước tiến độ (C2) - có trong MỌI trường hợp, kể
-    // cả chưa có PI đang chạy / đang xem PI bù lỗi.
+    // Máy cắt: kèm việc chia cho máy này (đợt C0) + ước tiến độ (C2) - có trong MỌI trường hợp.
     const machineWork = ws.kind === WorkstationKind.CUT ? await this.loadMachineWork(ws.id) : null;
     const extra = machineWork ? { machineWork } : {};
-    const { running, rework, workshopId } = await this.findReportablePis(ws.stage, ws.workshopId);
+    const workshopId = await workstationQueueWorkshopId(this.prisma, ws.workshopId);
     const allocationPis = await this.loadAllocationPis(ws, workshopId, machineWork);
-    const runningPi = running
-      ? {
-          productionInvoiceId: running.productionInvoiceId.toString(),
-          code: running.productionInvoice.code,
-        }
-      : null;
-    const reworkPis = rework.map((r) => ({
-      productionInvoiceId: r.productionInvoiceId.toString(),
-      code: r.productionInvoice.code,
-      endedAt: r.endedAt,
-    }));
+    const stagePisRaw =
+      ws.stage === MfgStage.PHOI ? [] : await this.stages.listReportablePis(ws.stage, workshopId);
+    const stagePis = stagePisRaw.map(toStagePiDto);
+    const base = { workstation, runningPi: null, reworkPis: [], allocationPis, stagePis };
 
-    // Lệnh mặc định (đợt C2): máy CUT làm theo bảng chia -> lệnh của dòng đầu tiên còn cây, không
-    // có thì lệnh đang chạy;
-    // máy STEP/PIECE -> lệnh đang chạy, không có thì lệnh đầu tiên của bảng chia.
+    // Lệnh mặc định: máy CUT -> lệnh của dòng đầu tiên còn cây; máy STEP/PIECE -> lệnh đầu tiên của bảng chia; Hàn / Sơn -> chỉ
+    // chọn sẵn khi có đúng 1 lệnh (nhiều lệnh thì công nhân tự chọn).
     const firstOpenRow = machineWork?.rows.find((r) => r.barCount - r.barsDoneEst > 0);
     const defaultId =
-      ws.kind === WorkstationKind.CUT
-        ? (firstOpenRow?.productionInvoiceId ?? runningPi?.productionInvoiceId ?? null)
-        : (runningPi?.productionInvoiceId ?? allocationPis[0]?.productionInvoiceId ?? null);
+      ws.stage !== MfgStage.PHOI
+        ? stagePis.length === 1
+          ? stagePis[0].productionInvoiceId
+          : null
+        : ws.kind === WorkstationKind.CUT
+          ? (firstOpenRow?.productionInvoiceId ?? null)
+          : (allocationPis[0]?.productionInvoiceId ?? null);
     const selectedId = productionInvoiceId ?? defaultId;
-    if (!selectedId) {
-      return { workstation, runningPi, reworkPis, allocationPis, pi: null, ...extra };
-    }
-    this.assertPiReportable(selectedId, running, rework, allocationPis);
-    return {
-      workstation,
-      runningPi,
-      reworkPis,
-      allocationPis,
-      pi: await this.buildPiContext(ws, selectedId),
-      ...extra,
-    };
+    if (!selectedId) return { ...base, pi: null, ...extra };
+    this.assertPiReportable(ws.stage, selectedId, allocationPis, stagePisRaw);
+    return { ...base, pi: await this.buildPiContext(ws, selectedId), ...extra };
   }
 
   /** 1 lần báo qua mã tại máy - xem ScanReportDto. */
@@ -117,14 +118,16 @@ export class FloorScanService {
     if (ws.kind === WorkstationKind.STEEL_RECEIVE) {
       throw new BadRequestException('Mã khu nhận sắt chỉ dùng để xác nhận nhận sắt');
     }
-    const { running, rework, workshopId } = await this.findReportablePis(ws.stage, ws.workshopId);
-    // Lệnh trong bảng chia chỉ cần tải khi lệnh báo không nằm trong hàng đợi (đỡ 1 lần dựng bảng
-    // chia).
-    const inQueue =
-      running?.productionInvoiceId.toString() === dto.productionInvoiceId ||
-      rework.some((r) => r.productionInvoiceId.toString() === dto.productionInvoiceId);
-    const allocationPis = inQueue ? [] : await this.loadAllocationPis(ws, workshopId, null);
-    this.assertPiReportable(dto.productionInvoiceId, running, rework, allocationPis);
+    const workshopId = await workstationQueueWorkshopId(this.prisma, ws.workshopId);
+    const piId = parseBigIntId(dto.productionInvoiceId);
+    if (ws.stage === MfgStage.PHOI) {
+      const allocationPis = await this.loadAllocationPis(ws, workshopId, null);
+      this.assertPiReportable(ws.stage, dto.productionInvoiceId, allocationPis, []);
+    } else {
+      // Chỉ kiểm đúng lệnh được báo (đỡ tính tiến độ cả danh sách).
+      const stagePis = await this.stages.listReportablePis(ws.stage, workshopId, [piId]);
+      this.assertPiReportable(ws.stage, dto.productionInvoiceId, [], stagePis);
+    }
     const ctx = { workstationId: ws.id };
 
     if (ws.kind === WorkstationKind.PIECE) {
@@ -429,56 +432,26 @@ export class FloorScanService {
   }
 
   /**
-   * PI tổ đang chạy + PI tổ đã chuyển qua nhưng còn SKU đang chạy (KCS chấm lỗi sau -> bù lỗi, mục
-   * 19) - CHỈ trong hàng đợi (tổ, xưởng
-   * của máy). Xưởng của máy = xưởng gắn trên máy, máy chưa gắn thì xưởng mặc định (đợt C1,
-   * 14/11/2026).
+   * Lệnh báo được: Phôi theo bảng chia máy cắt (như cũ); Hàn / Sơn theo tập lệnh làm được (D2). Lệnh ngoài tập -> 409 (câu của
+   * hợp đồng D5, không nhắc "Chuyển PI tiếp" vì hàng đợi đã bỏ).
    */
-  private async findReportablePis(stage: MfgStage, machineWorkshopId: bigint | null) {
-    const workshopId = await workstationQueueWorkshopId(this.prisma, machineWorkshopId);
-    const entries = await this.prisma.floorQueueEntry.findMany({
-      where: {
-        stage,
-        workshopId,
-        status: { in: [FloorQueueStatus.RUNNING, FloorQueueStatus.DONE] },
-      },
-      include: { productionInvoice: { select: { code: true } } },
-      orderBy: { endedAt: 'desc' },
-    });
-    const running = entries.find((e) => e.status === FloorQueueStatus.RUNNING) ?? null;
-    const done = entries.filter((e) => e.status === FloorQueueStatus.DONE);
-    if (done.length === 0) return { running, rework: [], workshopId };
-    const active = await this.prisma.productionOrder.findMany({
-      where: {
-        floorStage: ProductionOrderFloorStage.ACTIVE,
-        productionInvoiceItem: {
-          productionInvoiceId: { in: done.map((d) => d.productionInvoiceId) },
-        },
-      },
-      select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
-    });
-    const activeIds = new Set(
-      active.map((a) => String(a.productionInvoiceItem.productionInvoiceId)),
-    );
-    return {
-      running,
-      rework: done.filter((d) => activeIds.has(d.productionInvoiceId.toString())),
-      workshopId,
-    };
-  }
-
   private assertPiReportable(
+    stage: MfgStage,
     productionInvoiceId: string,
-    running: { productionInvoiceId: bigint } | null,
-    rework: { productionInvoiceId: bigint }[],
-    allocationPis: { productionInvoiceId: string }[] = [],
+    allocationPis: { productionInvoiceId: string }[],
+    stagePis: StagePi[],
   ) {
     const id = parseBigIntId(productionInvoiceId).toString();
-    if (running?.productionInvoiceId.toString() === id) return;
-    if (rework.some((r) => r.productionInvoiceId.toString() === id)) return;
-    if (allocationPis.some((p) => p.productionInvoiceId === id)) return;
+    if (stage === MfgStage.PHOI) {
+      if (allocationPis.some((p) => p.productionInvoiceId === id)) return;
+      throw new ConflictException(
+        'Lệnh này chưa làm được ở tổ Phôi của xưởng này (lệnh không có trong bảng chia máy cắt của xưởng, hoặc đã xong / đã kết thúc). Tải lại màn để xem lệnh làm được.',
+      );
+    }
+    if (stagePis.some((p) => p.productionInvoiceId.toString() === id)) return;
+    const upstream = stage === MfgStage.SON ? 'khung Hàn' : 'mảnh Phôi';
     throw new ConflictException(
-      'PI này không phải PI tổ đang chạy của xưởng này (hoặc đã xong hẳn) - hỏi QLSX "Chuyển PI tiếp"',
+      `Lệnh này chưa làm được ở tổ ${STAGE_LABEL[stage] ?? stage} của xưởng này (chưa có ${upstream} đạt KCS, hoặc đã đủ số / đã kết thúc). Tải lại màn để xem lệnh làm được.`,
     );
   }
 

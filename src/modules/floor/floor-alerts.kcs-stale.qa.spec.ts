@@ -8,6 +8,7 @@ import { PaintTransferReminderService } from '../warehouse-transfers/paint-trans
 import { CutAllocationFollowUpService } from './cut-allocation-follow-up.service';
 import { CutAllocationService } from './cut-allocation.service';
 import { FloorAdminService } from './floor-admin.service';
+import { FloorStageService } from './floor-stage.service';
 import { FloorAlertsService } from './floor-alerts.service';
 
 /**
@@ -257,11 +258,8 @@ function build() {
   };
   const service = new FloorAlertsService(
     prisma as unknown as PrismaServiceType,
-    {
-      computeProgress: jest.fn().mockResolvedValue(null),
-      autoCompletePhoi: jest.fn(),
-      ensurePhoiQueued: jest.fn().mockResolvedValue([]),
-    } as unknown as FloorAdminService,
+    { autoCompletePhoi: jest.fn() } as unknown as FloorAdminService,
+    { progressMap: jest.fn().mockResolvedValue(new Map()) } as unknown as FloorStageService,
     notifications as unknown as NotificationsService,
     {
       machineProgressByWorkshop: jest.fn().mockResolvedValue([]),
@@ -272,7 +270,6 @@ function build() {
     { publishEntityChanged: jest.fn() } as unknown as RealtimeService,
     {
       afterAllocated: jest.fn().mockResolvedValue(undefined),
-      queueMissingPhoi: jest.fn().mockResolvedValue(undefined),
     } as unknown as CutAllocationFollowUpService,
     { syncAll: jest.fn().mockResolvedValue(undefined) } as unknown as PaintTransferReminderService,
   );

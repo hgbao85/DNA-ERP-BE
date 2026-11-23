@@ -222,8 +222,8 @@ export class CutAllocationService {
   }
 
   /**
-   * Lệnh có dòng chia còn hiệu lực VÀ đã Bắt đầu: nguồn cho lượt đối soát "lệnh đã chia mà chưa có
-   * dòng hàng đợi Phôi" (CutAllocationFollowUpService.queueMissingPhoi).
+   * Lệnh có dòng chia còn hiệu lực VÀ đã Bắt đầu: nguồn cho lượt đối soát tin xuất sắt
+   * (FloorAlertsService.reconcilePullSteelWorkshop). Hàng đợi Phôi đã bỏ 23/11/2026.
    */
   async startedAllocationPiIds(workshopId: bigint, cache?: CutSnapshotCache): Promise<bigint[]> {
     const ws = await this.findWorkshopRef(workshopId);

@@ -132,8 +132,3 @@ export async function filterByQueueWorkshop<T>(
     return ws == null || ws === workshopId;
   });
 }
-
-/** Khoá advisory của 1 hàng đợi (tổ, xưởng). */
-export function queueLockKey(stage: string, workshopId: bigint | null): string {
-  return `floor-queue:${stage}:${workshopId ?? 'none'}`;
-}

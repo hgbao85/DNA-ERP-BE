@@ -6,14 +6,11 @@ import {
 } from './cut-allocation-follow-up.service';
 import type { CutAllocationService } from './cut-allocation.service';
 import type { AllocatedOrder } from './cut-allocation-types';
-import type { FloorAdminService } from './floor-admin.service';
 
 describe('CutAllocationFollowUpService', () => {
   let prisma: {
-    floorQueueEntry: { findMany: jest.Mock };
     productionInvoice: { findMany: jest.Mock };
   };
-  let admin: { ensurePhoiQueued: jest.Mock };
   let notifications: { emit: jest.Mock };
   let cutAllocation: { steelGapsByPi: jest.Mock };
   let service: CutAllocationFollowUpService;
@@ -39,16 +36,13 @@ describe('CutAllocationFollowUpService', () => {
 
   beforeEach(() => {
     prisma = {
-      floorQueueEntry: { findMany: jest.fn().mockResolvedValue([]) },
       productionInvoice: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    admin = { ensurePhoiQueued: jest.fn().mockResolvedValue([]) };
     notifications = { emit: jest.fn().mockResolvedValue(undefined) };
     cutAllocation = { steelGapsByPi: jest.fn().mockResolvedValue(new Map()) };
     delete process.env.FLOOR_ALERTS;
     service = new CutAllocationFollowUpService(
       prisma as unknown as PrismaServiceType,
-      admin as unknown as FloorAdminService,
       notifications as unknown as NotificationsService,
       cutAllocation as unknown as CutAllocationService,
     );
@@ -59,14 +53,13 @@ describe('CutAllocationFollowUpService', () => {
   });
 
   describe('afterAllocated', () => {
-    it('xếp mọi lệnh vào hàng đợi Phôi, rồi báo thủ kho xuất sắt (source đúng, dedupeKey theo lệnh)', async () => {
+    it('báo thủ kho xuất sắt (source đúng, dedupeKey theo lệnh)', async () => {
       fullGaps({ '100': [gap()] });
       await service.afterAllocated({
         workshopId: 5n,
         orders: [order('100'), order('101', [])],
         source: 'MANUAL',
       });
-      expect(admin.ensurePhoiQueued).toHaveBeenCalledWith([100n, 101n]);
       expect(notifications.emit).toHaveBeenCalledTimes(1);
       expect(notifications.emit).toHaveBeenCalledWith('CUT_PULL_STEEL_TO_ISSUE', {
         entityId: '100',
@@ -102,17 +95,16 @@ describe('CutAllocationFollowUpService', () => {
       });
     });
 
-    it('thiếu sắt nhưng không kho nào còn giữ chỗ -> không phát tin (vẫn xếp hàng đợi)', async () => {
+    it('thiếu sắt nhưng không kho nào còn giữ chỗ -> không phát tin', async () => {
       await service.afterAllocated({
         workshopId: 5n,
         orders: [order('100', [gap({ warehouseCodes: [] })])],
         source: 'MANUAL',
       });
-      expect(admin.ensurePhoiQueued).toHaveBeenCalled();
       expect(notifications.emit).not.toHaveBeenCalled();
     });
 
-    it('lệnh cờ cuttingRecheckRequired: vẫn xếp hàng đợi nhưng KHÔNG báo thủ kho', async () => {
+    it('lệnh cờ cuttingRecheckRequired: KHÔNG báo thủ kho', async () => {
       prisma.productionInvoice.findMany.mockResolvedValue([{ id: 100n }]);
       fullGaps({ '100': [gap()], '101': [gap()] });
       await service.afterAllocated({
@@ -120,7 +112,6 @@ describe('CutAllocationFollowUpService', () => {
         orders: [order('100'), order('101')],
         source: 'MANUAL',
       });
-      expect(admin.ensurePhoiQueued).toHaveBeenCalledWith([100n, 101n]);
       expect(notifications.emit).toHaveBeenCalledTimes(1);
       expect(notifications.emit).toHaveBeenCalledWith(
         'CUT_PULL_STEEL_TO_ISSUE',
@@ -130,12 +121,10 @@ describe('CutAllocationFollowUpService', () => {
 
     it('không có lệnh nào -> không làm gì', async () => {
       await service.afterAllocated({ workshopId: 5n, orders: [], source: 'MANUAL' });
-      expect(admin.ensurePhoiQueued).not.toHaveBeenCalled();
       expect(notifications.emit).not.toHaveBeenCalled();
     });
 
-    it('lỗi xếp hàng đợi hoặc phát tin chỉ ghi log, không throw, vẫn báo các lệnh còn lại', async () => {
-      admin.ensurePhoiQueued.mockRejectedValue(new Error('queue down'));
+    it('lỗi phát tin chỉ ghi log, không throw, vẫn báo các lệnh còn lại', async () => {
       notifications.emit.mockRejectedValueOnce(new Error('emit down'));
       fullGaps({ '100': [gap()], '101': [gap()] });
       await expect(
@@ -199,11 +188,10 @@ describe('CutAllocationFollowUpService', () => {
       expect(notifications.emit).toHaveBeenCalledTimes(1);
     });
 
-    it('FLOOR_ALERTS=off: vẫn xếp hàng đợi Phôi nhưng KHÔNG phát tin xuất sắt', async () => {
+    it('FLOOR_ALERTS=off: KHÔNG phát tin xuất sắt', async () => {
       process.env.FLOOR_ALERTS = 'off';
       fullGaps({ '100': [gap()] });
       await service.afterAllocated({ workshopId: 5n, orders: [order('100')], source: 'MANUAL' });
-      expect(admin.ensurePhoiQueued).toHaveBeenCalledWith([100n]);
       expect(notifications.emit).not.toHaveBeenCalled();
     });
   });
@@ -226,38 +214,6 @@ describe('CutAllocationFollowUpService', () => {
         warehouseCodes: ['Y', 'Z'],
         source: 'RECONCILE',
       });
-    });
-  });
-
-  describe('queueMissingPhoi (đối soát)', () => {
-    it('bỏ lệnh đã có dòng Phôi (mọi trạng thái), chỉ xếp lệnh chưa có', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([{ productionInvoiceId: 100n }]);
-      await service.queueMissingPhoi([100n, 101n]);
-      expect(prisma.floorQueueEntry.findMany).toHaveBeenCalledWith({
-        where: { stage: 'PHOI', productionInvoiceId: { in: [100n, 101n] } },
-        select: { productionInvoiceId: true },
-      });
-      expect(admin.ensurePhoiQueued).toHaveBeenCalledWith([101n]);
-    });
-
-    it('mọi lệnh đã có dòng -> không gọi ensurePhoiQueued', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([
-        { productionInvoiceId: 100n },
-        { productionInvoiceId: 101n },
-      ]);
-      await service.queueMissingPhoi([100n, 101n]);
-      expect(admin.ensurePhoiQueued).not.toHaveBeenCalled();
-    });
-
-    it('danh sách rỗng -> không truy vấn', async () => {
-      await service.queueMissingPhoi([]);
-      expect(prisma.floorQueueEntry.findMany).not.toHaveBeenCalled();
-    });
-
-    it('lỗi chỉ ghi log, không throw', async () => {
-      prisma.floorQueueEntry.findMany.mockRejectedValue(new Error('db'));
-      await expect(service.queueMissingPhoi([100n])).resolves.toBeUndefined();
-      expect(admin.ensurePhoiQueued).not.toHaveBeenCalled();
     });
   });
 });

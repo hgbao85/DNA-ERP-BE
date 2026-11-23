@@ -2,7 +2,10 @@ import 'reflect-metadata';
 import { ForbiddenException, RequestMethod } from '@nestjs/common';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { MfgRole, PermissionAction } from '../../generated/prisma/client';
-import { SEND_KCS_REMOVED_MESSAGE } from '../../common/constants/legacy-floor-report.constant';
+import {
+  REVERSE_REMOVED_MESSAGE,
+  SEND_KCS_REMOVED_MESSAGE,
+} from '../../common/constants/legacy-floor-report.constant';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { IS_PUBLIC_KEY } from '../../common/decorators/public.decorator';
@@ -14,7 +17,7 @@ import {
 import { ROLE_KEY } from '../../common/decorators/require-role.decorator';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { AdvanceQueueDto, QueueWorkshopDto } from './dto/floor-queue.dto';
+import { StageProgressQueryDto } from './dto/floor-stage-progress.dto';
 import { FloorController } from './floor.controller';
 
 /**
@@ -87,14 +90,9 @@ const MATRIX: Record<string, Rule> = {
   'PATCH workers/:id': qlsx(UPDATE),
   'POST workers/:id/reset-pin': qlsx(UPDATE),
   'POST workers/:id/unlock': qlsx(UPDATE),
-  'GET queue': qlsx(VIEW),
-  'GET queue/candidates': qlsx(VIEW),
-  'POST queue': qlsx(CREATE),
-  'POST queue/:stage/reorder': qlsx(UPDATE),
-  'POST queue/:stage/advance': qlsx(UPDATE),
-  'POST queue/:stage/reopen': qlsx(UPDATE),
-  'GET queue/:stage/detail/:productionInvoiceId': qlsx(VIEW),
-  'DELETE queue/:id': qlsx(DELETE),
+  // sản lượng theo lệnh của tổ (23/11/2026): chỉ cần quyền VIEW, vai kiểm trong FloorStageService (QLSX / BOSS / ADMIN / tổ mình)
+  'GET stage-progress': { action: VIEW },
+  'GET stage-progress/:stage/:productionInvoiceId': { action: VIEW },
   // chia máy cắt (B1, 13/11/2026)
   'GET cut-allocation': qlsx(VIEW),
   'GET cut-allocation/log': qlsx(VIEW), // nhật ký điều chuyển (C, 14/11/2026)
@@ -207,6 +205,7 @@ describe('FloorController - KCS xem / chốt, QLSX bỏ gửi KCS (P1)', () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
     );
   });
 
@@ -257,28 +256,27 @@ describe('FloorController - KCS xem / chốt, QLSX bỏ gửi KCS (P1)', () => {
   });
 });
 
-describe('FloorController - chia máy cắt + Chuyển lệnh tiếp', () => {
+describe('FloorController - chia máy cắt', () => {
   const board = { workshop: { id: '5' }, rows: [], warnings: [] };
   const allocated = [{ productionInvoiceId: '100', piCode: 'PI-100', steelGaps: [] }];
-  let admin: { advance: jest.Mock };
   let cutAllocation: { auto: jest.Mock; add: jest.Mock };
   let followUp: { afterAllocated: jest.Mock };
   let controller: FloorController;
 
   beforeEach(() => {
-    admin = { advance: jest.fn().mockResolvedValue('queue') };
     cutAllocation = {
       auto: jest.fn().mockResolvedValue({ board, allocated }),
       add: jest.fn().mockResolvedValue({ board, allocated }),
     };
     followUp = { afterAllocated: jest.fn().mockResolvedValue(undefined) };
     controller = new FloorController(
-      admin as never,
+      {} as never,
       {} as never,
       {} as never,
       {} as never,
       cutAllocation as never,
       followUp as never,
+      {} as never,
       {} as never,
     );
   });
@@ -311,32 +309,60 @@ describe('FloorController - chia máy cắt + Chuyển lệnh tiếp', () => {
     await expect(controller.cutAllocationAdd({} as never, 'u1')).rejects.toThrow('chưa Bắt đầu');
     expect(followUp.afterAllocated).not.toHaveBeenCalled();
   });
-
-  it('advance truyền expectedRunningPiId xuống service (null vẫn giữ là null, không gửi = undefined)', async () => {
-    await controller.advance('PHOI', 'u1', { workshopId: '5', expectedRunningPiId: '10' });
-    expect(admin.advance).toHaveBeenLastCalledWith('PHOI', 'u1', '5', '10');
-    await controller.advance('PHOI', 'u1', { workshopId: '5', expectedRunningPiId: null });
-    expect(admin.advance).toHaveBeenLastCalledWith('PHOI', 'u1', '5', null);
-    await controller.advance('HAN', 'u1', { workshopId: '5' });
-    expect(admin.advance).toHaveBeenLastCalledWith('HAN', 'u1', '5', undefined);
-  });
 });
 
-describe('AdvanceQueueDto (validate)', () => {
-  const check = async (body: unknown) => {
-    const dto = plainToInstance(AdvanceQueueDto, body);
-    return validate(dto, { whitelist: true, forbidNonWhitelisted: true });
-  };
-
-  it('nhận expectedRunningPiId dạng chuỗi số, null, hoặc không gửi', async () => {
-    expect(await check({ workshopId: '5', expectedRunningPiId: '10' })).toEqual([]);
-    expect(await check({ expectedRunningPiId: null })).toEqual([]);
-    expect(await check({})).toEqual([]);
+describe('FloorController - sản lượng theo lệnh + route đã bỏ (23/11/2026)', () => {
+  it('reverse trả 403 câu rõ (QLSX không còn hủy lần báo)', () => {
+    const controller = new FloorController(
+      ...(Array(8).fill({}) as [never, never, never, never, never, never, never, never]),
+    );
+    expect(() => controller.reverse()).toThrow(ForbiddenException);
+    expect(() => controller.reverse()).toThrow(REVERSE_REMOVED_MESSAGE);
   });
 
-  it('chuỗi không phải số -> lỗi; reopen (QueueWorkshopDto) không nhận trường này', async () => {
-    expect(await check({ expectedRunningPiId: 'abc' })).not.toEqual([]);
-    const reopen = plainToInstance(QueueWorkshopDto, { expectedRunningPiId: '1' });
-    expect(await validate(reopen, { whitelist: true, forbidNonWhitelisted: true })).not.toEqual([]);
+  it('các route /floor/queue* không còn', () => {
+    const keys = [...routes().keys()];
+    expect(keys.filter((k) => k.includes(' queue'))).toEqual([]);
+  });
+
+  it('stage-progress chuyển user + tổ + xưởng xuống FloorStageService', async () => {
+    const stage = {
+      listProgress: jest.fn().mockResolvedValue([]),
+      detail: jest.fn().mockResolvedValue({ ok: true }),
+    };
+    const controller = new FloorController(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      stage as never,
+    );
+    const user = { id: 'u1' } as never;
+    await controller.stageProgress({ stage: 'PHOI' } as never, user);
+    expect(stage.listProgress).toHaveBeenCalledWith(user, 'PHOI', undefined, undefined, undefined);
+    await controller.stageProgress(
+      { stage: 'PHOI', workshopId: '5', productionInvoiceIds: '1,2' } as never,
+      user,
+    );
+    expect(stage.listProgress).toHaveBeenLastCalledWith(user, 'PHOI', '5', undefined, '1,2');
+    await controller.stageProgressDetail('HAN', '9', user);
+    expect(stage.detail).toHaveBeenCalledWith(user, 'HAN', '9');
+  });
+
+  it('StageProgressQueryDto: stage phải là PHOI/HAN/SON, workshopId không bắt buộc', async () => {
+    const check = (body: unknown) => validate(plainToInstance(StageProgressQueryDto, body));
+    expect(await check({ stage: 'PHOI' })).toEqual([]);
+    expect(await check({ stage: 'HAN', workshopId: '5' })).toEqual([]);
+    expect(await check({ stage: 'KCS' })).not.toEqual([]);
+    expect(await check({ stage: 'PHOI', productionInvoiceIds: '1,22,333' })).toEqual([]);
+    expect(await check({ stage: 'PHOI', productionInvoiceIds: '1,,2' })).not.toEqual([]);
+    expect(await check({ stage: 'PHOI', productionInvoiceIds: 'a,2' })).not.toEqual([]);
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => i + 1).join(',');
+    expect(await check({ stage: 'PHOI', productionInvoiceIds: ids(200) })).toEqual([]);
+    expect(await check({ stage: 'PHOI', productionInvoiceIds: ids(201) })).not.toEqual([]);
+    expect(await check({ stage: 'SON', workshopId: 'x' })).not.toEqual([]);
   });
 });

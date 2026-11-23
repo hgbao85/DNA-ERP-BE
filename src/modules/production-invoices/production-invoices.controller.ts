@@ -232,7 +232,7 @@ export class ProductionInvoicesController {
 
   /**
    * Đổi xưởng cơ khí của cả lệnh (chỉ khi mọi SKU đang chờ QLSX / đã gửi Sếp / đã duyệt và chưa xuất sắt/vật tư).
-   * 16/11/2026: chỉ KHSX (+ Admin) đổi; QLSX không còn quyền này. Hàng đợi tổ còn mở của lệnh dời theo sang xưởng mới.
+   * 16/11/2026: chỉ KHSX (+ Admin) đổi; QLSX không còn quyền này. Từ 23/11/2026 không còn hàng đợi tổ để dời: tổ Hàn / Sơn xưởng mới tự thấy lệnh.
    */
   @Patch(':id/workshop')
   @RequirePermissions(UPDATE)

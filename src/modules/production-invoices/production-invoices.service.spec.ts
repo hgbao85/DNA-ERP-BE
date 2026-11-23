@@ -19,7 +19,6 @@ import { MaterialYieldRecipePurchaseService } from './material-yield-recipe-purc
 import { PieceMaterialYieldPurchaseService } from './piece-material-yield-purchase.service';
 import { ProductionInvoicesService } from './production-invoices.service';
 import { lockPisForIssue } from '../../common/utils/pi-workshop-lock.util';
-import { moveOpenQueueEntriesToPiWorkshop } from '../floor/floor-queue-move.util';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { ItemDeadlineWriter } from './item-deadline-writer.service';
 import { DeadlineChangesService } from './deadline-changes/deadline-changes.service';
@@ -37,12 +36,6 @@ jest.mock('../../common/utils/pi-workshop-lock.util', () => ({
   lockPisForIssue: jest.fn(() => Promise.resolve(new Map())),
   workshopsOfPis: jest.fn(() => Promise.resolve(new Map())),
   assertWorkshopUnchanged: jest.fn(),
-}));
-
-// 16/11/2026: dời hàng đợi tổ khi đổi xưởng - mock để các test cũ không cần giả lập floorQueueEntry; hành vi thật có spec riêng
-// (floor-queue-move.util.spec.ts), ở đây chỉ kiểm changeWorkshop gọi đúng trong transaction và đưa kết quả vào thông báo.
-jest.mock('../floor/floor-queue-move.util', () => ({
-  moveOpenQueueEntriesToPiWorkshop: jest.fn(() => Promise.resolve([])),
 }));
 
 const ACTOR = { id: 'khsx-1', roles: ['PRODUCTION_PLANNER'] };
@@ -3506,77 +3499,20 @@ describe('ProductionInvoicesService', () => {
       expect(result.displayCode).toBe('MY-313 + MY-314');
     });
 
-    it('16/11: dời hàng đợi tổ TRONG transaction (sau khoá lệnh + ghi xưởng) và đưa queueMoves (tên xưởng) vào PI_WORKSHOP_CHANGED', async () => {
+    it('23/11: đổi xưởng không còn dời hàng đợi: không đụng floorQueueEntry, PI_WORKSHOP_CHANGED không có queueMoves, không phát realtime sàn xưởng', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
-      prisma.workshop.findMany.mockResolvedValue([
-        { id: 3n, name: 'Phú An' },
-        { id: 4n, name: 'Mỹ Yến' },
-      ]);
-      (moveOpenQueueEntriesToPiWorkshop as jest.Mock).mockResolvedValueOnce([
-        { stage: 'PHOI', fromWorkshopId: 3n, toWorkshopId: 4n, wasRunning: true },
-        { stage: 'HAN', fromWorkshopId: 3n, toWorkshopId: 4n, wasRunning: false },
-      ]);
-
       await service.changeWorkshop('7', '4', 'Phú An quá tải', 'user-khsx');
-
-      expect(moveOpenQueueEntriesToPiWorkshop).toHaveBeenCalledWith(prisma, 7n);
-      const moveOrder = (moveOpenQueueEntriesToPiWorkshop as jest.Mock).mock.invocationCallOrder;
-      expect((lockPisForIssue as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
-        moveOrder[moveOrder.length - 1],
-      );
-      expect(prisma.productionInvoiceItem.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
-        moveOrder[moveOrder.length - 1],
-      );
-      expect(notificationsService.emit).toHaveBeenCalledWith('PI_WORKSHOP_CHANGED', {
-        entityId: '7',
-        actorId: 'user-khsx',
-        params: {
-          piCode: 'PI-7',
-          displayCode: 'MY-313 + MY-314',
-          fromWorkshop: 'Phú An',
-          toWorkshop: 'Mỹ Yến',
-          reason: 'Phú An quá tải',
-          count: 2,
-          queueMoves: [
-            { stage: 'PHOI', fromWorkshop: 'Phú An', toWorkshop: 'Mỹ Yến', wasRunning: true },
-            { stage: 'HAN', fromWorkshop: 'Phú An', toWorkshop: 'Mỹ Yến', wasRunning: false },
-          ],
-          // xưởng mới + xưởng cũ của SKU + xưởng của hàng đợi (bỏ trùng)
-          workshopIds: ['4', '3'],
-          approved: false,
-        },
-      });
-      // Có dòng dời -> báo màn QLSX (kênh sàn xưởng) tải lại.
-      expect(realtimeStub.publishEntityChanged).toHaveBeenCalledWith({
-        entity: 'FLOOR_REPORT',
-        entityId: '7',
-        action: 'UPDATED',
-        actorId: 'user-khsx',
-      });
-    });
-
-    it('16/11: workshopIds gồm cả xưởng nơi sơn của dòng Sơn dời (khác xưởng cũ / mới)', async () => {
-      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
-      (moveOpenQueueEntriesToPiWorkshop as jest.Mock).mockResolvedValueOnce([
-        { stage: 'SON', fromWorkshopId: 9n, toWorkshopId: 8n, wasRunning: false },
-      ]);
-      await service.changeWorkshop('7', '4', 'lý do', 'user-khsx');
       const call = notificationsService.emit.mock.calls.find(
         (c: unknown[]) => c[0] === 'PI_WORKSHOP_CHANGED',
-      ) as [string, { params: { workshopIds: string[] } }];
-      expect([...call[1].params.workshopIds].sort()).toEqual(['3', '4', '8', '9']);
-    });
-
-    it('16/11: không có dòng hàng đợi nào dời -> KHÔNG phát realtime sàn xưởng', async () => {
-      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
-      await service.changeWorkshop('7', '4', 'lý do', 'user-khsx');
+      ) as [string, { params: { queueMoves?: unknown; workshopIds: string[] } }];
+      expect(call[1].params.queueMoves).toBeUndefined();
+      expect([...call[1].params.workshopIds].sort()).toEqual(['3', '4']);
       expect(realtimeStub.publishEntityChanged).not.toHaveBeenCalledWith(
         expect.objectContaining({ entity: 'FLOOR_REPORT' }),
       );
     });
 
-    it('16/11: 2 lần đổi xưởng cùng lúc - xưởng sau khoá khác lúc đọc -> 409, không ghi, không dời hàng đợi', async () => {
-      (moveOpenQueueEntriesToPiWorkshop as jest.Mock).mockClear();
+    it('16/11: 2 lần đổi xưởng cùng lúc - xưởng sau khoá khác lúc đọc -> 409, không ghi', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
       (lockPisForIssue as jest.Mock).mockResolvedValueOnce(
         new Map([['7', { workshopId: 5n, cuttingRecheckRequired: false }]]),
@@ -3585,7 +3521,6 @@ describe('ProductionInvoicesService', () => {
         'Lệnh MY-313 + MY-314 vừa được đổi xưởng bởi người khác - tải lại trang rồi thử lại',
       );
       expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
-      expect(moveOpenQueueEntriesToPiWorkshop).not.toHaveBeenCalled();
       expect(notificationsService.emit).not.toHaveBeenCalledWith(
         'PI_WORKSHOP_CHANGED',
         expect.anything(),
@@ -3608,21 +3543,6 @@ describe('ProductionInvoicesService', () => {
       );
       await expect(service.changeWorkshop('7', '4', 'lý do', 'user-khsx')).resolves.toBeDefined();
       expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalled();
-    });
-
-    it('B4: tra tên xưởng của hàng đợi lỗi -> ghi log, VẪN emit PI_WORKSHOP_CHANGED (không queueMoves, workshopIds đủ)', async () => {
-      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
-      (moveOpenQueueEntriesToPiWorkshop as jest.Mock).mockResolvedValueOnce([
-        { stage: 'PHOI', fromWorkshopId: 3n, toWorkshopId: 4n, wasRunning: true },
-      ]);
-      prisma.workshop.findMany.mockRejectedValueOnce(new Error('tra tên lỗi'));
-      await expect(service.changeWorkshop('7', '4', 'lý do', 'user-khsx')).resolves.toBeDefined();
-      const call = notificationsService.emit.mock.calls.find(
-        (c: unknown[]) => c[0] === 'PI_WORKSHOP_CHANGED',
-      ) as [string, { params: { queueMoves?: unknown; workshopIds: string[] } }];
-      expect(call).toBeDefined();
-      expect(call[1].params.queueMoves).toBeUndefined();
-      expect([...call[1].params.workshopIds].sort()).toEqual(['3', '4']);
     });
 
     it('B5: approved = true khi có ÍT NHẤT 1 SKU đã APPROVED (lệnh hiện ở Tổng hợp lệnh SX); false khi chưa SKU nào duyệt', async () => {
@@ -3676,16 +3596,6 @@ describe('ProductionInvoicesService', () => {
       await expect(service.changeWorkshop('7', '4', 'lý do', 'user-khsx')).resolves.toBeDefined();
       expect(notificationsService.emit).toHaveBeenCalledWith(
         'PI_CUTTING_RECHECK_REQUIRED',
-        expect.anything(),
-      );
-    });
-
-    it('16/11: hàng đợi dời lỗi -> cả việc đổi xưởng lỗi, không thông báo', async () => {
-      prisma.productionInvoice.findUnique.mockResolvedValue(sentPi());
-      (moveOpenQueueEntriesToPiWorkshop as jest.Mock).mockRejectedValueOnce(new Error('queue lỗi'));
-      await expect(service.changeWorkshop('7', '4', 'lý do', 'u')).rejects.toThrow('queue lỗi');
-      expect(notificationsService.emit).not.toHaveBeenCalledWith(
-        'PI_WORKSHOP_CHANGED',
         expect.anything(),
       );
     });

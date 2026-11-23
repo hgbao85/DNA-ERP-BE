@@ -109,8 +109,6 @@ import { ItemDeadlineWriter } from './item-deadline-writer.service';
 import { PIECE_TRANSFER_LEAVES_FRAME } from '../warehouse-transfers/transfer-routes.constant';
 import { WorkshopMoveService } from '../warehouse-transfers/workshop-move.service';
 import { lockPisForIssue } from '../../common/utils/pi-workshop-lock.util';
-import { FloorQueueMove, moveOpenQueueEntriesToPiWorkshop } from '../floor/floor-queue-move.util';
-import type { PiWorkshopChangedQueueMove } from '../notifications/notification-types';
 import {
   WorkshopScope,
   WorkshopScopeService,
@@ -1445,8 +1443,8 @@ export class ProductionInvoicesService {
   /**
    * Phần A – Đợt 2: đổi xưởng cơ khí của CẢ lệnh (PATCH :id/workshop) khi lệnh chờ QLSX / đã gửi Sếp / đã duyệt - chỉ được khi
    * chưa xuất sắt / vật tư cho xưởng. Kiểm 2 lần (trước + trong transaction) để chống đua với xuất sắt.
-   * 16/11/2026: người đổi là KHSX (hoặc Admin), QLSX không còn quyền (chặn ở controller). Dòng hàng đợi tổ Phôi/Hàn/Sơn còn mở
-   * của lệnh dời sang hàng đợi xưởng mới CÙNG transaction (moveOpenQueueEntriesToPiWorkshop).
+   * 16/11/2026: người đổi là KHSX (hoặc Admin), QLSX không còn quyền (chặn ở controller). Từ 23/11/2026 hàng đợi xưởng đã bỏ nên
+   * không còn dời dòng hàng đợi: tập lệnh của từng tổ tính thẳng theo xưởng của lệnh.
    */
   async changeWorkshop(
     piId: string,
@@ -1494,7 +1492,6 @@ export class ProductionInvoicesService {
       pi.items.flatMap((it) => (it.workshopId != null ? [it.workshopId.toString()] : [])),
     );
     let cuttingRecheckFlagged = false;
-    let queueMoves: FloorQueueMove[] = [];
     const notifyWorkshopMove = await this.prisma.$transaction(async (tx) => {
       // Rà soát 14/11 CK6 (người B): khoá dòng lệnh làm việc ĐẦU TIÊN - CÙNG khoá với xuất sắt / xác nhận phiếu XK
       // (lockPisForIssue). Lượt xuất đang chạy xong trước thì assertNoMaterialIssued() dưới thấy; chạy sau thì nó thấy xưởng mới.
@@ -1529,11 +1526,6 @@ export class ProductionInvoicesService {
           `Lệnh ${displayCode} đã có thay đổi khác trong lúc đổi xưởng - tải lại trang rồi thử lại`,
         );
       }
-      // 16/11/2026: dòng hàng đợi tổ còn mở (chờ / đang chạy) dời sang hàng đợi xưởng mới, cùng transaction. Thứ tự khoá ở đây:
-      // dòng lệnh (trên) -> khoá hàng đợi. Chiều ngược (enqueue giữ khoá hàng đợi rồi INSERT, khoá ngoại lấy KEY SHARE trên dòng
-      // lệnh) có tồn tại; vòng khoá chỉ xảy ra khi >= 3 giao dịch chồng nhau, Postgres huỷ 1 giao dịch (người dùng thử lại được),
-      // dữ liệu không hỏng - xem chú thích ở floor-queue-move.util.ts.
-      queueMoves = await moveOpenQueueEntriesToPiWorkshop(tx, pi.id);
       // Phần A (13/11/2026: kể cả lệnh CHƯA duyệt): lệnh có phương án cắt đã tính xong chưa huỷ ->
       // bật cờ "cần kiểm lại". Không tự tính lại.
       cuttingRecheckFlagged = await this.flagCuttingRecheckOnWorkshopChange(tx, pi.id);
@@ -1541,22 +1533,6 @@ export class ProductionInvoicesService {
       return this.workshopMove.afterWorkshopChanged(tx, pi.id, workshop.id, actorUserId);
     });
     await notifyWorkshopMove();
-    // Hàng đợi tổ đổi -> báo màn QLSX (kênh sàn xưởng) tự tải lại. Realtime là phần phụ: lỗi chỉ ghi log.
-    if (queueMoves.length > 0) {
-      try {
-        this.realtime.publishEntityChanged({
-          entity: 'FLOOR_REPORT',
-          entityId: pi.id.toString(),
-          action: 'UPDATED',
-          actorId: actorUserId,
-        });
-      } catch (error) {
-        this.logger.error(
-          `Publish floor realtime failed (PI ${pi.id}): ${(error as Error).message}`,
-        );
-      }
-    }
-
     for (const it of pi.items) {
       await auditEvent(this.prisma, this.cls, this.logger, {
         action: AuditAction.UPDATE,
@@ -1571,25 +1547,12 @@ export class ProductionInvoicesService {
     }
     // Phần A – Đợt 3 (V4-5): đổi sang xưởng làm số ngày khác -> báo KHSX đặt lại mốc.
     await this.notifyTimelineReplanIfNeeded(pi, pi.items, workshop, actorUserId);
-    // Tra tên xưởng lỗi chỉ làm thông báo thiếu phần hàng đợi, không được làm mất cả thông báo.
-    let queueMovesForNotice: PiWorkshopChangedQueueMove[] | undefined;
     try {
-      queueMovesForNotice = await this.describeQueueMoves(queueMoves);
-    } catch (error) {
-      this.logger.error(
-        `Failed to describe queue moves for PI_WORKSHOP_CHANGED (PI ${pi.id}): ${(error as Error).message}`,
-      );
-    }
-    try {
-      // Id xưởng liên quan (cũ + mới + hàng đợi dời) để RecipientResolver giữ QLSX xưởng cũ: thông báo phát sau commit, lúc đó
+      // Id xưởng liên quan (cũ + mới) để RecipientResolver giữ QLSX xưởng cũ: thông báo phát sau commit, lúc đó
       // mọi SKU đã ở xưởng mới nên tra theo piCode sẽ loại nhầm họ.
       const workshopIdSet = new Set<string>([workshop.id.toString()]);
       for (const it of pi.items)
         if (it.workshopId != null) workshopIdSet.add(it.workshopId.toString());
-      for (const m of queueMoves) {
-        if (m.fromWorkshopId != null) workshopIdSet.add(m.fromWorkshopId.toString());
-        if (m.toWorkshopId != null) workshopIdSet.add(m.toWorkshopId.toString());
-      }
       await this.notifications.emit('PI_WORKSHOP_CHANGED', {
         entityId: pi.id.toString(),
         actorId: actorUserId,
@@ -1600,7 +1563,6 @@ export class ProductionInvoicesService {
           toWorkshop: workshop.name,
           reason,
           count: ids.length,
-          queueMoves: queueMovesForNotice,
           workshopIds: [...workshopIdSet],
           // "Tổng hợp lệnh SX" hiện lệnh khi có ÍT NHẤT 1 SKU đã duyệt; chưa SKU nào duyệt thì màn đó không có lệnh -> link
           // thông báo trỏ tới màn lệnh SX / chờ duyệt.
@@ -1639,36 +1601,6 @@ export class ProductionInvoicesService {
     const result = await this.findOne(piId);
     result.canManage = this.workshopScope.canManage(scope, workshop.id);
     return result;
-  }
-
-  /** Đổi id xưởng của các dòng hàng đợi đã dời thành tên xưởng cho thông báo. */
-  private async describeQueueMoves(
-    moves: FloorQueueMove[],
-  ): Promise<PiWorkshopChangedQueueMove[] | undefined> {
-    if (moves.length === 0) return undefined;
-    const wsIds = [
-      ...new Set(
-        moves
-          .flatMap((m) => [m.fromWorkshopId, m.toWorkshopId])
-          .filter((v): v is bigint => v != null),
-      ),
-    ];
-    const rows =
-      wsIds.length > 0
-        ? await this.prisma.workshop.findMany({
-            where: { id: { in: wsIds } },
-            select: { id: true, name: true },
-          })
-        : [];
-    const nameOf = new Map(rows.map((w) => [w.id.toString(), w.name]));
-    const label = (id: bigint | null): string | null =>
-      id == null ? null : (nameOf.get(id.toString()) ?? null);
-    return moves.map((m) => ({
-      stage: m.stage as PiWorkshopChangedQueueMove['stage'],
-      fromWorkshop: label(m.fromWorkshopId),
-      toWorkshop: label(m.toWorkshopId),
-      wasRunning: m.wasRunning,
-    }));
   }
 
   /** Phần A: danh sách lệnh đang bật cờ "cần kiểm lại phương án cắt", mới bật nhất trước. */

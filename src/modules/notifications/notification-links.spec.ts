@@ -147,36 +147,9 @@ describe('NOTIFICATION_TYPES - PI_WORKSHOP_CHANGED (16/11/2026)', () => {
     count: 2,
   };
 
-  it('không có hàng đợi dời: câu trung lập, không nhắc hàng đợi', () => {
+  it('câu trung lập, không nhắc hàng đợi (hàng đợi xưởng đã bỏ 23/11/2026)', () => {
     expect(def.message(base)).toBe('Lệnh PI-7 (2 SKU) đã đổi xưởng cơ khí. Lý do: Phú An quá tải.');
-    expect(def.message({ ...base, queueMoves: [] })).toBe(def.message(base));
-  });
-
-  it('có hàng đợi dời: nêu tổ + xưởng mới; dòng đang chạy thì nhắc QLSX xưởng cũ bấm "Bắt đầu lệnh đầu hàng đợi"', () => {
-    const msg = def.message({
-      ...base,
-      queueMoves: [
-        { stage: 'HAN', fromWorkshop: 'Phú An', toWorkshop: 'Mỹ Yến', wasRunning: false },
-        { stage: 'PHOI', fromWorkshop: 'Phú An', toWorkshop: 'Mỹ Yến', wasRunning: true },
-      ],
-    });
-    expect(msg).toBe(
-      'Lệnh PI-7 (2 SKU) đã đổi xưởng cơ khí. Lý do: Phú An quá tải. ' +
-        'Hàng đợi tổ Phôi, Hàn đã chuyển sang cuối hàng đợi Mỹ Yến. ' +
-        'Tổ Phôi ở Phú An không còn lệnh đang chạy: QLSX Phú An bấm "Bắt đầu lệnh đầu hàng đợi" nếu hàng đợi còn lệnh chờ.',
-    );
-  });
-
-  it('Sơn sang xưởng khác (nơi sơn nhờ): gom theo xưởng đích', () => {
-    const msg = def.message({
-      ...base,
-      queueMoves: [
-        { stage: 'PHOI', fromWorkshop: 'Phú An', toWorkshop: 'Phước An', wasRunning: false },
-        { stage: 'SON', fromWorkshop: 'Phú An', toWorkshop: 'Phú An 2', wasRunning: false },
-      ],
-    });
-    expect(msg).toContain('Hàng đợi tổ Phôi đã chuyển sang cuối hàng đợi Phước An.');
-    expect(msg).toContain('Hàng đợi tổ Sơn đã chuyển sang cuối hàng đợi Phú An 2.');
+    expect(def.message(base)).not.toContain('Hàng đợi');
   });
 
   it('người nhận gồm Sếp, KHSX và QLSX', () => {

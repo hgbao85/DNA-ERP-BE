@@ -1,7 +1,6 @@
 import { BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import {
   CutBundleStatus,
-  FloorQueueStatus,
   MaterialYieldIssueStatus,
   MfgStage,
   PieceStepBundleStatus,
@@ -26,6 +25,7 @@ import {
   rowLockSql,
   withSegmentStock,
 } from './p1-kcs.fixture';
+import { phoiDoneAtOf } from './bo-hang-doi.fixture';
 
 /**
  * IT3 (P1, 18/11/2026) - KCS LƯU KẾT QUẢ chấm có thiếu, công tắc tồn đoạn bật, trên Postgres TEST thật.
@@ -880,41 +880,25 @@ describe('P1 IT3: KCS chấm có thiếu, tồn đoạn bật (integration, real
     });
 
     // ---------------------------------------------------------------------------------
-    it('AC39: lệnh có Uốn bỏ 5 chưa cắt lại KHÔNG tự đóng Phôi; cắt 5, Uốn bù 5, KCS đạt xong thì checkPhoiDone đóng dòng hàng đợi', async () => {
+    it('AC39: lệnh có Uốn bỏ 5 chưa cắt lại KHÔNG tự đóng Phôi; cắt 5, Uốn bù 5, KCS đạt xong thì lượt nền ghi phoiDoneAt (không cần dòng hàng đợi)', async () => {
       const lean = await w.makeBomRevision(39, [
         { specId: w.spec355, steps: [ProcessStep.CAT, ProcessStep.UON] },
       ]);
       const world = await w.newInvoice({ quantities: [20], bomRevisionIds: [lean] });
       const issue = await w.newIssue(world.piId);
-      const entry = await h.prisma.floorQueueEntry.create({
-        data: {
-          stage: MfgStage.PHOI,
-          productionInvoiceId: world.piId,
-          workshopId: w.ws.id,
-          position: 1,
-          status: FloorQueueStatus.RUNNING,
-          startedAt: new Date(),
-        },
-      });
       const admin = h.moduleRef.get(FloorAdminService, { strict: false });
-      const checkPhoiDone = () =>
-        (
-          h.alerts as unknown as {
-            checkPhoiDone(e: {
-              id: bigint;
-              workshopId: bigint;
-              productionInvoiceId: bigint;
-              productionInvoice: { code: string };
-            }): Promise<void>;
-          }
-        ).checkPhoiDone({
-          id: entry.id,
-          workshopId: w.ws.id,
-          productionInvoiceId: world.piId,
-          productionInvoice: { code: world.code },
-        });
-      const statusOf = async () =>
-        (await h.prisma.floorQueueEntry.findUniqueOrThrow({ where: { id: entry.id } })).status;
+      // 23/11: "xong Phôi" = production_invoices."phoiDoneAt" do lượt nền ghi (không còn dòng hàng đợi)
+      const checkPhoiDone = async () => {
+        const prev = process.env.CUT_AUTO_PULL;
+        process.env.CUT_AUTO_PULL = 'off';
+        try {
+          await h.alerts.evaluate(new Date());
+        } finally {
+          if (prev === undefined) delete process.env.CUT_AUTO_PULL;
+          else process.env.CUT_AUTO_PULL = prev;
+        }
+      };
+      const doneAtOf = () => phoiDoneAtOf(h.prisma, world.piId);
 
       // dòng mảnh Phôi của bản định mức đã KCS đạt đủ: chỉ còn phần sắt (Cắt / Uốn) quyết định tự đóng
       await w.seedPieceBatch(world, {
@@ -937,7 +921,7 @@ describe('P1 IT3: KCS chấm có thiếu, tồn đoạn bật (integration, real
       const open = await admin.computeProgress(MfgStage.PHOI, world.piId);
       expect(open.complete).toBe(false);
       await checkPhoiDone();
-      expect(await statusOf()).toBe(FloorQueueStatus.RUNNING);
+      expect(await doneAtOf()).toBeNull();
 
       // cắt bù 5 -> KCS chốt + chấm đạt; Uốn bù 5 -> KCS chốt + chấm đạt
       await cutRec(issue, world, w.spec355, 5);
@@ -947,7 +931,7 @@ describe('P1 IT3: KCS chấm có thiếu, tồn đoạn bật (integration, real
       await h.api.closeCutBundle(cutBundle.id.toString(), w.kcsA);
       await h.api.reviewCutBundle(cutBundle.id.toString(), { segments: [] }, w.kcsA);
       await checkPhoiDone();
-      expect(await statusOf()).toBe(FloorQueueStatus.RUNNING); // Uốn bù chưa báo
+      expect(await doneAtOf()).toBeNull(); // Uốn bù chưa báo
 
       await stepRec(world, ProcessStep.UON, w.spec355, 5);
       const group = await h.api.closeStepGroup(
@@ -965,7 +949,7 @@ describe('P1 IT3: KCS chấm có thiếu, tồn đoạn bật (integration, real
       const done = await admin.computeProgress(MfgStage.PHOI, world.piId);
       expect(done.complete).toBe(true);
       await checkPhoiDone();
-      expect(await statusOf()).toBe(FloorQueueStatus.DONE);
+      expect(await doneAtOf()).not.toBeNull();
     });
   });
 

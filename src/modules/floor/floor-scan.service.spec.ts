@@ -9,6 +9,7 @@ import { ProductionBatchesService } from '../production-batches/production-batch
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { CutAllocationService } from './cut-allocation.service';
 import { FloorScanService } from './floor-scan.service';
+import type { FloorStageService } from './floor-stage.service';
 import type { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
 
 const worker = (mfgRole: string): AuthenticatedUser => ({
@@ -21,6 +22,14 @@ const worker = (mfgRole: string): AuthenticatedUser => ({
   warehouseScope: 'phoi-son-han',
 });
 
+const stagePi = (id: bigint, code: string, over: Partial<Record<string, unknown>> = {}) => ({
+  productionInvoiceId: id,
+  code,
+  deadline: null,
+  missingPieces: 0,
+  ...over,
+});
+
 const laser = {
   id: 1n,
   code: 'LASER-01',
@@ -30,12 +39,6 @@ const laser = {
   processStep: null,
   qrToken: 'tok',
   isActive: true,
-};
-
-const running = {
-  status: 'RUNNING',
-  productionInvoiceId: 45n,
-  productionInvoice: { code: 'PI-45' },
 };
 
 /** Đối số đầu tiên của lần gọi đầu tiên của một jest.Mock - có kiểu rõ ràng để assert không phải dùng `any`. */
@@ -57,7 +60,6 @@ const filterPiItems = (args: {
 describe('FloorScanService', () => {
   let prisma: {
     workstation: { findUnique: jest.Mock };
-    floorQueueEntry: { findMany: jest.Mock };
     warehouse: { findUnique: jest.Mock };
     workshop: { findFirst: jest.Mock };
     productionOrder: { findMany: jest.Mock; findFirst: jest.Mock };
@@ -76,6 +78,7 @@ describe('FloorScanService', () => {
   };
   let productionBatches: { recordProductionBatch: jest.Mock; getBatchPlanBatch: jest.Mock };
   let cutAllocation: { getMachineWork: jest.Mock; getWorkshopAllocationPis: jest.Mock };
+  let stages: { listReportablePis: jest.Mock };
   let service: FloorScanService;
 
   const cutDto = {
@@ -90,7 +93,6 @@ describe('FloorScanService', () => {
     piItemRows = [{ productionInvoiceId: 45n, workshopId: 1n }];
     prisma = {
       workstation: { findUnique: jest.fn().mockResolvedValue(laser) },
-      floorQueueEntry: { findMany: jest.fn().mockResolvedValue([running]) },
       // Máy chưa gắn xưởng -> xưởng mặc định = xưởng của kho gốc 'phoi-son-han' (Phú An, id 1).
       warehouse: { findUnique: jest.fn().mockResolvedValue({ workshopId: 1n }) },
       workshop: { findFirst: jest.fn().mockResolvedValue({ id: 1n }) },
@@ -120,28 +122,44 @@ describe('FloorScanService', () => {
       getBatchPlanBatch: jest.fn().mockResolvedValue({}),
     };
     cutAllocation = {
-      getMachineWork: jest.fn().mockResolvedValue({ rows: [] }),
-      getWorkshopAllocationPis: jest.fn().mockResolvedValue([]),
+      // Mặc định: lệnh 45 nằm trong bảng chia (máy cắt: dòng của chính máy; máy khác: mọi máy cắt cùng xưởng).
+      getMachineWork: jest.fn().mockResolvedValue({
+        rows: [
+          {
+            id: '1',
+            seq: 1,
+            productionInvoiceId: '45',
+            piCode: 'PI-45',
+            barCount: 10,
+            barsDoneEst: 0,
+          },
+        ],
+      }),
+      getWorkshopAllocationPis: jest
+        .fn()
+        .mockResolvedValue([{ productionInvoiceId: '45', code: 'PI-45' }]),
     };
+    // Mặc định: lệnh 45 là lệnh duy nhất tổ Hàn / Sơn làm được.
+    stages = { listReportablePis: jest.fn().mockResolvedValue([stagePi(45n, 'PI-45')]) };
     service = new FloorScanService(
       prisma as unknown as PrismaServiceType,
       steelIssues as unknown as SteelIssuesService,
       productionBatches as unknown as ProductionBatchesService,
       cutAllocation as unknown as CutAllocationService,
+      stages as unknown as FloorStageService,
     );
   });
 
-  describe('hàng đợi theo xưởng của máy (đợt C1)', () => {
-    it('máy chưa gắn xưởng: chỉ xét hàng đợi (tổ, xưởng mặc định)', async () => {
-      await service.getContext('tok', worker('PHOI'));
-      expect(prisma.floorQueueEntry.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { stage: 'PHOI', workshopId: 1n, status: { in: ['RUNNING', 'DONE'] } },
-        }) as unknown,
-      );
+  describe('xưởng của máy + tập lệnh Hàn / Sơn (D2, 23/11/2026)', () => {
+    const hanMachine = { ...laser, id: 2n, stage: 'HAN', kind: 'PIECE' };
+
+    it('máy chưa gắn xưởng: tập lệnh Hàn tính theo xưởng mặc định', async () => {
+      prisma.workstation.findUnique.mockResolvedValue(hanMachine);
+      await service.getContext('tok', worker('HAN'));
+      expect(stages.listReportablePis).toHaveBeenCalledWith('HAN', 1n);
     });
 
-    it('máy gắn Phước An: chỉ thấy PI của hàng đợi Phước An (không đổi theo xưởng sơn)', async () => {
+    it('máy Sơn: gọi tập lệnh với xưởng của MÁY (tập lệnh tự lọc theo nơi sơn của lệnh)', async () => {
       prisma.workstation.findUnique.mockResolvedValue({
         ...laser,
         id: 8n,
@@ -150,16 +168,40 @@ describe('FloorScanService', () => {
         workshopId: 2n,
       });
       await service.getContext('tok', worker('SON'));
-      expect(prisma.floorQueueEntry.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { stage: 'SON', workshopId: 2n, status: { in: ['RUNNING', 'DONE'] } },
-        }) as unknown,
-      );
+      expect(stages.listReportablePis).toHaveBeenCalledWith('SON', 2n);
       expect(prisma.warehouse.findUnique).not.toHaveBeenCalled();
     });
 
-    it('PI của xưởng khác không có trong hàng đợi của máy -> 409 "của xưởng này"', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([]); // hàng đợi của xưởng máy trống
+    it('Phôi: không gọi tập lệnh Hàn / Sơn, stagePis rỗng', async () => {
+      const ctx = await service.getContext('tok', worker('PHOI'));
+      expect(stages.listReportablePis).not.toHaveBeenCalled();
+      expect(ctx).toMatchObject({ stagePis: [], runningPi: null, reworkPis: [] });
+    });
+
+    it('Hàn: lệnh ngoài tập -> 409 đúng câu D5 (không nhắc "Chuyển PI tiếp"), không gọi hàm báo', async () => {
+      prisma.workstation.findUnique.mockResolvedValue(hanMachine);
+      stages.listReportablePis.mockResolvedValue([]);
+      const err = await service
+        .report('tok', worker('HAN'), { ...cutDto, productionInvoiceId: '45' }, 'k')
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as Error).message).toBe(
+        'Lệnh này chưa làm được ở tổ Hàn của xưởng này (chưa có mảnh Phôi đạt KCS, hoặc đã đủ số / đã kết thúc). Tải lại màn để xem lệnh làm được.',
+      );
+      expect(stages.listReportablePis).toHaveBeenCalledWith('HAN', 1n, [45n]);
+      expect(productionBatches.recordProductionBatch).not.toHaveBeenCalled();
+    });
+
+    it('Sơn: câu 409 nói "khung Hàn"', async () => {
+      prisma.workstation.findUnique.mockResolvedValue({ ...hanMachine, stage: 'SON' });
+      stages.listReportablePis.mockResolvedValue([]);
+      await expect(
+        service.report('tok', worker('SON'), { ...cutDto, productionInvoiceId: '45' }, 'k'),
+      ).rejects.toThrow(/tổ Sơn .*chưa có khung Hàn đạt KCS/);
+    });
+
+    it('Phôi: lệnh ngoài bảng chia -> 409 "của xưởng này"', async () => {
+      cutAllocation.getMachineWork.mockResolvedValue({ rows: [] });
       await expect(
         service.report('tok', worker('PHOI'), { ...cutDto, productionInvoiceId: '45' }, 'k'),
       ).rejects.toThrow(/của xưởng này/);
@@ -177,7 +219,6 @@ describe('FloorScanService', () => {
       expect(withPi).toMatchObject({ machineWork: { rows } });
       expect(cutAllocation.getMachineWork).toHaveBeenCalledWith(1n);
 
-      prisma.floorQueueEntry.findMany.mockResolvedValue([]); // chưa có PI nào đang chạy
       const noPi = await service.getContext('tok', worker('PHOI'));
       expect(noPi).toMatchObject({ pi: null, machineWork: { rows } });
     });
@@ -255,34 +296,38 @@ describe('FloorScanService', () => {
       ).toBe(60n);
     });
 
-    it('máy CUT: mọi dòng đã xong -> mặc định về lệnh đang chạy', async () => {
+    it('máy CUT: mọi dòng đã xong -> không chọn sẵn lệnh nào (pi null), allocationPis vẫn có lệnh', async () => {
       cutAllocation.getMachineWork.mockResolvedValue({
         rows: [row('8', 1, '60', 'PI-60', 4, 4)],
         barsDoneEst: 4,
         barsLeftEst: 0,
         status: 'IDLE',
       });
-      const ctx = (await service.getContext('tok', worker('PHOI'))) as { pi: { code: string } };
-      expect(ctx.pi.code).toBe('PI-45');
+      const ctx = (await service.getContext('tok', worker('PHOI'))) as {
+        pi: unknown;
+        allocationPis: unknown[];
+      };
+      expect(ctx.pi).toBeNull();
+      expect(ctx.allocationPis).toEqual([{ productionInvoiceId: '60', code: 'PI-60' }]);
     });
 
-    it('máy STEP tổ Phôi: lấy lệnh của bảng chia theo xưởng của máy; mặc định = lệnh đang chạy', async () => {
+    it('máy STEP tổ Phôi: lấy lệnh của bảng chia theo xưởng của máy; mặc định = lệnh đầu bảng chia', async () => {
       prisma.workstation.findUnique.mockResolvedValue(stepMachine);
       cutAllocation.getWorkshopAllocationPis.mockResolvedValue([
         { productionInvoiceId: '60', code: 'PI-60' },
       ]);
+      prisma.productionInvoice.findUniqueOrThrow.mockResolvedValue({ id: 60n, code: 'PI-60' });
       const ctx = (await service.getContext('tok', worker('PHOI'))) as {
         pi: { code: string };
         allocationPis: unknown[];
       };
       expect(cutAllocation.getWorkshopAllocationPis).toHaveBeenCalledWith(1n);
       expect(ctx.allocationPis).toEqual([{ productionInvoiceId: '60', code: 'PI-60' }]);
-      expect(ctx.pi.code).toBe('PI-45');
+      expect(ctx.pi.code).toBe('PI-60');
     });
 
-    it('máy STEP tổ Phôi chưa có lệnh đang chạy: mặc định lấy lệnh đầu của bảng chia', async () => {
+    it('máy STEP tổ Phôi: mặc định lấy lệnh đầu của bảng chia (lần 2)', async () => {
       prisma.workstation.findUnique.mockResolvedValue(stepMachine);
-      prisma.floorQueueEntry.findMany.mockResolvedValue([]);
       cutAllocation.getWorkshopAllocationPis.mockResolvedValue([
         { productionInvoiceId: '60', code: 'PI-60' },
       ]);
@@ -365,26 +410,11 @@ describe('FloorScanService', () => {
     );
   });
 
-  it('PI không phải PI tổ đang chạy, cũng không phải PI cũ còn bù lỗi -> 409, không gọi hàm báo', async () => {
+  it('Phôi: lệnh không có trong bảng chia -> 409, không gọi hàm báo', async () => {
     await expect(
       service.report('tok', worker('PHOI'), { ...cutDto, productionInvoiceId: '99' }, 'k'),
     ).rejects.toThrow(ConflictException);
     expect(steelIssues.recordCutBatch).not.toHaveBeenCalled();
-  });
-
-  it('PI tổ đã chuyển qua nhưng còn SKU đang chạy -> vẫn báo được (Bù lỗi)', async () => {
-    prisma.floorQueueEntry.findMany.mockResolvedValue([
-      { status: 'DONE', productionInvoiceId: 30n, productionInvoice: { code: 'PI-30' } },
-      running,
-    ]);
-    prisma.productionOrder.findMany.mockResolvedValue([
-      { productionInvoiceItem: { productionInvoiceId: 30n } },
-    ]);
-    prisma.steelIssue.findMany.mockResolvedValue([{ id: 7n, bundles: [] }]);
-
-    await service.report('tok', worker('PHOI'), { ...cutDto, productionInvoiceId: '30' }, 'k');
-
-    expect(steelIssues.recordCutBatch).toHaveBeenCalled();
   });
 
   it('CUT: ưu tiên lần giao đang giữ đợt CUTTING của mình, ghi máy vào sổ', async () => {
@@ -739,7 +769,6 @@ describe('FloorScanService', () => {
         status: 'ISSUED',
         productionInvoice: { items: { some: { productionOrder: { floorStage: 'ACTIVE' } } } },
       });
-      expect(prisma.floorQueueEntry.findMany).not.toHaveBeenCalled();
     });
 
     describe('mã khu nhận sắt - tách theo xưởng', () => {
@@ -793,13 +822,58 @@ describe('FloorScanService', () => {
       });
     });
 
-    it('tổ chưa chạy PI nào và không chọn PI -> pi: null (màn "chờ QLSX chuyển PI")', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([]);
+    it('Hàn: ≥ 2 lệnh làm được -> trả stagePis theo thứ tự BE, không chọn sẵn (pi null)', async () => {
+      prisma.workstation.findUnique.mockResolvedValue({
+        ...laser,
+        id: 2n,
+        stage: 'HAN',
+        kind: 'PIECE',
+      });
+      stages.listReportablePis.mockResolvedValue([
+        stagePi(45n, 'PI-45', { deadline: new Date('2026-12-01T00:00:00Z'), missingPieces: 12 }),
+        stagePi(46n, 'PI-46'),
+      ]);
 
-      const res = await service.getContext('tok', worker('PHOI'));
+      const res = await service.getContext('tok', worker('HAN'));
 
-      expect(res).toMatchObject({ runningPi: null, reworkPis: [], pi: null });
+      expect(res).toMatchObject({
+        runningPi: null,
+        reworkPis: [],
+        stagePis: [
+          {
+            productionInvoiceId: '45',
+            code: 'PI-45',
+            deadline: '2026-12-01T00:00:00.000Z',
+            missingPieces: 12,
+          },
+          { productionInvoiceId: '46', code: 'PI-46', deadline: null, missingPieces: 0 },
+        ],
+        pi: null,
+      });
       expect(prisma.productionInvoice.findUniqueOrThrow).not.toHaveBeenCalled();
+    });
+
+    it('Hàn: đúng 1 lệnh làm được -> chọn sẵn lệnh đó', async () => {
+      prisma.workstation.findUnique.mockResolvedValue({
+        ...laser,
+        id: 2n,
+        stage: 'HAN',
+        kind: 'PIECE',
+      });
+      const res = (await service.getContext('tok', worker('HAN'))) as { pi: { code: string } };
+      expect(res.pi.code).toBe('PI-45');
+    });
+
+    it('Hàn: không còn lệnh nào làm được -> stagePis rỗng, pi null', async () => {
+      prisma.workstation.findUnique.mockResolvedValue({
+        ...laser,
+        id: 2n,
+        stage: 'HAN',
+        kind: 'PIECE',
+      });
+      stages.listReportablePis.mockResolvedValue([]);
+      const res = await service.getContext('tok', worker('HAN'));
+      expect(res).toMatchObject({ stagePis: [], pi: null });
     });
 
     it('chọn PI không báo được (không chạy, không bù lỗi) -> 409 trước khi tải dữ liệu PI', async () => {
@@ -819,7 +893,7 @@ describe('FloorScanService', () => {
       expect(steelIssues.getPhoiProgress).toHaveBeenCalledWith('45');
       expect(steelIssues.getStepProgress).not.toHaveBeenCalled();
       expect(res).toMatchObject({
-        runningPi: { productionInvoiceId: '45', code: 'PI-45' },
+        runningPi: null,
         reworkPis: [],
         pi: {
           productionInvoiceId: '45',
@@ -1102,43 +1176,6 @@ describe('FloorScanService', () => {
         },
       });
       expect(steelIssues.getPhoiProgress).not.toHaveBeenCalled();
-    });
-
-    it('PI tổ đã chuyển qua nhưng còn SKU đang chạy hiện ở reworkPis (kèm giờ chuyển), chọn được để bù lỗi', async () => {
-      const endedAt = new Date('2026-10-14T09:00:00Z');
-      prisma.floorQueueEntry.findMany.mockResolvedValue([
-        { status: 'DONE', productionInvoiceId: 30n, productionInvoice: { code: 'PI-30' }, endedAt },
-        running,
-      ]);
-      prisma.productionOrder.findMany
-        .mockResolvedValueOnce([{ productionInvoiceItem: { productionInvoiceId: 30n } }]) // còn SKU ACTIVE
-        .mockResolvedValueOnce([order]); // danh sách SKU của PI đang xem
-      prisma.productionInvoice.findUniqueOrThrow.mockResolvedValue({ id: 30n, code: 'PI-30' });
-
-      const res = await service.getContext('tok', worker('PHOI'), '30');
-
-      expect(res).toMatchObject({
-        runningPi: { productionInvoiceId: '45', code: 'PI-45' },
-        reworkPis: [{ productionInvoiceId: '30', code: 'PI-30', endedAt }],
-        pi: { productionInvoiceId: '30', code: 'PI-30' },
-      });
-    });
-
-    it('PI đã xong hẳn (không còn SKU nào đang chạy) KHÔNG nằm trong reworkPis và không chọn được', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([
-        {
-          status: 'DONE',
-          productionInvoiceId: 30n,
-          productionInvoice: { code: 'PI-30' },
-          endedAt: new Date(),
-        },
-        running,
-      ]);
-      prisma.productionOrder.findMany.mockResolvedValue([]); // không SKU ACTIVE nào
-
-      await expect(service.getContext('tok', worker('PHOI'), '30')).rejects.toThrow(
-        ConflictException,
-      );
     });
   });
 
