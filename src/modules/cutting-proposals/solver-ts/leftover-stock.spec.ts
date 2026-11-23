@@ -1,7 +1,8 @@
 /**
- * CS2 (anh Nhân 20/11/2026): cây lẻ trong kho Phôi của xưởng làm lệnh. Bộ giải THẬT (HiGHS):
- * - dùng cây lẻ trước khi nó BỚT được cây phải mua, tối đa đúng số cây đang có (kể cả khi cây lẻ hao hơn cây mua);
- * - phần còn thiếu cắt từ chiều dài mua (1 chiều dài);
+ * CS2 (anh Nhân 20/11/2026, chốt lại 23/11 câu 1 chọn B): cây lẻ trong kho Phôi của xưởng làm lệnh. Bộ giải THẬT (HiGHS):
+ * - xếp đoạn lên cây lẻ TRƯỚC, kể cả khi không bớt được cây mua nào, tối đa đúng số cây đang có (kể cả khi cây lẻ hao hơn cây mua);
+ * - phần còn thiếu cắt từ chiều dài mua (1 chiều dài), ít cây nhất; cây mua cắt cho hết (đoạn dư trong giới hạn như thường);
+ * - phần còn thiếu không vừa kiểu cắt nào trong ngưỡng thì được 1 "cây mua cuối" cắt tự do (vượt ngưỡng -> KHSX xin đặc cách);
  * - cây lẻ không cắt được đoạn nào thì không dùng.
  */
 import { getHighs, Highs } from './highs-solver';
@@ -30,7 +31,6 @@ describe('CS2 - cây lẻ trong kho (bộ giải thật)', () => {
     expect(r.bars_by_length).toEqual({ '6000': 2 });
   });
 
-  // 23/11 (review Sang): cây lẻ chỉ được cắt khi BỚT được cây phải mua (tầng 0 = ít cây mua nhất).
   it('cây lẻ bớt được 1 cây mua (5 đoạn 1990, 1 cây lẻ 4500): dùng cây lẻ dù hao hơn, chỉ mua 1 cây 6000', () => {
     const r = optimizeMaterial(highs, SIZES, [5], [6000, 4500], TRIM, KERF, {
       ...OPTS,
@@ -43,14 +43,70 @@ describe('CS2 - cây lẻ trong kho (bộ giải thật)', () => {
     expect(r.produced[0]).toBeGreaterThanOrEqual(5);
   });
 
-  it('cây lẻ KHÔNG bớt được cây mua nào (6 đoạn: vẫn phải mua 2 cây 6000) -> không cắt cây lẻ', () => {
+  // Anh Nhân 23/11 câu 1 chọn B (trước đó 21-23/11: cây lẻ không bớt được cây mua thì không cắt).
+  it('cây lẻ KHÔNG bớt được cây mua nào (6 đoạn: vẫn phải mua 2 cây 6000) -> VẪN cắt cây lẻ trước, 2 cây 6000 cắt cho hết', () => {
     const r = optimizeMaterial(highs, SIZES, DEMANDS, [6000, 4500], TRIM, KERF, {
       ...OPTS,
       lengthCaps: { 4500: 1 },
     });
     expect(r.feasible).toBe(true);
     if (!r.feasible) return;
+    expect(r.bars_by_length).toEqual({ '4500': 1, '6000': 2 });
+    // 2 đoạn trên cây lẻ + 2 cây 6000 cắt đủ 3 đoạn = 8 (2 đoạn dư) - cây mua không bỏ khúc dài.
+    expect(r.produced[0]).toBe(8);
+    expect(r.plan.filter((p) => p.stock_length === 6000).every((p) => p.counts[0] === 3)).toBe(
+      true,
+    );
+  });
+
+  it('không cho đoạn dư: phần còn thiếu đi "cây mua cuối" cắt tự do (1 đoạn trên cây 6000), không thêm cây mua', () => {
+    const r = optimizeMaterial(highs, SIZES, DEMANDS, [6000, 4500], TRIM, KERF, {
+      ...OPTS,
+      maxSurplus: 0,
+      lengthCaps: { 4500: 1 },
+    });
+    expect(r.feasible).toBe(true);
+    if (!r.feasible) return;
+    expect(r.bars_by_length).toEqual({ '4500': 1, '6000': 2 });
+    expect(r.produced).toEqual([6]);
+    expect(
+      r.plan
+        .filter((p) => p.stock_length === 6000)
+        .map((p) => p.counts[0])
+        .sort(),
+    ).toEqual([1, 3]);
+  });
+
+  it('cây mua cuối chỉ có khi CÓ cắt cây lẻ: không cây lẻ thì kiểu cắt cây mua vẫn theo ngưỡng (bài thường không đổi)', () => {
+    const r = optimizeMaterial(highs, SIZES, DEMANDS, [6000, 1500], TRIM, KERF, {
+      ...OPTS,
+      maxSurplus: 0,
+      lengthCaps: { 1500: 3 },
+    });
+    expect(r.feasible).toBe(true);
+    if (!r.feasible) return;
     expect(r.bars_by_length).toEqual({ '6000': 2 });
+  });
+
+  it('cây mua cuối giữ luật số cỡ/cây (MC Laser 4 cỡ)', () => {
+    const r = optimizeMaterial(
+      highs,
+      [700, 610, 530, 450, 380],
+      [3, 3, 3, 3, 3],
+      [6000, 3000],
+      TRIM,
+      KERF,
+      {
+        maxWasteRatio: 0.02,
+        timeLimit: 10,
+        maxSurplus: 0,
+        lengthCaps: { 3000: 1 },
+      },
+    );
+    expect(r.feasible).toBe(true);
+    if (!r.feasible) return;
+    expect(r.bars_by_length['3000']).toBe(1);
+    for (const p of r.plan) expect(p.counts.filter((c) => c > 0).length).toBeLessThanOrEqual(4);
   });
 
   it('không dùng quá số cây lẻ đang có (có 2 cây nhưng chỉ cần 3 cây 4500 thì phải bù cây 6000)', () => {
@@ -129,6 +185,24 @@ describe('CS2 - cây lẻ trong kho (bộ giải thật)', () => {
     }
   });
 
+  // Thử sống bản sao 23/11: SAT-001 của lệnh thật chạy MC Tự động - trước khi cho cây mua cuối vào đường bó thì cây lẻ bị bỏ.
+  it('MC Tự động + cây lẻ không chứa hết (SAT-001 650 x4, 420 x8): cắt cây lẻ 5800 trước, cây mua cuối là 1 cây cắt tay', () => {
+    const r = optimizeMaterial(highs, [650, 420], [4, 8], [6000, 5800], 10, 2.5, {
+      maxWasteRatio: 0.01,
+      timeLimit: 10,
+      maxSurplus: 0,
+      lengthCaps: { 5800: 1 },
+      bundle: { factors: [14, 16, 18, 20], maxManualBars: 5 },
+    });
+    expect(r.feasible).toBe(true);
+    if (!r.feasible) return;
+    expect(r.machine).toBe('tu_dong');
+    expect(r.bars_by_length).toEqual({ '5800': 1, '6000': 1 });
+    expect(r.produced).toEqual([4, 8]);
+    for (const row of r.plan) expect(row.bundles).toEqual({ '1': row.bars });
+    expect(r.bundle_summary?.manual_bars).toBe(2);
+  });
+
   it('optimizeOneMaterial: chiều dài mua vẫn là 1 (6000), cây lẻ đi kèm trong kiểu cắt', () => {
     const r = optimizeOneMaterial(highs, SIZES, [5], [6000], TRIM, KERF, 20, {
       timeLimitSec: 10,
@@ -194,8 +268,8 @@ describe('CS2 - câu 2b: dùng cây lẻ kể cả khi vượt ngưỡng (KHSX x
     highs = await getHighs();
   });
 
-  // 20/11 bản đầu cắt cả cây lẻ 5800 lẫn 1 cây 6000 cho ca này (2 cây cho việc 1 cây làm được) - sai, sửa 23/11.
-  it('ca thật SAT-001 (650 x4, 420 x8, ngưỡng 1 %): cây lẻ 5800 không chứa hết -> vẫn mua 1 cây 6000, KHÔNG cắt cây lẻ', () => {
+  // Đúng ví dụ trong file hỏi anh Nhân 23/11, anh chọn B: cắt cây lẻ 5800 trước, phần còn thiếu sang 1 cây 6000.
+  it('ca thật SAT-001 (650 x4, 420 x8, ngưỡng 1 %): cắt cây lẻ 5800 trước, phần thiếu sang 1 cây 6000 (cắt cho hết)', () => {
     const r = optimizeOneMaterial(highs, [650, 420], [4, 8], [6000], 10, 2.5, 1, {
       timeLimitSec: 10,
       maxSurplus: 10,
@@ -203,9 +277,25 @@ describe('CS2 - câu 2b: dùng cây lẻ kể cả khi vượt ngưỡng (KHSX x
     });
     expect(r.feasible).toBe(true);
     if (!r.feasible) return;
-    expect(r.plan.filter((p) => p.stock_length === 5800)).toEqual([]);
-    expect(r.total_bars).toBe(1);
-    expect(r.over_waste).toBe(false);
+    const at = (L: number) =>
+      r.plan.filter((p) => p.stock_length === L).reduce((s, p) => s + p.bars, 0);
+    expect(at(5800)).toBe(1);
+    expect(at(6000)).toBe(1);
+    expect(r.over_waste).toBe(true);
+  });
+
+  it('SAT-001 không cho đoạn dư: phần thiếu (1 đoạn 420) nằm trên cây mua cuối, hao vượt ngưỡng -> báo vượt', () => {
+    const r = optimizeOneMaterial(highs, [650, 420], [4, 8], [6000], 10, 2.5, 1, {
+      timeLimitSec: 10,
+      maxSurplus: 0,
+      leftovers: [{ length: 5800, count: 1 }],
+    });
+    expect(r.feasible).toBe(true);
+    if (!r.feasible) return;
+    const tail = r.plan.filter((p) => p.stock_length === 6000);
+    expect(tail).toHaveLength(1);
+    expect(tail[0].counts).toEqual([0, 1]);
+    expect(r.over_waste).toBe(true);
   });
 
   it('cây lẻ 5800 chứa hết (650 x4, 420 x6): không mua, dùng cây lẻ dù hao vượt 1 % -> báo vượt ngưỡng', () => {
