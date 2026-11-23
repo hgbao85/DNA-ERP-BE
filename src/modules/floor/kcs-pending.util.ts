@@ -7,6 +7,10 @@ import {
 } from '../../generated/prisma/client';
 import type { PrismaTx } from '../../prisma/prisma.service';
 import type { StaleItem, StaleStage } from './floor-stale.util';
+import {
+  orderNotCancelled,
+  orderNotCancelledNullable,
+} from '../../common/utils/cancelled-order.util';
 
 /**
  * Các đợt công nhân đã báo mà KCS chưa chấm (P1 "KCS tự chuyển", 18/11/2026) - MỘT nguồn dùng chung cho:
@@ -153,7 +157,11 @@ export async function listKcsPendingItems(
     yieldBundles,
   ] = await Promise.all([
     db.cutBundle.findMany({
-      where: { status: { in: [CutBundleStatus.CUTTING, CutBundleStatus.AWAITING_QC] } },
+      where: {
+        status: { in: [CutBundleStatus.CUTTING, CutBundleStatus.AWAITING_QC] },
+        // Huỷ lệnh theo SKU (23/11/2026): đợt của SKU đã huỷ KCS không chấm được - không đếm / nhắc.
+        ...orderNotCancelledNullable(),
+      },
       select: {
         status: true,
         createdAt: true,
@@ -162,7 +170,7 @@ export async function listKcsPendingItems(
       },
     }),
     db.stepBatch.findMany({
-      where: { stepBundleId: null },
+      where: { stepBundleId: null, ...orderNotCancelledNullable() },
       select: {
         productionInvoiceId: true,
         materialId: true,
@@ -174,7 +182,7 @@ export async function listKcsPendingItems(
       },
     }),
     db.stepBundle.findMany({
-      where: { status: 'AWAITING_QC' },
+      where: { status: 'AWAITING_QC', ...orderNotCancelledNullable() },
       select: {
         productionInvoiceId: true,
         submittedAt: true,
@@ -185,6 +193,7 @@ export async function listKcsPendingItems(
       where: {
         stage: { in: STAGE_ENUMS },
         status: { in: [ProductionBatchStatus.OPEN, ProductionBatchStatus.AWAITING_QC] },
+        ...orderNotCancelled(),
       },
       select: {
         stage: true,
@@ -197,7 +206,7 @@ export async function listKcsPendingItems(
       },
     }),
     db.pieceStepBatch.findMany({
-      where: { pieceStepBundleId: null },
+      where: { pieceStepBundleId: null, ...orderNotCancelled() },
       select: {
         productionOrderId: true,
         pieceId: true,
@@ -209,7 +218,7 @@ export async function listKcsPendingItems(
       },
     }),
     db.pieceStepBundle.findMany({
-      where: { status: 'AWAITING_QC' },
+      where: { status: 'AWAITING_QC', ...orderNotCancelled() },
       select: {
         submittedAt: true,
         productionOrder: {
