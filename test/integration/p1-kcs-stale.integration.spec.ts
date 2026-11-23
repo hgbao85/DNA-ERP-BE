@@ -133,10 +133,10 @@ describe('P1 IT4: tin KCS_BATCH_STALE theo tổ x xưởng (integration, real Po
     const link = tin.link as { module: string; page: string; alternatives?: unknown };
     expect(link).toMatchObject({ module: 'production', page: 'kcs-han' });
     expect(link.alternatives).toBeUndefined(); // MF1: không có alternatives
-    // người nhận: mọi KCS (kể cả KCS gắn xưởng khác), QLSX xưởng A, QLSX không gắn xưởng; QLSX xưởng B KHÔNG nhận
+    // người nhận (23/11/2026, bỏ hàng đợi - Q4 A): chỉ KCS (kể cả KCS gắn xưởng khác); QLSX không còn nhận
     const got = recipientsOf(tin);
-    expect(got).toEqual(expect.arrayContaining([kcsOther, qlsxPhuAn, qlsxFree]));
-    expect(got).not.toContain(qlsxPhuocAn);
+    expect(got).toEqual(expect.arrayContaining([kcsOther]));
+    for (const q of [qlsxPhuAn, qlsxPhuocAn, qlsxFree]) expect(got).not.toContain(q);
     // xưởng B không có đợt quá hạn: không có tin
     expect(await tinsOf(phuocAn)).toHaveLength(0);
     // tin cũ được đóng

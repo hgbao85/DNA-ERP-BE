@@ -13,6 +13,7 @@ import { FloorController } from './floor.controller';
 import { FloorRealtimeInterceptor } from './floor-realtime.interceptor';
 import { FloorReviewService } from './floor-review.service';
 import { FloorScanService } from './floor-scan.service';
+import { FloorStageService } from './floor-stage.service';
 import { FloorStatsService } from './floor-stats.service';
 
 /** QR tại máy - xem FloorController. */
@@ -32,6 +33,7 @@ import { FloorStatsService } from './floor-stats.service';
     CutAllocationFollowUpService,
     CutMachineStatsService,
     FloorScanService,
+    FloorStageService,
     FloorReviewService,
     FloorStatsService,
     FloorRealtimeInterceptor,

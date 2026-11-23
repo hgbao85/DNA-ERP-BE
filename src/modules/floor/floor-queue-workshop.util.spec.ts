@@ -1,7 +1,6 @@
 import { MfgStage } from '../../generated/prisma/client';
 import {
   loadDefaultWorkshopId,
-  queueLockKey,
   queueWorkshopIdOfPi,
   queueWorkshopIdsOfPis,
   resolveQueueWorkshopId,
@@ -70,10 +69,8 @@ describe('floor-queue-workshop.util', () => {
     expect(son.get('11')).toBe(PHU_AN);
   });
 
-  it('queueWorkshopIdOfPi + khoá advisory', async () => {
+  it('queueWorkshopIdOfPi', async () => {
     const db = makeDb({ items: [{ productionInvoiceId: 10n, workshopId: PHUOC_AN }] });
     expect(await queueWorkshopIdOfPi(db, MfgStage.SON, 10n)).toBe(PHU_AN);
-    expect(queueLockKey('SON', PHU_AN)).toBe('floor-queue:SON:1');
-    expect(queueLockKey('SON', null)).toBe('floor-queue:SON:none');
   });
 });

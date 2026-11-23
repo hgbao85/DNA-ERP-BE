@@ -21,6 +21,7 @@ import {
 import { CutSnapshotCache } from './cut-allocation-snapshot';
 import type { SteelGap } from './cut-allocation-types';
 import { FloorAdminService } from './floor-admin.service';
+import { FloorStageService } from './floor-stage.service';
 import { KCS_STALE_HOURS, listKcsPendingItems } from './kcs-pending.util';
 import { groupStaleByQueueWorkshop, staleBucketKey, type StaleBucket } from './floor-stale.util';
 
@@ -51,16 +52,15 @@ function autoPullEnabled(): boolean {
 }
 
 /**
- * Nhắc QLSX: (1) tổ Hàn/Sơn báo ĐỦ số cần của PI đang chạy -> kiểm + "Chuyển PI tiếp"; (2) đợt công
- * nhân đã báo mà KCS chưa chấm quá KCS_STALE_HOURS giờ (KCS_BATCH_STALE, từ P1; QLSX không còn "gửi KCS"). Chỉ là nhắc - không chặn, không tự chuyển PI. (3) Tổ PHÔI không còn
- * nhắc: lệnh xong Phôi khi mọi dòng tổ Phôi đã KCS đạt đủ thì hệ thống TỰ đóng
- * (FloorAdminService.autoCompletePhoi) rồi báo FLOOR_PHOI_DONE. (4) Máy cắt còn ≤ 20 cây / đã cắt
- * hết việc được chia thì báo KHSX + QLSX.
+ * Việc nền của sàn xưởng (23/11/2026: hàng đợi xưởng đã bỏ nên không còn nhắc "tổ báo đủ số" / "Chuyển PI tiếp"):
+ * (1) lệnh xong Phôi (mọi dòng tổ Phôi đã KCS đạt đủ) thì TỰ ghi `phoiDoneAt` (checkPhoiDone), không gửi tin;
+ * (2) đợt công nhân đã báo mà KCS chưa chấm quá KCS_STALE_HOURS giờ (KCS_BATCH_STALE, chỉ gửi KCS); (3) máy cắt còn ≤ 20 cây /
+ * đã cắt hết việc được chia thì báo KHSX + QLSX, máy rảnh tự kéo lệnh (CUT_AUTO_PULL) và báo thủ kho xuất sắt.
  *
  * Mỗi nhắc chỉ phát MỘT lần cho tới khi được xử lý: NotificationsService.emit() với dedupeKey đang
  * mở sẽ GỘP vào thông báo cũ và đánh dấu CHƯA ĐỌC lại (mergeIntoExisting), nên quét định kỳ mà gọi
- * emit() mãi thì QLSX bị nhắc lại mỗi 10 phút. Vì vậy tự kiểm tra thông báo đang mở trước, có rồi
- * thì bỏ qua. Thông báo tự đóng (resolve) khi hết lý do: PI không còn chạy / hết đợt quá hạn.
+ * emit() mãi thì người nhận bị nhắc lại mỗi 10 phút. Vì vậy tự kiểm tra thông báo đang mở trước, có rồi
+ * thì bỏ qua. Thông báo tự đóng (resolve) khi hết lý do.
  */
 @Injectable()
 export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
@@ -83,6 +83,7 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly admin: FloorAdminService,
+    private readonly stages: FloorStageService,
     private readonly notifications: NotificationsService,
     private readonly cutAllocation: CutAllocationService,
     private readonly realtime: RealtimeService,
@@ -168,7 +169,7 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
       }
     };
     try {
-      await timed('stageComplete', () => this.checkStageComplete());
+      await timed('phoiDone', () => this.checkPhoiDone());
       await timed('stale', () => this.checkStale(now));
       await timed('cutMachines', () => this.checkCutMachines(cache));
       await timed('pullSteelIssued', () => this.checkPullSteelIssued(cache));
@@ -200,82 +201,43 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
     this.dispatch(queued.urgent);
   }
 
-  private async checkStageComplete(): Promise<void> {
-    // PHÔI: cả dòng đang chạy lẫn đang chờ (đủ số thì tự đóng); Hàn/Sơn: chỉ dòng đang chạy.
-    const entries = await this.prisma.floorQueueEntry.findMany({
-      where: { status: { in: ['RUNNING', 'QUEUED'] } },
-      include: { productionInvoice: { select: { code: true } } },
-    });
-    const running = entries.filter((e) => e.stage !== MfgStage.PHOI && e.status === 'RUNNING');
-    for (const e of entries) {
-      if (e.stage === MfgStage.PHOI) {
-        await this.checkPhoiDone(e);
-        continue;
-      }
-      if (e.status !== 'RUNNING') continue;
-      const progress = await this.admin
-        .computeProgress(e.stage, e.productionInvoiceId)
-        .catch(() => null);
-      if (progress?.complete) {
-        await this.emitOnce(
-          'FLOOR_STAGE_COMPLETE',
-          `floor-stage-complete:${e.id}`,
-          e.id.toString(),
-          {
-            stage: e.stage,
-            piCode: e.productionInvoice.code,
-            ...(e.workshopId != null ? { workshopId: String(e.workshopId) } : {}),
-          },
-        );
-      }
-    }
-    // Đóng nhắc của PI không còn chạy (QLSX đã "Chuyển PI tiếp"); nhắc cũ của tổ Phôi cũng đóng
-    // (Phôi tự tính, không ai bấm).
-    const open = await this.prisma.notification.findMany({
-      where: { type: 'FLOOR_STAGE_COMPLETE', recipients: { some: { resolvedAt: null } } },
-      select: { entityId: true },
-    });
-    const runningIds = new Set(running.map((e) => e.id.toString()));
-    for (const n of open) {
-      if (n.entityId && !runningIds.has(n.entityId)) {
-        await this.notifications.resolve({
-          entityType: 'FLOOR_QUEUE_ENTRY',
-          entityId: n.entityId,
-          types: ['FLOOR_STAGE_COMPLETE'],
-        });
-      }
-    }
-  }
-
   /**
-   * "Xong Phôi" tự tính: tiến độ tổ Phôi của PI có `required > 0 && passed >= required` (passed đã
-   * chặn trần từng dòng nên bằng required nghĩa là MỌI dòng - cỡ đoạn × công đoạn, kể cả mảnh Phôi
-   * - đã KCS đạt đủ) thì tự đóng dòng hàng đợi, báo QLSX.
+   * "Xong Phôi" tự tính (23/11/2026, bỏ hàng đợi): duyệt lệnh chưa DONE / CANCELLED, chưa có `phoiDoneAt`, có dòng chia máy cắt
+   * hoặc đã có ≥ 1 đợt cắt. Tiến độ tổ Phôi có `required > 0 && passed >= required` (passed đã chặn trần từng dòng nên bằng
+   * required nghĩa là MỌI dòng - cỡ đoạn × công đoạn, kể cả mảnh Phôi - đã KCS đạt đủ) thì ghi `phoiDoneAt` và phát realtime
+   * 'floor' để bảng chia / màn quét tải lại. Không gửi tin. Lệnh tính tiến độ lỗi thì bỏ qua (không coi là xong).
    */
-  private async checkPhoiDone(e: {
-    id: bigint;
-    workshopId?: bigint | null;
-    productionInvoiceId: bigint;
-    productionInvoice: { code: string };
-  }): Promise<void> {
-    const progress = await this.admin
-      .computeProgress(MfgStage.PHOI, e.productionInvoiceId)
-      .catch(() => null);
-    if (!progress || !(progress.required > 0 && progress.passed >= progress.required)) return;
+  private async checkPhoiDone(): Promise<void> {
     try {
-      const r = await this.admin.autoCompletePhoi(e.id);
-      if (!r.closed) return;
-      // Màn hàng đợi tổ Phôi của QLSX tự tải lại (dòng vừa đóng / lệnh kế vừa chạy).
-      this.publishFloorChanged('phoi-auto-complete');
-      await this.emitOnce('FLOOR_PHOI_DONE', `floor-phoi-done:${e.id}`, e.id.toString(), {
-        piCode: e.productionInvoice.code,
-        nextPiCode: r.nextPiCode,
-        ...(e.workshopId != null ? { workshopId: String(e.workshopId) } : {}),
+      const candidates = await this.prisma.productionInvoice.findMany({
+        where: {
+          phoiDoneAt: null,
+          status: { notIn: ['DONE', 'CANCELLED'] },
+          OR: [
+            { cutAllocations: { some: {} } },
+            { steelIssues: { some: { bundles: { some: {} } } } },
+          ],
+        },
+        select: { id: true, code: true },
       });
-    } catch (err) {
-      this.logger.error(
-        `Auto-close Phôi ${e.productionInvoice.code} failed: ${(err as Error).message}`,
+      if (candidates.length === 0) return;
+      const progress = await this.stages.progressMap(
+        MfgStage.PHOI,
+        candidates.map((c) => c.id),
       );
+      let closed = 0;
+      for (const c of candidates) {
+        const p = progress.get(c.id.toString());
+        if (!p || !(p.required > 0 && p.passed >= p.required)) continue;
+        try {
+          if (await this.admin.autoCompletePhoi(c.id)) closed += 1;
+        } catch (err) {
+          this.logger.error(`Auto-close Phôi ${c.code} failed: ${(err as Error).message}`);
+        }
+      }
+      if (closed > 0) this.publishFloorChanged('phoi-auto-complete');
+    } catch (e) {
+      this.logger.error(`Check Phôi done failed: ${(e as Error).message}`);
     }
   }
 
@@ -312,17 +274,6 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
           for (const m of progress) {
             seen.add(m.workstationId);
             await this.checkCutMachine(m);
-          }
-          // Đối soát dữ liệu cũ / lần follow-up bị lỗi: lệnh đã Bắt đầu có dòng chia mà thiếu dòng hàng
-          // đợi Phôi thì xếp vào cuối hàng đợi. Lỗi chỉ ghi log.
-          try {
-            await this.followUp.queueMissingPhoi(
-              await this.cutAllocation.startedAllocationPiIds(w.workshopId, cache),
-            );
-          } catch (e) {
-            this.logger.error(
-              `Reconcile Phôi queue (xưởng ${w.workshopId}) failed: ${(e as Error).message}`,
-            );
           }
         } catch (e) {
           allLoaded = false;
@@ -373,7 +324,7 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Gọi kéo lệnh cho các máy rảnh của 1 xưởng rồi báo: thêm lệnh vào hàng đợi Phôi, báo KHSX/QLSX
+   * Gọi kéo lệnh cho các máy rảnh của 1 xưởng rồi báo: báo KHSX/QLSX
    * (CUT_ORDER_PULLED), báo thủ kho xuất sắt nếu sắt còn trong kho (CUT_PULL_STEEL_TO_ISSUE), phát
    * realtime. Trả true khi đã kéo (dòng chia đã ghi). Lỗi chỉ ghi log.
    */
@@ -392,7 +343,7 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
     if (!result) return false;
     // Đã ghi dòng chia mới: snapshot đã dựng của xưởng này không còn đúng.
     cache.invalidate(workshopId);
-    // Xếp hàng đợi Phôi + báo thủ kho xuất sắt (follow-up không bao giờ ném lỗi).
+    // Báo thủ kho xuất sắt (follow-up không bao giờ ném lỗi).
     await this.followUp.afterAllocated({
       workshopId: result.workshopId,
       orders: result.orders.map((o) => ({
@@ -637,8 +588,8 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Đợt công nhân đã báo mà KCS chưa chấm (đang mở + đã chốt chưa chấm xong) quá KCS_STALE_HOURS giờ: mỗi (tổ,
-   * xưởng hàng đợi) 1 tin KCS_BATCH_STALE; người nhận là KCS và QLSX của xưởng đó (và QLSX chung) nhờ
-   * params.workshopId. Dòng bị chặn (lệnh dừng / chưa gắn SKU) không tính. Cuối lượt đóng mọi tin
+   * xưởng của tổ - Sơn theo nơi sơn) 1 tin KCS_BATCH_STALE; người nhận chỉ là KCS (bỏ QLSX từ 23/11/2026),
+   * params.workshopId ghi xưởng. Dòng bị chặn (lệnh dừng / chưa gắn SKU) không tính. Cuối lượt đóng mọi tin
    * FLOOR_BATCH_STALE còn mở (ngừng phát từ P1, kể cả entityId kiểu cũ).
    */
   private async checkStale(now: Date): Promise<void> {
@@ -726,10 +677,8 @@ export class FloorAlertsService implements OnModuleInit, OnModuleDestroy {
   private async emitOnce(
     type: Extract<
       NotificationType,
-      | 'FLOOR_STAGE_COMPLETE'
       | 'FLOOR_BATCH_STALE'
       | 'KCS_BATCH_STALE'
-      | 'FLOOR_PHOI_DONE'
       | 'CUT_MACHINE_LOW_WORK'
       | 'CUT_MACHINE_IDLE'
       | 'CUT_ORDER_PULLED'

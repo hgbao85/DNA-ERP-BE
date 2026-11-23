@@ -1,11 +1,9 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { MfgStage } from '../../generated/prisma/client';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import type { CutPullSteelToIssueParams } from '../notifications/notification-types';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CutAllocationService } from './cut-allocation.service';
 import type { AllocatedOrder, SteelGap } from './cut-allocation-types';
-import { FloorAdminService } from './floor-admin.service';
 
 export type CutAllocationSource = 'AUTO_PULL' | 'MANUAL';
 
@@ -35,11 +33,10 @@ export function buildPullSteelParams(args: {
 }
 
 /**
- * Việc theo sau khi lệnh được chia cho máy cắt (QLSX chia tay hoặc máy rảnh tự kéo): đưa lệnh vào
- * hàng đợi Phôi và báo thủ kho xuất sắt xuống Phôi. Chạy SAU khi transaction chia đã commit, mỗi lệnh
- * 1 transaction riêng (khoá hàng đợi Phôi) nên không lồng khoá. Không bao giờ ném lỗi: lỗi chỉ ghi
- * log, việc chia đã xong. Xếp hàng đợi Phôi không phụ thuộc FLOOR_ALERTS (đây là sự kiện do người
- * bấm); còn tin xuất sắt thì FLOOR_ALERTS=off không phát, vì chỉ lượt nền mới đóng tin này (tắt nhắc
+ * Việc theo sau khi lệnh được chia cho máy cắt (QLSX chia tay hoặc máy rảnh tự kéo): báo thủ kho xuất
+ * sắt xuống Phôi (hàng đợi Phôi đã bỏ 23/11/2026, không còn xếp lệnh vào hàng đợi). Chạy SAU khi
+ * transaction chia đã commit. Không bao giờ ném lỗi: lỗi chỉ ghi log, việc chia đã xong. Tin xuất
+ * sắt thì FLOOR_ALERTS=off không phát, vì chỉ lượt nền mới đóng tin này (tắt nhắc
  * nền mà phát thì tin mở mãi, giống PaintTransferReminderService.refreshForOrder).
  */
 @Injectable()
@@ -48,7 +45,6 @@ export class CutAllocationFollowUpService {
 
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
-    private readonly admin: FloorAdminService,
     private readonly notifications: NotificationsService,
     private readonly cutAllocation: CutAllocationService,
   ) {}
@@ -59,11 +55,6 @@ export class CutAllocationFollowUpService {
     source: CutAllocationSource;
   }): Promise<void> {
     if (args.orders.length === 0) return;
-    try {
-      await this.admin.ensurePhoiQueued(args.orders.map((o) => BigInt(o.productionInvoiceId)));
-    } catch (e) {
-      this.logger.error(`Queue allocated orders to Phôi failed: ${(e as Error).message}`);
-    }
     if (process.env.FLOOR_ALERTS === 'off') return;
     const recheck = await this.loadRecheckPiIds(args.orders);
     // Các cặp vừa chia chỉ quyết định CÓ phát hay không; nội dung tin lấy từ toàn bộ chỗ thiếu sắt
@@ -115,26 +106,6 @@ export class CutAllocationFollowUpService {
     } catch (e) {
       this.logger.error(`Load current steel gaps failed: ${(e as Error).message}`);
       return null;
-    }
-  }
-
-  /**
-   * Đối soát: lệnh có dòng chia mà chưa có dòng hàng đợi Phôi nào (mọi trạng thái) thì xếp vào cuối
-   * hàng đợi Phôi. Lệnh đã có dòng thì không đụng tới. Lỗi chỉ ghi log.
-   */
-  async queueMissingPhoi(piIds: bigint[]): Promise<void> {
-    if (piIds.length === 0) return;
-    try {
-      const have = await this.prisma.floorQueueEntry.findMany({
-        where: { stage: MfgStage.PHOI, productionInvoiceId: { in: piIds } },
-        select: { productionInvoiceId: true },
-      });
-      const haveIds = new Set(have.map((h) => h.productionInvoiceId.toString()));
-      const missing = piIds.filter((id) => !haveIds.has(id.toString()));
-      if (missing.length === 0) return;
-      await this.admin.ensurePhoiQueued(missing);
-    } catch (e) {
-      this.logger.error(`Reconcile Phôi queue failed: ${(e as Error).message}`);
     }
   }
 

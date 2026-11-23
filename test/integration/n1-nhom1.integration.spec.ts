@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { ClsModule } from 'nestjs-cls';
@@ -8,7 +8,6 @@ import { envValidationSchema } from '../../src/config/env.validation';
 import { WorkshopScopeService } from '../../src/common/workshop-scope/workshop-scope.service';
 import {
   CutAllocationLogAction,
-  FloorQueueStatus,
   MfgStage,
   ProductionBatchStatus,
   ProductionInvoiceStatus,
@@ -303,152 +302,6 @@ describe('N1 nhóm 1: hàng đợi, chia máy tay, nhắc Kết thúc, nhắc ch
   const msg = (e: unknown): string => (e as { message: string }).message;
 
   // =====================================================================================
-  // 1. Chuyển lệnh tiếp + expectedRunningPiId
-  // =====================================================================================
-  describe('1. advance (Chuyển lệnh tiếp) với expectedRunningPiId', () => {
-    const STAGE = 'PHOI' as const;
-
-    /** Xưởng mới + 3 lệnh: A đang chạy, B và C đang chờ (B đứng trước). */
-    async function setupQueue(tag: string, running = true) {
-      const ws = await fx.makeWorkshop(tag);
-      const a = await fx.makeOrder(ws.workshopId, `${tag}a`);
-      const b = await fx.makeOrder(ws.workshopId, `${tag}b`);
-      const c = await fx.makeOrder(ws.workshopId, `${tag}c`);
-      queueEntryPiIds.push(a, b, c);
-      const mk = (pi: bigint, position: number, status: FloorQueueStatus) =>
-        prisma.floorQueueEntry.create({
-          data: {
-            stage: MfgStage.PHOI,
-            productionInvoiceId: pi,
-            workshopId: ws.workshopId,
-            position,
-            status,
-            startedAt: status === FloorQueueStatus.RUNNING ? new Date() : null,
-          },
-        });
-      await mk(a, 1, running ? FloorQueueStatus.RUNNING : FloorQueueStatus.QUEUED);
-      await mk(b, 2, FloorQueueStatus.QUEUED);
-      await mk(c, 3, FloorQueueStatus.QUEUED);
-      const statusOf = async () => {
-        const rows = await prisma.floorQueueEntry.findMany({
-          where: { workshopId: ws.workshopId, stage: MfgStage.PHOI },
-        });
-        const m = new Map(rows.map((r) => [r.productionInvoiceId.toString(), r.status]));
-        return { a: m.get(a.toString()), b: m.get(b.toString()), c: m.get(c.toString()) };
-      };
-      return { ws, a, b, c, statusOf, wsId: ws.workshopId.toString() };
-    }
-
-    it('expected = lệnh đang chạy: chuyển bình thường (A xong, B chạy, C vẫn chờ)', async () => {
-      const q = await setupQueue('ADV1');
-      await admin.advance(STAGE, fx.userId, q.wsId, q.a.toString());
-      expect(await q.statusOf()).toEqual({
-        a: FloorQueueStatus.DONE,
-        b: FloorQueueStatus.RUNNING,
-        c: FloorQueueStatus.QUEUED,
-      });
-    });
-
-    it('2 QLSX bấm cùng lúc (cùng expected = A): đúng 1 đạt, 1 bị 409 đúng câu; B chạy, C KHÔNG bị đóng nhầm', async () => {
-      const q = await setupQueue('ADV2');
-      const call = () => admin.advance(STAGE, fx.userId, q.wsId, q.a.toString());
-      const out = await raceWith([lockSql(`floor-queue:${STAGE}:${q.wsId}`)], [call, call]);
-
-      expect(out.every((o) => o.waited)).toBe(true);
-      expect(out.filter((o) => o.ok)).toHaveLength(1);
-      const failed = out.filter((o) => !o.ok);
-      expect(failed).toHaveLength(1);
-      expect(failed[0].error).toBeInstanceOf(ConflictException);
-      expect(msg(failed[0].error)).toBe(
-        'Lệnh đang chạy của tổ Phôi đã đổi (hệ thống có thể vừa tự chuyển) - tải lại màn rồi xem lại',
-      );
-      expect(await q.statusOf()).toEqual({
-        a: FloorQueueStatus.DONE,
-        b: FloorQueueStatus.RUNNING,
-        c: FloorQueueStatus.QUEUED,
-      });
-    });
-
-    it('lệnh đang chạy vừa đổi giữa lúc màn mở (hệ thống tự chuyển A -> B): bấm với expected = A bị 409, B vẫn chạy', async () => {
-      const q = await setupQueue('ADV3');
-      const swap = [
-        lockSql(`floor-queue:${STAGE}:${q.wsId}`),
-        `UPDATE "floor_queue_entries" SET "status" = 'DONE', "endedAt" = now() WHERE "productionInvoiceId" = ${q.a} AND "stage" = 'PHOI'`,
-        `UPDATE "floor_queue_entries" SET "status" = 'RUNNING', "startedAt" = now() WHERE "productionInvoiceId" = ${q.b} AND "stage" = 'PHOI'`,
-      ];
-      const [out] = await raceWith(swap, [
-        () => admin.advance(STAGE, fx.userId, q.wsId, q.a.toString()),
-      ]);
-
-      expect(out.waited).toBe(true);
-      expect(out.ok).toBe(false);
-      expect(out.error).toBeInstanceOf(ConflictException);
-      expect(msg(out.error)).toContain('Lệnh đang chạy của tổ Phôi đã đổi');
-      expect(await q.statusOf()).toEqual({
-        a: FloorQueueStatus.DONE,
-        b: FloorQueueStatus.RUNNING,
-        c: FloorQueueStatus.QUEUED,
-      });
-    });
-
-    it('expected = null: tổ đã có lệnh chạy -> 409, không đổi gì; tổ chưa chạy lệnh nào -> bắt đầu lệnh đầu hàng', async () => {
-      const busy = await setupQueue('ADV4a');
-      await expect(admin.advance(STAGE, fx.userId, busy.wsId, null)).rejects.toThrow(
-        ConflictException,
-      );
-      expect(await busy.statusOf()).toEqual({
-        a: FloorQueueStatus.RUNNING,
-        b: FloorQueueStatus.QUEUED,
-        c: FloorQueueStatus.QUEUED,
-      });
-
-      const idle = await setupQueue('ADV4b', false);
-      await admin.advance(STAGE, fx.userId, idle.wsId, null);
-      expect(await idle.statusOf()).toEqual({
-        a: FloorQueueStatus.RUNNING,
-        b: FloorQueueStatus.QUEUED,
-        c: FloorQueueStatus.QUEUED,
-      });
-    });
-
-    it('expected sai (id lệnh khác): 409; không gửi expected (undefined): không kiểm, như bản cũ', async () => {
-      const q = await setupQueue('ADV5');
-      await expect(admin.advance(STAGE, fx.userId, q.wsId, q.c.toString())).rejects.toThrow(
-        ConflictException,
-      );
-      expect((await q.statusOf()).a).toBe(FloorQueueStatus.RUNNING);
-
-      await admin.advance(STAGE, fx.userId, q.wsId);
-      expect(await q.statusOf()).toEqual({
-        a: FloorQueueStatus.DONE,
-        b: FloorQueueStatus.RUNNING,
-        c: FloorQueueStatus.QUEUED,
-      });
-    });
-
-    it('lượt tự chuyển nền (autoCompletePhoi) và bấm tay cùng lúc: bấm tay mang expected cũ bị 409, không nhảy 2 lệnh', async () => {
-      const q = await setupQueue('ADV6');
-      const aEntry = await prisma.floorQueueEntry.findFirstOrThrow({
-        where: { productionInvoiceId: q.a, stage: MfgStage.PHOI },
-      });
-      const out = await raceWith(
-        [lockSql(`floor-queue:${STAGE}:${q.wsId}`)],
-        [
-          () => admin.autoCompletePhoi(aEntry.id),
-          () => admin.advance(STAGE, fx.userId, q.wsId, q.a.toString()),
-        ],
-      );
-      expect(out.every((o) => o.waited)).toBe(true);
-      // autoCompletePhoi hoặc advance đứng trước đều được; kết quả cuối: đúng 1 lần chuyển (A xong, B chạy, C chờ)
-      expect(await q.statusOf()).toEqual({
-        a: FloorQueueStatus.DONE,
-        b: FloorQueueStatus.RUNNING,
-        c: FloorQueueStatus.QUEUED,
-      });
-    });
-  });
-
-  // =====================================================================================
   // 2 + 3. Chia máy tay, xếp hàng đợi Phôi, tắt máy
   // =====================================================================================
   describe('2. chia máy tay (cut-allocation/add + follow-up)', () => {
@@ -509,7 +362,7 @@ describe('N1 nhóm 1: hàng đợi, chia máy tay, nhắc Kết thúc, nhắc ch
       }
     });
 
-    it('lệnh đã Bắt đầu: chia được, xếp ĐÚNG 1 dòng hàng đợi Phôi (cuối hàng, hệ thống thêm); chia lần 2 không thêm dòng, không báo thủ kho lại', async () => {
+    it('lệnh đã Bắt đầu: chia được, KHÔNG tạo dòng hàng đợi Phôi (đã bỏ hàng đợi, 23/11); chia lần 2 không thêm dòng, không báo thủ kho lại', async () => {
       const s = await setupOrder('ST1', ProductionOrderFloorStage.ACTIVE);
       await fx.reserve(s.piId, s.materialId, s.ws.warehouseId, 10);
 
@@ -520,30 +373,22 @@ describe('N1 nhóm 1: hàng đợi, chia máy tay, nhắc Kết thúc, nhắc ch
       expect(rows1.reduce((n, r) => n + r.barCount, 0)).toBe(10);
       expect(rows1.every((r) => r.isManual)).toBe(true);
 
-      expect(await countPhoiEntries(s.piId)).toBe(1);
-      const entry = await prisma.floorQueueEntry.findFirstOrThrow({
-        where: { stage: MfgStage.PHOI, productionInvoiceId: s.piId },
-      });
-      expect(entry).toMatchObject({
-        status: FloorQueueStatus.QUEUED,
-        workshopId: s.ws.workshopId,
-        queuedById: null,
-      });
+      expect(await countPhoiEntries(s.piId)).toBe(0);
       const tins1 = await openTinsOfPi(s.piId);
       expect(tins1).toHaveLength(1);
       expect(tins1[0].message).toContain('QLSX vừa chia lệnh này cho máy cắt');
       expect(tins1[0].dedupeKey).toBe(`cut-pull-steel:${s.piId}`);
 
-      // bấm chia lần 2: dựng lại y nguyên -> không thêm dòng chia, không thêm hàng đợi, không gộp / phát lại tin
+      // bấm chia lần 2: dựng lại y nguyên -> không thêm dòng chia, không có hàng đợi, không gộp / phát lại tin
       const second = await manualAdd(s.ws.workshopId, s.piId, s.materialId);
       expect(second.allocated).toEqual([]);
       expect((await rowsOf(s.piId)).map((r) => r.id).sort()).toEqual(rows1.map((r) => r.id).sort());
-      expect(await countPhoiEntries(s.piId)).toBe(1);
+      expect(await countPhoiEntries(s.piId)).toBe(0);
       const tins2 = await openTinsOfPi(s.piId);
       expect(tins2.map((t) => t.id)).toEqual(tins1.map((t) => t.id));
     });
 
-    it('bấm chia 2 lần CÙNG LÚC (khoá chia theo xưởng): vẫn đúng 1 dòng hàng đợi Phôi và 1 tin', async () => {
+    it('bấm chia 2 lần CÙNG LÚC (khoá chia theo xưởng): không có dòng hàng đợi Phôi nào và đúng 1 tin', async () => {
       const s = await setupOrder('ST2', ProductionOrderFloorStage.ACTIVE);
       await fx.reserve(s.piId, s.materialId, s.ws.warehouseId, 10);
       const call = () => manualAdd(s.ws.workshopId, s.piId, s.materialId);
@@ -553,47 +398,8 @@ describe('N1 nhóm 1: hàng đợi, chia máy tay, nhắc Kết thúc, nhắc ch
       expect(out.every((o) => o.ok)).toBe(true);
       // tổng cây chia = 10 (không chia 2 lần thành 20)
       expect((await rowsOf(s.piId)).reduce((n, r) => n + r.barCount, 0)).toBe(10);
-      expect(await countPhoiEntries(s.piId)).toBe(1);
-      expect(await openTinsOfPi(s.piId)).toHaveLength(1);
-    });
-
-    it('lệnh ĐÃ nằm trong hàng đợi Phôi (đang chờ): chia tay không thêm dòng thứ hai, giữ nguyên dòng cũ', async () => {
-      const s = await setupOrder('ST3', ProductionOrderFloorStage.ACTIVE);
-      const existing = await prisma.floorQueueEntry.create({
-        data: {
-          stage: MfgStage.PHOI,
-          productionInvoiceId: s.piId,
-          workshopId: s.ws.workshopId,
-          position: 7,
-          status: FloorQueueStatus.QUEUED,
-          queuedById: fx.userId,
-        },
-      });
-      await manualAdd(s.ws.workshopId, s.piId, s.materialId);
-      const entries = await prisma.floorQueueEntry.findMany({
-        where: { stage: MfgStage.PHOI, productionInvoiceId: s.piId },
-      });
-      expect(entries.map((e) => [e.id, e.position, e.queuedById])).toEqual([
-        [existing.id, 7, fx.userId],
-      ]);
-    });
-
-    it('đối soát nền (queueMissingPhoi): lệnh có dòng chia mà thiếu hàng đợi Phôi được bổ sung đúng 1 dòng, gọi lại không thêm', async () => {
-      const s = await setupOrder('ST4', ProductionOrderFloorStage.ACTIVE);
-      await fx.reserve(s.piId, s.materialId, s.ws.warehouseId, 10);
-      // chia thẳng qua service chia (không follow-up) = lệnh có dòng chia mà chưa có hàng đợi
-      await alloc.add(fx.userId, {
-        workshopId: s.ws.workshopId.toString(),
-        productionInvoiceId: s.piId.toString(),
-        materialId: s.materialId.toString(),
-      });
       expect(await countPhoiEntries(s.piId)).toBe(0);
-
-      const started = await alloc.startedAllocationPiIds(s.ws.workshopId);
-      expect(started.map(String)).toEqual([s.piId.toString()]);
-      await followUp.queueMissingPhoi(started);
-      await followUp.queueMissingPhoi(started);
-      expect(await countPhoiEntries(s.piId)).toBe(1);
+      expect(await openTinsOfPi(s.piId)).toHaveLength(1);
     });
 
     it('3. tắt máy cắt: xoá dòng chia của máy đó (máy khác giữ nguyên) và ghi nhật ký REMOVE "Máy cắt bị tắt"', async () => {

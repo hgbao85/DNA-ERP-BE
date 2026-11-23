@@ -134,7 +134,7 @@ describe('UB8 AC3 - quyền route /floor/* chạy bằng guard thật + quyền 
 
   it.each([
     [GET, 'summary'],
-    [GET, 'queue'],
+    [GET, 'cut-allocation'],
     [GET, 'workers'],
   ] as [RequestMethod, string][])('AC3: KCS gọi GET %s %s - 403, QLSX qua', (m, p) => {
     expect(passesGuards(handlerOf(m, p), [KCS])).toBe(false);
@@ -906,6 +906,7 @@ describe('UB8 AC2 - route close gọi đúng hàm chốt (controller -> FloorRev
       {} as never,
       {} as never,
       review,
+      {} as never,
       {} as never,
       {} as never,
       {} as never,

@@ -53,11 +53,9 @@ describe('P1 UB10a - KCS_BATCH_STALE (AC18)', () => {
     expect(link).not.toHaveProperty('alternatives');
   });
 
-  it('AC18: người nhận gồm KCS_STAFF + PRODUCTION_MANAGER, không chỉ định đích danh', () => {
+  it('AC18 (đổi 23/11/2026, bỏ hàng đợi xưởng): người nhận CHỈ KCS_STAFF, không còn QLSX, không chỉ định đích danh', () => {
     const rec = def.recipients({ stage: 'HAN', count: 1, hours: 4, workshopId: '7' });
-    expect([...(rec.roles ?? [])].sort()).toEqual(
-      [BUSINESS_ROLES.KCS_STAFF, BUSINESS_ROLES.PRODUCTION_MANAGER].sort(),
-    );
+    expect(rec.roles).toEqual([BUSINESS_ROLES.KCS_STAFF]);
     expect(rec.userIds).toBeUndefined();
     expect(rec.allActiveUsers).toBeUndefined();
   });

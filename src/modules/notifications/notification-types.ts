@@ -609,9 +609,7 @@ export interface PiWorkshopChangedNotificationParams {
   reason: string;
   /** Số dòng SKU được đổi. */
   count: number;
-  /** Dòng hàng đợi tổ Phôi/Hàn/Sơn còn mở đã dời theo sang xưởng mới (16/11/2026); trống / thiếu = không có dòng nào. */
-  queueMoves?: PiWorkshopChangedQueueMove[];
-  /** Id xưởng (chuỗi số) liên quan: xưởng cũ + mới + xưởng của hàng đợi đã dời. RecipientResolver dùng để giữ QLSX xưởng cũ
+  /** Id xưởng (chuỗi số) liên quan: xưởng cũ + mới. RecipientResolver dùng để giữ QLSX xưởng cũ
    *  (thông báo phát SAU commit nên tra theo piCode chỉ thấy xưởng mới). */
   workshopIds?: string[];
   /** true khi lệnh có ÍT NHẤT 1 SKU đã duyệt lúc đổi xưởng ("Tổng hợp lệnh SX" hiện lệnh từ SKU đã duyệt đầu tiên); false = chưa
@@ -619,62 +617,11 @@ export interface PiWorkshopChangedNotificationParams {
   approved?: boolean;
 }
 
-/** 1 dòng hàng đợi đã dời khi đổi xưởng (tên xưởng, không phải id). */
-export interface PiWorkshopChangedQueueMove {
-  stage: 'PHOI' | 'HAN' | 'SON';
-  fromWorkshop: string | null;
-  toWorkshop: string | null;
-  /** Dòng đang chạy (RUNNING) ở hàng đợi cũ trước khi dời. */
-  wasRunning: boolean;
-}
-
-const QUEUE_STAGE_ORDER: PiWorkshopChangedQueueMove['stage'][] = ['PHOI', 'HAN', 'SON'];
-const QUEUE_STAGE_LABEL: Record<PiWorkshopChangedQueueMove['stage'], string> = {
-  PHOI: 'Phôi',
-  HAN: 'Hàn',
-  SON: 'Sơn',
-};
-
-/** Gom các dòng theo tên xưởng (giữ thứ tự gặp đầu tiên) rồi nối nhãn tổ theo thứ tự Phôi, Hàn, Sơn. */
-function groupStagesByWorkshop(
-  moves: PiWorkshopChangedQueueMove[],
-  workshopOf: (m: PiWorkshopChangedQueueMove) => string | null,
-): { workshop: string; stages: string }[] {
-  const groups = new Map<string, Set<PiWorkshopChangedQueueMove['stage']>>();
-  for (const m of moves) {
-    const name = workshopOf(m) ?? '(chưa có xưởng)';
-    const set = groups.get(name) ?? new Set();
-    set.add(m.stage);
-    groups.set(name, set);
-  }
-  return [...groups.entries()].map(([workshop, set]) => ({
-    workshop,
-    stages: QUEUE_STAGE_ORDER.filter((s) => set.has(s))
-      .map((s) => QUEUE_STAGE_LABEL[s])
-      .join(', '),
-  }));
-}
-
 /** Câu thông báo đổi xưởng (trung lập: người bấm là KHSX hoặc Admin). */
 export function buildPiWorkshopChangedMessage(p: PiWorkshopChangedNotificationParams): string {
   // Lý do người dùng gõ có thể đã có dấu chấm cuối -> bỏ để không thành "..".
   const reason = p.reason.trim().replace(/[.!?…]+$/u, '');
-  const parts = [`Lệnh ${p.piCode} (${p.count} SKU) đã đổi xưởng cơ khí. Lý do: ${reason}.`];
-  const moves = p.queueMoves ?? [];
-  if (moves.length > 0) {
-    for (const g of groupStagesByWorkshop(moves, (m) => m.toWorkshop)) {
-      parts.push(`Hàng đợi tổ ${g.stages} đã chuyển sang cuối hàng đợi ${g.workshop}.`);
-    }
-    for (const g of groupStagesByWorkshop(
-      moves.filter((m) => m.wasRunning),
-      (m) => m.fromWorkshop,
-    )) {
-      parts.push(
-        `Tổ ${g.stages} ở ${g.workshop} không còn lệnh đang chạy: QLSX ${g.workshop} bấm "Bắt đầu lệnh đầu hàng đợi" nếu hàng đợi còn lệnh chờ.`,
-      );
-    }
-  }
-  return parts.join(' ');
+  return `Lệnh ${p.piCode} (${p.count} SKU) đã đổi xưởng cơ khí. Lý do: ${reason}.`;
 }
 
 // Phần A – Đợt 3 (YC10, V4-5): xưởng được chọn/đổi (KHSX đổi xưởng; QLSX chỉ chọn lúc gửi Sếp khi SKU chưa có xưởng) khác xưởng
@@ -1361,9 +1308,8 @@ const notificationTypeDefinitions = {
     recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_MANAGER] }),
   } satisfies NotificationTypeDef<FloorBatchStaleParams>,
 
-  /** P1 (18/11/2026): đợt công nhân đã báo mà KCS chưa chấm quá N giờ -> KCS tổ đó + QLSX vào màn KCS chấm. ACTION_REQUIRED,
-   *  mỗi (tổ x xưởng) 1 tin, tự đóng khi hết đợt quá hạn (FloorAlertsService). Link chỉ về tab KCS của tổ, KHÔNG có
-   *  alternatives (MF1): QLSX mở tab kcs-* thì FE chuyển sang 'san-luong-xuong'. */
+  /** P1 (18/11/2026): đợt công nhân đã báo mà KCS chưa chấm quá N giờ -> KCS vào màn KCS chấm. Từ 23/11/2026 CHỈ gửi KCS (QLSX
+   *  không còn màn xem đợt chờ KCS). ACTION_REQUIRED, mỗi (tổ x xưởng) 1 tin, tự đóng khi hết đợt quá hạn (FloorAlertsService). */
   KCS_BATCH_STALE: {
     category: 'ACTION_REQUIRED',
     severity: 'WARNING',
@@ -1376,9 +1322,7 @@ const notificationTypeDefinitions = {
       module: 'production',
       page: p.stage === 'PHOI' ? 'kcs-phoi' : p.stage === 'HAN' ? 'kcs-han' : 'kcs-son',
     }),
-    recipients: () => ({
-      roles: [BUSINESS_ROLES.KCS_STAFF, BUSINESS_ROLES.PRODUCTION_MANAGER],
-    }),
+    recipients: () => ({ roles: [BUSINESS_ROLES.KCS_STAFF] }),
   } satisfies NotificationTypeDef<KcsBatchStaleParams>,
 
   /** Phôi báo xong 1 đợt cắt - chờ KCS chấm. Tự đóng khi KCS `reviewCutBundle()`. `link` thêm ở
@@ -2076,7 +2020,7 @@ const notificationTypeDefinitions = {
                 page: 'thongke',
                 params: { focus: `PI_CODE:${p.piCode}` },
               },
-              // QLSX: việc của QLSX nằm ở màn hàng đợi "Sản lượng xưởng" (không còn thấy lệnh ở "Tổng hợp lệnh SX" vì lọc theo xưởng).
+              // QLSX: không còn thấy lệnh ở "Tổng hợp lệnh SX" (lọc theo xưởng) -> mở "Sản lượng xưởng" (mặc định tab Chia máy cắt, nơi lệnh đổi xưởng hiện / mất).
               { module: 'production', page: 'san-luong-xuong' },
             ],
           },

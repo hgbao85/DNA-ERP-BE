@@ -1775,6 +1775,8 @@ model ProductionInvoice {
   cuttingRecheckRequiredAt       DateTime?
   cuttingRecheckedAt             DateTime?
   cuttingRecheckedById           String?
+  /// Thời điểm lệnh xong Phôi (mọi dòng tổ Phôi KCS đạt đủ) - FloorAlertsService ghi, thay cho dòng hàng đợi PHOI DONE (23/11/2026). NULL = chưa xong.
+  phoiDoneAt                     DateTime?
   createdAt                      DateTime                @default(now())
   updatedAt                      DateTime                @updatedAt
 

@@ -275,12 +275,14 @@ describe('P1 HT1: vai x route KCS tự chuyển (e2e, DB test thật)', () => {
       }
     });
 
-    it.each(['/floor/summary', '/floor/queue?stage=PHOI', '/floor/workers', '/floor/workstations'])(
-      'KCS gọi %s -> 403 (chỉ QLSX)',
-      async (path) => {
-        await call('kcs', 'get', path).expect(403);
-      },
-    );
+    it.each([
+      '/floor/summary',
+      '/floor/stage-progress?stage=PHOI',
+      '/floor/workers',
+      '/floor/workstations',
+    ])('KCS gọi %s -> 403 (chỉ QLSX)', async (path) => {
+      await call('kcs', 'get', path).expect(403);
+    });
 
     it('KCS không quét mã / báo tại máy: GET /floor/scan/:token và POST /floor/scan/:token/reports -> 403', async () => {
       await call('kcs', 'get', '/floor/scan/khong-co-ma').expect(403);
@@ -363,7 +365,7 @@ describe('P1 HT1: vai x route KCS tự chuyển (e2e, DB test thật)', () => {
         expect({ path, status: res.status }).toEqual({ path, status: 403 });
         const text = bodyText(res);
         expect(text).toContain('Báo cắt và công đoạn phụ làm bằng quét mã QR tại máy.');
-        expect(text).toMatch(/KCS tự chấm; QLSX hủy lần báo sai ở .{1,3}Sản lượng xưởng/);
+        expect(text).toContain('KCS tự chấm; báo sai số thì KCS sửa bằng');
         expect(text).not.toContain('gửi KCS ở');
       }
     });
@@ -377,7 +379,7 @@ describe('P1 HT1: vai x route KCS tự chuyển (e2e, DB test thật)', () => {
       expect(res.status).toBe(403);
       const text = bodyText(res);
       expect(text).toContain('Báo sản lượng Hàn / Sơn làm bằng quét mã QR tại máy.');
-      expect(text).toMatch(/KCS tự chấm; QLSX hủy lần báo sai ở .{1,3}Sản lượng xưởng/);
+      expect(text).toContain('KCS tự chấm; báo sai số thì KCS sửa bằng');
       expect(text).not.toContain('kiểm rồi gửi KCS');
     });
   });

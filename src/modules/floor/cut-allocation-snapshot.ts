@@ -1,9 +1,7 @@
 import {
   BookingStatus,
   CuttingProposalStatus,
-  FloorQueueStatus,
   FloorReportKind,
-  MfgStage,
   Prisma,
   ProdItemStageType,
   ProductionInvoiceStatus,
@@ -200,7 +198,7 @@ async function loadWorkshopData(db: PrismaTx, workshopId: bigint) {
       where: {
         status: { notIn: [ProductionInvoiceStatus.DONE, ProductionInvoiceStatus.CANCELLED] },
         items: { some: itemInWorkshop },
-        floorQueueEntries: { none: { stage: MfgStage.PHOI, status: FloorQueueStatus.DONE } },
+        phoiDoneAt: null,
       },
       select: {
         id: true,

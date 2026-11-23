@@ -14,7 +14,10 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { MfgRole, PermissionAction } from '../../generated/prisma/client';
-import { SEND_KCS_REMOVED_MESSAGE } from '../../common/constants/legacy-floor-report.constant';
+import {
+  REVERSE_REMOVED_MESSAGE,
+  SEND_KCS_REMOVED_MESSAGE,
+} from '../../common/constants/legacy-floor-report.constant';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -31,14 +34,7 @@ import {
   SplitCutAllocationDto,
   UpdateCutAllocationDto,
 } from './dto/cut-allocation.dto';
-import {
-  AdvanceQueueDto,
-  EnqueuePiDto,
-  QueueCandidatesQueryDto,
-  QueueListQueryDto,
-  QueueWorkshopDto,
-  ReorderQueueDto,
-} from './dto/floor-queue.dto';
+import { StageProgressQueryDto } from './dto/floor-stage-progress.dto';
 import { CutMachineStatsQueryDto } from './dto/cut-machine-stats.dto';
 import { FloorStatsQueryDto, MyStatsQueryDto } from './dto/floor-stats.dto';
 import { FloorReviewQueryDto, ScanContextQueryDto } from './dto/floor-review.dto';
@@ -47,12 +43,7 @@ import {
   KcsClosePieceStepGroupDto,
   KcsCloseStepGroupDto,
 } from './dto/kcs-close.dto';
-import {
-  MyOutputQueryDto,
-  ReverseFloorReportDto,
-  ScanReceiveSteelDto,
-  ScanReportDto,
-} from './dto/floor-scan.dto';
+import { MyOutputQueryDto, ScanReceiveSteelDto, ScanReportDto } from './dto/floor-scan.dto';
 import {
   CreateFloorWorkerDto,
   FLOOR_WORKER_STAGES,
@@ -67,6 +58,7 @@ import { FloorAdminService } from './floor-admin.service';
 import { FloorReviewService } from './floor-review.service';
 import { FloorRealtimeInterceptor } from './floor-realtime.interceptor';
 import { FloorScanService } from './floor-scan.service';
+import { FloorStageService } from './floor-stage.service';
 import { FloorStatsService } from './floor-stats.service';
 
 const perm = (action: PermissionAction) => ({ module: PERMISSION_MODULES.FLOOR_REPORT, action });
@@ -89,7 +81,7 @@ function parseStage(raw: string): FloorWorkerStage {
  * - `floor/review`: QLSX xem đợt đang mở + KCS (KCS_STAFF) xem để chấm (P1, 18/11/2026: KCS tự chốt, không lọc xưởng).
  * - `floor/kcs/.../close`: KCS chốt đợt công nhân vừa báo để chấm - QC_REVIEW:CREATE + @RequireRole(KCS_STAFF).
  * - còn lại: QLSX - thêm @RequireRole(PRODUCTION_MANAGER) như floor-start, để BOSS (VIEW+APPROVE mọi module)
- *   không tự xếp hàng đợi / hủy lần báo được. 3 route `send-kcs` cũ của QLSX giữ nguyên decorator, trả 403 (KCS tự chấm).
+ *   không tự thao tác được. 3 route `send-kcs` cũ của QLSX giữ nguyên decorator, trả 403 (KCS tự chấm).
  */
 @ApiTags('Floor (QR tại máy)')
 @ApiBearerAuth()
@@ -104,6 +96,7 @@ export class FloorController {
     private readonly cutAllocation: CutAllocationService,
     private readonly cutFollowUp: CutAllocationFollowUpService,
     private readonly cutMachineStats: CutMachineStatsService,
+    private readonly stageService: FloorStageService,
   ) {}
 
   // ─── Công nhân: quét mã tại máy ──────────────────────────────────────────────
@@ -278,83 +271,31 @@ export class FloorController {
     return this.admin.unlockWorker(id, userId);
   }
 
-  // ─── QLSX: hàng đợi PI theo tổ ──────────────────────────────────────────────
+  // ─── Sản lượng theo lệnh của tổ (23/11/2026, thay hàng đợi xưởng) ───────────────
+  // Quyền: FLOOR_REPORT VIEW; vai (QLSX / BOSS / ADMIN, hoặc tài khoản tổ chỉ xem tổ mình) kiểm trong FloorStageService vì
+  // @RequireRole và @RequireMfgRole cộng dồn (AND), không diễn đạt được "hoặc".
 
-  @Get('queue')
+  @Get('stage-progress')
   @RequirePermissions(perm(PermissionAction.VIEW))
-  @RequireRole(QLSX)
-  listQueue(@Query() query: QueueListQueryDto, @CurrentUser('id') userId: string) {
-    return this.admin.listQueue(userId, query.stage, query.workshopId);
+  stageProgress(@Query() query: StageProgressQueryDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.stageService.listProgress(
+      user,
+      query.stage,
+      query.workshopId,
+      undefined,
+      query.productionInvoiceIds,
+    );
   }
 
-  @Get('queue/candidates')
+  /** Ngăn "còn thiếu gì" của 1 lệnh: thân y hệt GET /floor/queue/:stage/detail/:pi cũ (FloorAdminService.stageDetail). */
+  @Get('stage-progress/:stage/:productionInvoiceId')
   @RequirePermissions(perm(PermissionAction.VIEW))
-  @RequireRole(QLSX)
-  queueCandidates(@Query() query: QueueCandidatesQueryDto, @CurrentUser('id') userId: string) {
-    return this.admin.queueCandidates(userId, query.stage, query.workshopId);
-  }
-
-  @Post('queue')
-  @RequirePermissions(perm(PermissionAction.CREATE))
-  @RequireRole(QLSX)
-  enqueue(@Body() dto: EnqueuePiDto, @CurrentUser('id') userId: string) {
-    return this.admin.enqueue(dto.stage, dto.productionInvoiceId, userId);
-  }
-
-  @Post('queue/:stage/reorder')
-  @RequirePermissions(perm(PermissionAction.UPDATE))
-  @RequireRole(QLSX)
-  reorder(
-    @Param('stage') stage: string,
-    @Body() dto: ReorderQueueDto,
-    @CurrentUser('id') userId: string,
-  ) {
-    return this.admin.reorder(userId, parseStage(stage), dto.entryIds, dto.workshopId);
-  }
-
-  /**
-   * "Chuyển PI tiếp" của 1 (tổ, xưởng) (hàng đợi chưa chạy PI nào thì bắt đầu PI đầu hàng). Người
-   * không gắn xưởng phải truyền workshopId.
-   */
-  @Post('queue/:stage/advance')
-  @RequirePermissions(perm(PermissionAction.UPDATE))
-  @RequireRole(QLSX)
-  advance(
-    @Param('stage') stage: string,
-    @CurrentUser('id') userId: string,
-    @Body() dto?: AdvanceQueueDto,
-  ) {
-    return this.admin.advance(parseStage(stage), userId, dto?.workshopId, dto?.expectedRunningPiId);
-  }
-
-  /** Hoàn tác "Chuyển PI tiếp" nhầm - chỉ khi PI đang chạy chưa có lần báo nào (xem FloorAdminService.reopenLast). */
-  @Post('queue/:stage/reopen')
-  @RequirePermissions(perm(PermissionAction.UPDATE))
-  @RequireRole(QLSX)
-  reopen(
-    @Param('stage') stage: string,
-    @CurrentUser('id') userId: string,
-    @Body() dto?: QueueWorkshopDto,
-  ) {
-    return this.admin.reopenLast(userId, parseStage(stage), dto?.workshopId);
-  }
-
-  /** Ngăn "còn thiếu gì" của thẻ PI (mục 45.4): tiến độ tổ + dữ liệu gốc (phoi-progress / batch-plan theo SKU). */
-  @Get('queue/:stage/detail/:productionInvoiceId')
-  @RequirePermissions(perm(PermissionAction.VIEW))
-  @RequireRole(QLSX)
-  stageDetail(
+  stageProgressDetail(
     @Param('stage') stage: string,
     @Param('productionInvoiceId') productionInvoiceId: string,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.admin.stageDetail(parseStage(stage), productionInvoiceId);
-  }
-
-  @Delete('queue/:id')
-  @RequirePermissions(perm(PermissionAction.DELETE))
-  @RequireRole(QLSX)
-  removeEntry(@Param('id') id: string, @CurrentUser('id') userId: string) {
-    return this.admin.removeEntry(userId, id);
+    return this.stageService.detail(user, parseStage(stage), productionInvoiceId);
   }
 
   // ─── QLSX: chia máy cắt (đợt B1, 13/11/2026) ────────────────────────────────
@@ -441,7 +382,7 @@ export class FloorController {
     return this.cutAllocation.remove(userId, id);
   }
 
-  // ─── QLSX + KCS: xem đợt đang mở; KCS chốt để chấm; QLSX đảo lần báo ───────────
+  // ─── QLSX + KCS: xem đợt đang mở; KCS chốt để chấm; QLSX xem ───────────
 
   /**
    * QLSX lọc theo xưởng như cũ. Tài khoản KCS_STAFF không có vai QLSX thì KHÔNG lọc xưởng (kể cả khi gắn xưởng: getScope
@@ -519,14 +460,11 @@ export class FloorController {
     return this.review.closeMaterialYieldGroup(dto, userId);
   }
 
+  /** QLSX không còn hủy lần báo (23/11/2026): sai số thì KCS sửa bằng "Thực có" lúc chấm. Giữ route (theo mẫu send-kcs) để FE cũ nhận câu rõ thay vì 404. */
   @Post('reports/:id/reverse')
   @RequirePermissions(perm(PermissionAction.UPDATE))
   @RequireRole(QLSX)
-  reverse(
-    @Param('id') id: string,
-    @Body() dto: ReverseFloorReportDto,
-    @CurrentUser('id') userId: string,
-  ) {
-    return this.review.reverse(id, dto.reason, userId);
+  reverse(): never {
+    throw new ForbiddenException(REVERSE_REMOVED_MESSAGE);
   }
 }

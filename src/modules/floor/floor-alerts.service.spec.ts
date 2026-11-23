@@ -5,6 +5,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { CutAllocationService } from './cut-allocation.service';
 import { CutSnapshotCache } from './cut-allocation-snapshot';
 import { FloorAdminService } from './floor-admin.service';
+import { FloorStageService } from './floor-stage.service';
 import { PaintTransferReminderService } from '../warehouse-transfers/paint-transfer-reminder.service';
 import { CutAllocationFollowUpService } from './cut-allocation-follow-up.service';
 import { FloorAlertsService, MIN_EVALUATE_GAP_MS } from './floor-alerts.service';
@@ -23,7 +24,6 @@ const listPending = listKcsPendingItems as jest.MockedFunction<typeof listKcsPen
 
 describe('FloorAlertsService', () => {
   let prisma: {
-    floorQueueEntry: { findMany: jest.Mock };
     notification: { findMany: jest.Mock; findFirst: jest.Mock };
     cutBundle: { findMany: jest.Mock };
     stepBatch: { findMany: jest.Mock };
@@ -34,13 +34,10 @@ describe('FloorAlertsService', () => {
     workshop: { findMany: jest.Mock; findFirst: jest.Mock };
     productionInvoice: { findMany: jest.Mock };
   };
-  let followUp: { afterAllocated: jest.Mock; queueMissingPhoi: jest.Mock };
+  let followUp: { afterAllocated: jest.Mock };
   let paintReminder: { syncAll: jest.Mock };
-  let admin: {
-    computeProgress: jest.Mock;
-    autoCompletePhoi: jest.Mock;
-    ensurePhoiQueued: jest.Mock;
-  };
+  let admin: { autoCompletePhoi: jest.Mock };
+  let stages: { progressMap: jest.Mock };
   let cutAllocation: {
     machineProgressByWorkshop: jest.Mock;
     autoPull: jest.Mock;
@@ -51,21 +48,6 @@ describe('FloorAlertsService', () => {
   let notifications: { emit: jest.Mock; resolve: jest.Mock; updateOpenContent: jest.Mock };
   let service: FloorAlertsService;
 
-  const running = (id: bigint, stage: string, code: string, status = 'RUNNING') => ({
-    id,
-    stage,
-    status,
-    productionInvoiceId: 45n,
-    workshopId: 5n,
-    productionInvoice: { code },
-  });
-  const progress = (complete: boolean) => ({
-    required: 10,
-    reported: complete ? 10 : 4,
-    percent: 40,
-    complete,
-    passed: complete ? 10 : 4,
-  });
   const machine = (over: Partial<Record<string, unknown>>) => ({
     workstationId: '12',
     name: 'Máy 1',
@@ -80,7 +62,6 @@ describe('FloorAlertsService', () => {
 
   beforeEach(() => {
     prisma = {
-      floorQueueEntry: { findMany: jest.fn().mockResolvedValue([]) },
       notification: {
         findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn().mockResolvedValue(null),
@@ -115,21 +96,15 @@ describe('FloorAlertsService', () => {
         findFirst: jest.fn().mockResolvedValue(null),
       },
     };
-    admin = {
-      computeProgress: jest.fn().mockResolvedValue(progress(false)),
-      autoCompletePhoi: jest.fn().mockResolvedValue({ closed: true, nextPiCode: null }),
-      ensurePhoiQueued: jest.fn().mockResolvedValue([]),
-    };
+    admin = { autoCompletePhoi: jest.fn().mockResolvedValue(true) };
+    stages = { progressMap: jest.fn().mockResolvedValue(new Map()) };
     cutAllocation = {
       machineProgressByWorkshop: jest.fn().mockResolvedValue([]),
       autoPull: jest.fn().mockResolvedValue(null),
       steelGapsByPi: jest.fn().mockResolvedValue(new Map()),
       startedAllocationPiIds: jest.fn().mockResolvedValue([]),
     };
-    followUp = {
-      afterAllocated: jest.fn().mockResolvedValue(undefined),
-      queueMissingPhoi: jest.fn().mockResolvedValue(undefined),
-    };
+    followUp = { afterAllocated: jest.fn().mockResolvedValue(undefined) };
     paintReminder = { syncAll: jest.fn().mockResolvedValue(undefined) };
     realtime = { publishEntityChanged: jest.fn() };
     notifications = {
@@ -140,6 +115,7 @@ describe('FloorAlertsService', () => {
     service = new FloorAlertsService(
       prisma as unknown as PrismaServiceType,
       admin as unknown as FloorAdminService,
+      stages as unknown as FloorStageService,
       notifications as unknown as NotificationsService,
       cutAllocation as unknown as CutAllocationService,
       realtime as unknown as RealtimeService,
@@ -175,166 +151,96 @@ describe('FloorAlertsService', () => {
     delete process.env.CUT_AUTO_PULL;
   });
 
-  describe('tổ Hàn/Sơn báo đủ số của PI đang chạy', () => {
-    it('đủ số, chưa có nhắc đang mở -> nhắc QLSX 1 lần, khoá theo từng dòng hàng đợi', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running(7n, 'HAN', 'PI-45')]);
-      admin.computeProgress.mockResolvedValue(progress(true));
-
-      await service.evaluate();
-
-      expect(notifications.emit).toHaveBeenCalledWith('FLOOR_STAGE_COMPLETE', {
-        entityId: '7',
-        dedupeKey: 'floor-stage-complete:7',
-        params: { stage: 'HAN', piCode: 'PI-45', workshopId: '5' },
-      });
-    });
-
-    it('ĐÃ có nhắc đang mở -> KHÔNG phát lại (emit() sẽ gộp và đánh dấu chưa đọc lại = nhắc lặp mỗi lần quét)', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running(7n, 'SON', 'PI-45')]);
-      admin.computeProgress.mockResolvedValue(progress(true));
-      prisma.notification.findFirst.mockResolvedValue({ id: 'n1' });
-
-      await service.evaluate();
-      await service.evaluate();
-
-      expect(notifications.emit).not.toHaveBeenCalled();
-    });
-
-    it('chưa đủ số -> không nhắc; tính tiến độ lỗi (null) cũng không làm hỏng lượt kiểm tra', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([
-        running(7n, 'SON', 'PI-45'),
-        running(8n, 'HAN', 'PI-45'),
-      ]);
-      admin.computeProgress
-        .mockResolvedValueOnce(progress(false))
-        .mockRejectedValueOnce(new Error('boom'));
-
-      await expect(service.evaluate()).resolves.toBeUndefined();
-
-      expect(notifications.emit).not.toHaveBeenCalled();
-    });
-
-    it('PI không còn chạy (QLSX đã Chuyển PI tiếp) -> đóng nhắc cũ của dòng đó', async () => {
-      // dòng 7 đã DONE
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running(9n, 'HAN', 'PI-46')]);
-      prisma.notification.findMany.mockResolvedValue([{ entityId: '7' }, { entityId: '9' }]);
-
-      await service.evaluate();
-
-      expect(notifications.resolve).toHaveBeenCalledWith({
-        entityType: 'FLOOR_QUEUE_ENTRY',
-        entityId: '7',
-        types: ['FLOOR_STAGE_COMPLETE'],
-      });
-      expect(notifications.resolve).not.toHaveBeenCalledWith(
-        expect.objectContaining({ entityType: 'FLOOR_QUEUE_ENTRY', entityId: '9' }),
-      );
-    });
-  });
-
-  describe('xong Phôi tự tính', () => {
-    const phoiDone = (over: Partial<Record<string, unknown>> = {}) => ({
+  describe('xong Phôi tự tính (ghi phoiDoneAt, 23/11/2026)', () => {
+    const phoi = (over: Partial<Record<string, unknown>> = {}) => ({
       required: 10,
       passed: 10,
       reported: 10,
       complete: true,
       ...over,
     });
+    const candidates = (...ids: bigint[]) =>
+      prisma.productionInvoice.findMany.mockResolvedValue(
+        ids.map((id) => ({ id, code: `PI-${id}` })),
+      );
+    const progressOf = (m: Record<string, unknown>) =>
+      stages.progressMap.mockResolvedValue(new Map(Object.entries(m)));
 
-    it('mọi dòng KCS đạt đủ (required > 0 && passed >= required) -> tự đóng + báo QLSX, KHÔNG nhắc Chuyển PI tiếp', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running(7n, 'PHOI', 'PI-45')]);
-      admin.computeProgress.mockResolvedValue(phoiDone());
-      admin.autoCompletePhoi.mockResolvedValue({ closed: true, nextPiCode: 'PI-46' });
+    it('duyệt lệnh chưa DONE / CANCELLED, chưa phoiDoneAt, có dòng chia hoặc đã có đợt cắt', async () => {
+      await service.evaluate();
+      const arg = (prisma.productionInvoice.findMany.mock.calls as unknown[][])[0][0] as {
+        where: Record<string, unknown>;
+      };
+      expect(arg.where).toEqual({
+        phoiDoneAt: null,
+        status: { notIn: ['DONE', 'CANCELLED'] },
+        OR: [
+          { cutAllocations: { some: {} } },
+          { steelIssues: { some: { bundles: { some: {} } } } },
+        ],
+      });
+    });
+
+    it('mọi dòng KCS đạt đủ (required > 0 && passed >= required) -> ghi phoiDoneAt + phát realtime, KHÔNG gửi tin', async () => {
+      candidates(45n);
+      progressOf({ '45': phoi() });
 
       await service.evaluate();
 
-      expect(admin.computeProgress).toHaveBeenCalledWith('PHOI', 45n);
-      expect(admin.autoCompletePhoi).toHaveBeenCalledWith(7n);
-      expect(notifications.emit).toHaveBeenCalledWith('FLOOR_PHOI_DONE', {
-        entityId: '7',
-        dedupeKey: 'floor-phoi-done:7',
-        params: { piCode: 'PI-45', nextPiCode: 'PI-46', workshopId: '5' },
-      });
+      expect(stages.progressMap).toHaveBeenCalledWith('PHOI', [45n]);
+      expect(admin.autoCompletePhoi).toHaveBeenCalledWith(45n);
+      expect(realtime.publishEntityChanged).toHaveBeenCalledWith(
+        expect.objectContaining({ entity: 'FLOOR_REPORT', actorId: null }),
+      );
+      expect(notifications.emit).not.toHaveBeenCalledWith('FLOOR_PHOI_DONE', expect.anything());
       expect(notifications.emit).not.toHaveBeenCalledWith(
         'FLOOR_STAGE_COMPLETE',
         expect.anything(),
       );
     });
 
-    it('dòng đang CHỜ (QUEUED) mà đã đủ cũng tự đóng', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running(8n, 'PHOI', 'PI-47', 'QUEUED')]);
-      admin.computeProgress.mockResolvedValue(phoiDone());
-
+    it('lệnh chưa từng có dòng hàng đợi vẫn được ghi (AC14: không phụ thuộc hàng đợi)', async () => {
+      candidates(99n);
+      progressOf({ '99': phoi() });
       await service.evaluate();
-
-      expect(admin.autoCompletePhoi).toHaveBeenCalledWith(8n);
+      expect(admin.autoCompletePhoi).toHaveBeenCalledWith(99n);
     });
 
-    it('báo đủ nhưng còn đoạn chờ KCS / chưa gửi (passed < required) -> chưa đóng', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running(7n, 'PHOI', 'PI-45')]);
-      admin.computeProgress.mockResolvedValue(phoiDone({ passed: 8, reported: 10 }));
-
+    it('báo đủ nhưng còn đoạn chờ KCS / chưa gửi (passed < required) -> chưa ghi', async () => {
+      candidates(45n);
+      progressOf({ '45': phoi({ passed: 8 }) });
       await service.evaluate();
-
       expect(admin.autoCompletePhoi).not.toHaveBeenCalled();
-      expect(notifications.emit).not.toHaveBeenCalled();
+      expect(realtime.publishEntityChanged).not.toHaveBeenCalled();
     });
 
-    it('required = 0 (chưa có việc Phôi nào) -> không đóng', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running(7n, 'PHOI', 'PI-45')]);
-      admin.computeProgress.mockResolvedValue(phoiDone({ required: 0, passed: 0, reported: 0 }));
-
+    it('required = 0 (chưa có việc Phôi nào) -> không ghi', async () => {
+      candidates(45n);
+      progressOf({ '45': phoi({ required: 0, passed: 0, reported: 0 }) });
       await service.evaluate();
-
       expect(admin.autoCompletePhoi).not.toHaveBeenCalled();
     });
 
-    it('autoCompletePhoi không đóng gì (đã đóng rồi) -> không báo lại', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running(7n, 'PHOI', 'PI-45')]);
-      admin.computeProgress.mockResolvedValue(phoiDone());
-      admin.autoCompletePhoi.mockResolvedValue({ closed: false, nextPiCode: null });
-
+    it('lệnh tính tiến độ lỗi (không có trong kết quả) -> không coi là xong', async () => {
+      candidates(45n);
       await service.evaluate();
-
-      expect(notifications.emit).not.toHaveBeenCalled();
-    });
-
-    it('HAN / SON đủ số KHÔNG tự đóng (vẫn chỉ nhắc)', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([
-        running(7n, 'HAN', 'PI-45'),
-        running(8n, 'SON', 'PI-45'),
-      ]);
-      admin.computeProgress.mockResolvedValue(phoiDone());
-
-      await service.evaluate();
-
       expect(admin.autoCompletePhoi).not.toHaveBeenCalled();
-      expect(notifications.emit).toHaveBeenCalledWith(
-        'FLOOR_STAGE_COMPLETE',
-        expect.objectContaining({ entityId: '7' }),
-      );
     });
 
-    it('nhắc FLOOR_STAGE_COMPLETE cũ của tổ Phôi đang mở -> đóng', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running(7n, 'PHOI', 'PI-45')]);
-      prisma.notification.findMany.mockResolvedValue([{ entityId: '7' }]);
-
+    it('autoCompletePhoi trả false (đã ghi rồi) -> không phát realtime', async () => {
+      candidates(45n);
+      progressOf({ '45': phoi() });
+      admin.autoCompletePhoi.mockResolvedValue(false);
       await service.evaluate();
-
-      expect(notifications.resolve).toHaveBeenCalledWith({
-        entityType: 'FLOOR_QUEUE_ENTRY',
-        entityId: '7',
-        types: ['FLOOR_STAGE_COMPLETE'],
-      });
+      expect(realtime.publishEntityChanged).not.toHaveBeenCalled();
     });
 
-    it('tự đóng lỗi -> chỉ log, evaluate không vỡ', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running(7n, 'PHOI', 'PI-45')]);
-      admin.computeProgress.mockResolvedValue(phoiDone());
-      admin.autoCompletePhoi.mockRejectedValue(new Error('boom'));
-
+    it('ghi lỗi 1 lệnh -> chỉ log, lệnh sau vẫn ghi, evaluate không vỡ', async () => {
+      candidates(45n, 46n);
+      progressOf({ '45': phoi(), '46': phoi() });
+      admin.autoCompletePhoi.mockRejectedValueOnce(new Error('boom'));
       await expect(service.evaluate()).resolves.toBeUndefined();
-      expect(notifications.emit).not.toHaveBeenCalled();
+      expect(admin.autoCompletePhoi).toHaveBeenCalledWith(46n);
     });
   });
 
@@ -657,7 +563,6 @@ describe('FloorAlertsService', () => {
 
       expect(cutAllocation.autoPull).toHaveBeenCalledTimes(1);
       expect(cutAllocation.machineProgressByWorkshop).toHaveBeenCalledTimes(1);
-      expect(admin.ensurePhoiQueued).not.toHaveBeenCalled();
       expect(realtime.publishEntityChanged).not.toHaveBeenCalled();
       expect(notifications.emit).toHaveBeenCalledWith('CUT_MACHINE_IDLE', {
         entityId: '12',
@@ -681,23 +586,6 @@ describe('FloorAlertsService', () => {
         expect.objectContaining({ entityId: 'PHOI:5' }),
       );
       expect(realtime.publishEntityChanged).not.toHaveBeenCalled();
-    });
-
-    it('đối soát hàng đợi Phôi: mỗi xưởng gọi queueMissingPhoi(startedAllocationPiIds); lỗi không làm hỏng lượt', async () => {
-      cutAllocation.machineProgressByWorkshop.mockResolvedValue([machine({ status: 'BUSY' })]);
-      cutAllocation.startedAllocationPiIds.mockResolvedValue([45n]);
-
-      await service.evaluate();
-
-      expect(cutAllocation.startedAllocationPiIds).toHaveBeenCalledWith(
-        5n,
-        expect.any(CutSnapshotCache),
-      );
-      expect(followUp.queueMissingPhoi).toHaveBeenCalledWith([45n]);
-
-      followUp.queueMissingPhoi.mockRejectedValue(new Error('boom'));
-      await expect(service.evaluate()).resolves.toBeUndefined();
-      expect(paintReminder.syncAll).toHaveBeenCalledTimes(2);
     });
 
     describe('tự đóng nhắc xuất sắt của thủ kho', () => {
@@ -814,7 +702,8 @@ describe('FloorAlertsService', () => {
         setup({ gaps: [{ ...gap, warehouseCodes: [] }] });
         await service.evaluate();
         expect(pullEmits()).toEqual([]);
-        expect(prisma.productionInvoice.findMany).not.toHaveBeenCalled();
+        // (chỉ còn lượt tìm lệnh xong Phôi; không tra danh sách lệnh để đối soát tin xuất sắt)
+        expect(prisma.productionInvoice.findMany).toHaveBeenCalledTimes(1);
       });
 
       it('tin mở mà chỉ danh sách loại sắt đổi (kho cũ) -> updateOpenContent giữ nguồn cũ, không emit', async () => {
@@ -901,23 +790,6 @@ describe('FloorAlertsService', () => {
         await service.evaluate();
         expect(pullEmits()).toHaveLength(2);
       });
-    });
-
-    it('autoCompletePhoi đóng được dòng -> phát realtime để màn hàng đợi tự tải lại', async () => {
-      prisma.floorQueueEntry.findMany.mockResolvedValue([running(7n, 'PHOI', 'PI-45')]);
-      admin.computeProgress.mockResolvedValue({
-        required: 10,
-        reported: 10,
-        percent: 100,
-        complete: true,
-        passed: 10,
-      });
-
-      await service.evaluate();
-
-      expect(realtime.publishEntityChanged).toHaveBeenCalledWith(
-        expect.objectContaining({ entity: 'FLOOR_REPORT', actorId: null }),
-      );
     });
   });
 
@@ -1134,7 +1006,7 @@ describe('FloorAlertsService', () => {
 
   describe('giới hạn tần suất evaluate do thao tác /floor gây ra', () => {
     const DEBOUNCE = 3_000;
-    const runs = () => prisma.floorQueueEntry.findMany.mock.calls.length;
+    const runs = () => prisma.productionInvoice.findMany.mock.calls.length;
 
     beforeEach(() => {
       jest.useFakeTimers();
@@ -1246,7 +1118,7 @@ describe('FloorAlertsService', () => {
       let release: () => void;
       beforeEach(() => {
         // Lượt đầu bị giữ lại cho tới khi gọi release(); các lượt sau chạy ngay.
-        prisma.floorQueueEntry.findMany.mockImplementationOnce(
+        prisma.productionInvoice.findMany.mockImplementationOnce(
           () =>
             new Promise((resolve) => {
               release = () => resolve([]);
@@ -1315,21 +1187,21 @@ describe('FloorAlertsService', () => {
       expect(warn).not.toHaveBeenCalled();
       expect(debug).toHaveBeenCalledWith(
         expect.stringMatching(
-          /stageComplete=\d+ms, stale=\d+ms, cutMachines=\d+ms, pullSteelIssued=\d+ms/,
+          /phoiDone=\d+ms, stale=\d+ms, cutMachines=\d+ms, pullSteelIssued=\d+ms/,
         ),
       );
     });
 
     it('lượt chậm > 2000 ms: log warn kèm thời gian từng bước', async () => {
       jest.useFakeTimers();
-      prisma.floorQueueEntry.findMany.mockImplementation(
+      prisma.productionInvoice.findMany.mockImplementation(
         () => new Promise((resolve) => setTimeout(() => resolve([]), 2_500)),
       );
       const done = service.evaluate();
       await jest.advanceTimersByTimeAsync(2_600);
       await done;
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('stageComplete=2500ms'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('phoiDone=2500ms'));
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('pullSteelIssued='));
     });
   });
@@ -1423,12 +1295,12 @@ describe('FloorAlertsService', () => {
   });
 
   it('không chạy chồng: evaluate đang chạy thì lần gọi thứ 2 bị bỏ qua', async () => {
-    prisma.floorQueueEntry.findMany.mockImplementation(
+    prisma.productionInvoice.findMany.mockImplementation(
       () => new Promise((resolve) => setTimeout(() => resolve([]), 30)),
     );
 
     await Promise.all([service.evaluate(), service.evaluate()]);
 
-    expect(prisma.floorQueueEntry.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.productionInvoice.findMany).toHaveBeenCalledTimes(1);
   });
 });

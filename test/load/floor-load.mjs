@@ -227,21 +227,11 @@ async function setup() {
   for (const [k, v] of Object.entries(machines)) if (!v) die(`thiếu máy ${k} đang bật`);
   info(`máy: cắt ${machines.cut.code}, nhận sắt ${machines.recv.code}, hàn ${machines.han.code}, sơn ${machines.son.code}`);
 
-  let queue = (await Q('setup', 'queue', 'GET', '/floor/queue')).data ?? [];
-  const running = (stage) => queue.find((e) => e.stage === stage && e.status === 'RUNNING');
-  if (!running('PHOI')) die('tổ Phôi chưa có PI đang chạy - mở một PI ở "Hàng đợi" trước');
-  piId = running('PHOI').productionInvoiceId;
-  for (const stage of ['HAN', 'SON']) {
-    if (running(stage)) continue;
-    await Q('setup', 'enqueue', 'POST', '/floor/queue', { body: { stage, productionInvoiceId: piId } });
-    const r = await Q('setup', 'advance', 'POST', `/floor/queue/${stage}/advance`);
-    info(`tổ ${stage} chưa chạy PI -> đưa PI ${piId} vào và bắt đầu (${r.status})`);
-    queue = (await Q('setup', 'queue', 'GET', '/floor/queue')).data;
-  }
-  for (const stage of ['PHOI', 'HAN', 'SON']) {
-    const r = running(stage);
-    if (!r || r.productionInvoiceId !== piId) die(`tổ ${stage} đang chạy PI khác (${r?.piCode}) - kịch bản cần cả 3 tổ cùng một PI`);
-  }
+  // 23/11/2026: hàng đợi xưởng đã bỏ (route /floor/queue* không còn) - lấy một lệnh Phôi đang chưa đủ từ /floor/stage-progress.
+  const sp = (await Q('setup', 'stage-progress', 'GET', '/floor/stage-progress?stage=PHOI')).data ?? [];
+  const pick = sp.find((e) => !e.complete) ?? sp[0];
+  if (!pick) die('không có lệnh Phôi nào ở /floor/stage-progress - cần một lệnh đã Bắt đầu và đang có dòng chia');
+  piId = pick.productionInvoiceId;
 
   // công nhân thử: tạo (hoặc dùng lại) + tự đặt PIN, mỗi người một IP riêng
   const made = await pool(phones, 4, async (p) => {
@@ -454,7 +444,8 @@ async function scenE() {
   const timed = (delay, fn) => sleep(delay).then(fn);
   const tasks = [
     ...Array.from({ length: 12 }, (_, i) => timed(i * 40, () => post('race-report', `${RUN}-e-${i}`))),
-    timed(120, () => Q('E', 'race-reverse', 'POST', `/floor/reports/${reverseId}/reverse`, { body: { reason: 'thử tải: đảo lúc đang báo' } })),
+    // 23/11/2026: /floor/reports/:id/reverse trả 403 (QLSX không còn hủy lần báo) - vẫn gọi để chắc route không lỗi 500.
+    timed(120, () => Q('E', 'race-reverse', 'POST', `/floor/reports/${reverseId}/reverse`, { body: { reason: 'thử tải: route đã bỏ, phải 403' } })),
     timed(200, () => Q('E', 'race-send-kcs', 'POST', `/floor/review/cut-bundles/${bundleId}/send-kcs`)),
   ];
   const out = await Promise.all(tasks);
@@ -463,12 +454,12 @@ async function scenE() {
   const okReports = reports.filter((r) => r.ok).length;
   info(`báo thêm: ${okReports}/12 thành công | đảo: ${rev.status} ${rev.ok ? '' : String(rev.json?.message ?? '').slice(0, 70)} | gửi KCS: ${kcs.status} ${kcs.ok ? '' : String(kcs.json?.message ?? '').slice(0, 70)} | ${Date.now() - t0}ms`);
   check('không lỗi 500 / mất kết nối / treo (mọi yêu cầu xong < 10 giây)', noServerError('E') && Math.max(...samples.filter((s) => s.sc === 'E').map((s) => s.ms)) < 10_000, latencyOf('E').codes);
-  check('đảo và gửi KCS trả kết quả hợp lệ (thành công hoặc 409 "đã gửi KCS")', [201, 200, 409].includes(rev.status) && [201, 200, 409].includes(kcs.status), { rev: rev.status, kcs: kcs.status });
+  check('đảo trả 403 (route đã bỏ); gửi KCS trả kết quả hợp lệ (thành công hoặc 409 "đã gửi KCS")', rev.status === 403 && [201, 200, 409].includes(kcs.status), { rev: rev.status, kcs: kcs.status });
   check('mọi lần báo của công nhân vẫn thành công dù đợt vừa bị gửi KCS (lần sau mở đợt mới)', okReports === 12, latencyOf('E', 'race-report').codes);
   const rows = await myOutput(w, since);
   const reversed = rows.filter((r) => r.reversed).length;
   check(`công nhân thấy đủ lần báo: ${3 + okReports} (3 trước + ${okReports} lúc đua), thấy ${rows.length}`, rows.length === 3 + okReports);
-  check(`số lần báo bị đảo = ${rev.ok ? 1 : 0} (thấy ${reversed})`, reversed === (rev.ok ? 1 : 0));
+  check(`không lần báo nào bị đảo (thấy ${reversed})`, reversed === 0);
 }
 
 async function scenF() {
@@ -485,7 +476,7 @@ async function scenF() {
     if (!withQlsx || qlsxTimer) return;
     qlsxTimer = setTimeout(async () => {
       qlsxTimer = null;
-      for (const path of ['/floor/queue', '/floor/review?stage=PHOI', '/floor/summary', '/floor/summary']) track(await Q('F', 'qlsx-refetch', 'GET', path, { ip: natIp }), path.split('?')[0]);
+      for (const path of ['/floor/stage-progress?stage=PHOI', '/floor/review?stage=PHOI', '/floor/summary', '/floor/summary']) track(await Q('F', 'qlsx-refetch', 'GET', path, { ip: natIp }), path.split('?')[0]);
     }, 400); // trễ 400ms như useRealtimeRefetch
   };
   await Promise.all(phones.map(async (p, i) => {
