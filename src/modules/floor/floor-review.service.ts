@@ -28,10 +28,6 @@ import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import { FloorWorkerStage } from './dto/floor-worker.dto';
 import { filterByQueueWorkshop, queueWorkshopIdOfPi } from './floor-queue-workshop.util';
 import { blockedReasonOf, listKcsPendingItems, piHasActiveSkuWhere } from './kcs-pending.util';
-import {
-  orderNotCancelled,
-  orderNotCancelledNullable,
-} from '../../common/utils/cancelled-order.util';
 
 const USER_NAME = { select: { firstName: true, lastName: true, username: true } } as const;
 const fullName = (u: { firstName: string; lastName: string; username: string } | null) =>
@@ -150,13 +146,7 @@ export class FloorReviewService {
       where: {
         stage: stage as MfgStage,
         status: ProductionBatchStatus.OPEN,
-        // Huỷ lệnh theo SKU (23/11/2026): đợt của SKU đã huỷ không chấm được - không hiện.
-        AND: [
-          orderNotCancelled(),
-          ...(piId
-            ? [{ productionOrder: { productionInvoiceItem: { productionInvoiceId: piId } } }]
-            : []),
-        ],
+        ...(piId && { productionOrder: { productionInvoiceItem: { productionInvoiceId: piId } } }),
       },
       orderBy: { reportedAt: 'asc' },
       include: {
@@ -183,14 +173,15 @@ export class FloorReviewService {
       (b) => b.productionOrder.productionInvoiceItem.productionInvoice?.id,
     );
     const stoppedPis = await this.loadStoppedPis(stage, piId, workshopId);
-    // Huỷ lệnh theo SKU (23/11/2026): id lệnh SX đã huỷ - FE ẩn đợt CHỜ CHẤM (AWAITING_QC, lấy từ API danh sách riêng) của các
-    // lệnh này; đợt đang mở đã lọc ở BE ngay trên. Huỷ hiếm nên tập này nhỏ.
+    // Câu 4 (anh Nhân 24/11/2026, đảo cách ẩn 23/11): KCS chấm nốt đợt của SKU đã huỷ - đợt vẫn hiện, không xám (lệnh huỷ luôn
+    // FINISHED nên PI có thể không còn SKU ACTIVE). FE gắn nhãn "SKU đã huỷ" theo cancelledOrderIds. Huỷ hiếm nên tập này nhỏ.
     const cancelledOrderIds = (
       await this.prisma.productionOrder.findMany({
         where: { status: ProductionOrderStatus.CANCELLED },
         select: { id: true },
       })
     ).map((o) => o.id.toString());
+    const cancelled = new Set(cancelledOrderIds);
 
     if (stage !== MfgStage.PHOI) {
       const activePis = await this.loadActivePiSet(
@@ -200,7 +191,7 @@ export class FloorReviewService {
       return {
         cutBundles: [],
         stepGroups: [],
-        pieceBatches: this.mapPieceBatches(productionBatches, piecePlans, activePis),
+        pieceBatches: this.mapPieceBatches(productionBatches, piecePlans, activePis, cancelled),
         pieceStepGroups: [],
         materialYieldGroups: [],
         stoppedPis,
@@ -213,7 +204,6 @@ export class FloorReviewService {
         this.prisma.cutBundle.findMany({
           where: {
             status: CutBundleStatus.CUTTING,
-            ...orderNotCancelledNullable(),
             ...(piId && { steelIssue: { productionInvoiceId: piId } }),
           },
           orderBy: { createdAt: 'asc' },
@@ -235,7 +225,6 @@ export class FloorReviewService {
         this.prisma.stepBatch.findMany({
           where: {
             stepBundleId: null,
-            ...orderNotCancelledNullable(),
             ...(piId && { productionInvoiceId: piId }),
           },
           orderBy: { createdAt: 'asc' },
@@ -254,12 +243,9 @@ export class FloorReviewService {
         this.prisma.pieceStepBatch.findMany({
           where: {
             pieceStepBundleId: null,
-            AND: [
-              orderNotCancelled(),
-              ...(piId
-                ? [{ productionOrder: { productionInvoiceItem: { productionInvoiceId: piId } } }]
-                : []),
-            ],
+            ...(piId && {
+              productionOrder: { productionInvoiceItem: { productionInvoiceId: piId } },
+            }),
           },
           orderBy: { reportedAt: 'asc' },
           include: {
@@ -419,7 +405,9 @@ export class FloorReviewService {
         const progressItem = cutProgress
           .get(b.steelIssue.productionInvoice.id.toString())
           ?.find((m) => m.materialId === b.steelIssue.material.id.toString());
-        const piActive = activePis.has(b.steelIssue.productionInvoice.id.toString());
+        const piActive =
+          activePis.has(b.steelIssue.productionInvoice.id.toString()) ||
+          cancelled.has(b.productionOrderId?.toString() ?? '');
         return {
           cutBundleId: b.id.toString(),
           pi: this.piOf(b.steelIssue.productionInvoice),
@@ -449,7 +437,8 @@ export class FloorReviewService {
         const progressItem = stepProgress
           .get(`${g.pi.productionInvoiceId}:${g.step}`)
           ?.find((m) => m.materialId === g.material.materialId);
-        const piActive = activePis.has(g.piBig.toString());
+        const piActive =
+          activePis.has(g.piBig.toString()) || cancelled.has(g.order?.productionOrderId ?? '');
         const multiSku = (ordersOfPi.get(g.piBig.toString())?.length ?? 0) > 1;
         const orderId = g.order?.productionOrderId ?? null;
         const { piBig: _piBig, firstRowAt, ...rest } = g;
@@ -463,8 +452,8 @@ export class FloorReviewService {
           progress: this.segmentProgress(progressItem, orderId, segs),
         };
       }),
-      pieceBatches: this.mapPieceBatches(productionBatches, piecePlans, activePis),
-      pieceStepGroups: this.mapPieceStepGroups(pieceStepBatches, piecePlans, activePis),
+      pieceBatches: this.mapPieceBatches(productionBatches, piecePlans, activePis, cancelled),
+      pieceStepGroups: this.mapPieceStepGroups(pieceStepBatches, piecePlans, activePis, cancelled),
       materialYieldGroups: this.mapMaterialYieldGroups(yieldBatches, yieldNeed, activePis),
       stoppedPis,
       cancelledOrderIds,
@@ -492,6 +481,8 @@ export class FloorReviewService {
     }[],
     piecePlans: Awaited<ReturnType<FloorReviewService['loadPiecePlans']>>,
     activePis: Set<string>,
+    /** Câu 4: lệnh SX đã huỷ - KCS vẫn chấm nốt, không xám. */
+    cancelled: Set<string> = new Set(),
   ) {
     return productionBatches.map((b) => {
       const reports = b.floorReports.filter((r) => !r.reversalOfId).map((r) => this.toReport(r));
@@ -501,7 +492,10 @@ export class FloorReviewService {
       // "Đã tính" = đã KCS chấm còn tính (đã trừ lỗi / thiếu) + đang chờ KCS + đang mở (S6).
       const reported = item ? item.passedQty + item.awaitingQcQty + open : 0;
       const pi = b.productionOrder.productionInvoiceItem.productionInvoice;
-      const piActive = pi == null || activePis.has(pi.id.toString());
+      const piActive =
+        pi == null ||
+        activePis.has(pi.id.toString()) ||
+        cancelled.has(b.productionOrderId.toString());
       return {
         productionBatchId: b.id.toString(),
         stage: b.stage,
@@ -545,6 +539,8 @@ export class FloorReviewService {
     }[],
     piecePlans: Awaited<ReturnType<FloorReviewService['loadPiecePlans']>>,
     activePis: Set<string>,
+    /** Câu 4: lệnh SX đã huỷ - KCS vẫn chấm nốt, không xám. */
+    cancelled: Set<string> = new Set(),
   ) {
     const groups = new Map<
       string,
@@ -578,7 +574,10 @@ export class FloorReviewService {
       const shortQty = sp?.shortQty ?? 0;
       const done = Math.max(0, reportedQty - failed - shortQty);
       const pi = r.productionOrder.productionInvoiceItem.productionInvoice;
-      const piActive = pi == null || activePis.has(pi.id.toString());
+      const piActive =
+        pi == null ||
+        activePis.has(pi.id.toString()) ||
+        cancelled.has(r.productionOrderId.toString());
       return {
         productionOrderId: r.productionOrderId.toString(),
         pieceId: r.pieceId.toString(),
@@ -873,6 +872,7 @@ export class FloorReviewService {
       return await this.steelIssues.finishCutBundle(cutBundleId, {
         notifyKcs: false,
         gateLabel: KCS_CLOSE_GATE_LABEL,
+        allowCancelled: true,
       });
     } catch (e) {
       throw this.notFoundToConflict(e, CUT_BUNDLE_CANCELLED_MESSAGE);
@@ -909,7 +909,7 @@ export class FloorReviewService {
       actorId,
       productionOrderId,
       { id: dto.workerId ?? null },
-      { gateLabel: KCS_CLOSE_GATE_LABEL },
+      { gateLabel: KCS_CLOSE_GATE_LABEL, allowCancelled: true },
     );
   }
 
@@ -926,7 +926,7 @@ export class FloorReviewService {
         actorId,
         batch.stage,
         null,
-        { notifyKcs: false, gateLabel: KCS_CLOSE_GATE_LABEL },
+        { notifyKcs: false, gateLabel: KCS_CLOSE_GATE_LABEL, allowCancelled: true },
       );
     } catch (e) {
       throw this.notFoundToConflict(e, BATCH_CANCELLED_MESSAGE);
@@ -942,7 +942,7 @@ export class FloorReviewService {
       { pieceId: dto.pieceId, step: dto.step },
       actorId,
       MfgStage.PHOI,
-      { gateLabel: KCS_CLOSE_GATE_LABEL },
+      { gateLabel: KCS_CLOSE_GATE_LABEL, allowCancelled: true },
     );
   }
 

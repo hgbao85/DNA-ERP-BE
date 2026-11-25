@@ -13,6 +13,8 @@ describe('SegmentProductionService', () => {
     productionOrder: { findMany: jest.Mock };
     bomPiece: { findMany: jest.Mock };
     pieceBom: { findMany: jest.Mock };
+    segmentReservationLog: { findMany: jest.Mock };
+    cuttingPlanCoverage: { findMany: jest.Mock };
     cutPatternSegment: { findMany: jest.Mock };
     stepBatchSegment: { findMany: jest.Mock };
     qcReviewSegment: { findMany: jest.Mock };
@@ -87,6 +89,8 @@ describe('SegmentProductionService', () => {
       productionOrder: { findMany: jest.fn() },
       bomPiece: { findMany: jest.fn() },
       pieceBom: { findMany: jest.fn() },
+      segmentReservationLog: { findMany: jest.fn().mockResolvedValue([]) },
+      cuttingPlanCoverage: { findMany: jest.fn().mockResolvedValue([]) },
       cutPatternSegment: { findMany: jest.fn() },
       stepBatchSegment: { findMany: jest.fn() },
       qcReviewSegment: { findMany: jest.fn() },
@@ -213,6 +217,43 @@ describe('SegmentProductionService', () => {
       orders: [{ id: 1n, bomRevisionId: 5n, quantity: 10, floorStage: 'FINISHED' }],
     });
     await expect(service.recomputeForPi(900n, { reason: 'x' })).rejects.toThrow(ConflictException);
+  });
+
+  // Huỷ lệnh đợt 2 - Q2 (anh Nhân 24/11/2026): đoạn của SKU huỷ tự vào dư kho Phôi.
+  it('Q2: SKU đã huỷ không tính số cần - đích giữ chỉ theo SKU còn hiệu lực', async () => {
+    setData({
+      orders: [
+        { id: 1n, bomRevisionId: 5n, quantity: 10, floorStage: 'ACTIVE', status: 'RELEASED' },
+        { id: 2n, bomRevisionId: 5n, quantity: 10, floorStage: 'FINISHED', status: 'CANCELLED' },
+      ],
+    });
+    await service.recomputeForPi(900n, { reason: 'x' });
+    expect(segmentStock.syncOrderProduction).toHaveBeenCalledWith(
+      prisma,
+      expect.objectContaining({
+        targets: [
+          { segmentSpecId: 30n, segmentSteps: '', heldQty: 50, surplusQty: 20 },
+          { segmentSpecId: 30n, segmentSteps: 'DAP', heldQty: 20, surplusQty: 0 },
+        ],
+      }),
+    );
+  });
+
+  it('Q2: lệnh đã đóng có SKU huỷ -> vẫn ghi, không giữ gì (mọi đoạn đạt vào dư)', async () => {
+    setData({
+      orders: [
+        { id: 2n, bomRevisionId: 5n, quantity: 10, floorStage: 'FINISHED', status: 'CANCELLED' },
+      ],
+    });
+    await service.recomputeForPi(900n, { reason: 'PO_CANCELLED:2' });
+    const arg = (
+      segmentStock.syncOrderProduction.mock.calls[0] as [
+        unknown,
+        { targets: { heldQty: number; surplusQty: number }[] },
+      ]
+    )[1];
+    expect(arg.targets.every((t) => t.heldQty === 0)).toBe(true);
+    expect(arg.targets.reduce((sum, t) => sum + t.surplusQty, 0)).toBeGreaterThan(0);
   });
 
   it('công thức đạt KCS: trừ lỗi, trừ đợt đang cắt / chờ KCS; lỗi công đoạn tính theo step', async () => {

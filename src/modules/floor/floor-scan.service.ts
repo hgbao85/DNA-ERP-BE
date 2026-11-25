@@ -420,6 +420,13 @@ export class FloorScanService {
           seen.add(r.productionInvoiceId);
           out.push({ productionInvoiceId: r.productionInvoiceId, code: r.piCode });
         }
+        // Huỷ lệnh đợt 2 - Q3 (24/11/2026): lệnh có SKU đã huỷ mà QLSX cho cắt tiếp không còn trên bảng chia máy (lệnh có thể không
+        // còn SKU chạy) - mọi máy cắt của xưởng làm lệnh đều báo cắt được cho SKU đó.
+        for (const p of await this.loadContinuedCutPis(ws.workshopId)) {
+          if (seen.has(p.productionInvoiceId)) continue;
+          seen.add(p.productionInvoiceId);
+          out.push(p);
+        }
         return out;
       }
       if (queueWorkshopId == null) return [];
@@ -430,6 +437,28 @@ export class FloorScanService {
       );
       return [];
     }
+  }
+
+  /** Q3: lệnh của xưởng có SKU đã huỷ mà QLSX cho cắt tiếp (đề nghị huỷ đã duyệt, cutDecision CONTINUE). */
+  private async loadContinuedCutPis(
+    workshopId: bigint | null,
+  ): Promise<Array<{ productionInvoiceId: string; code: string }>> {
+    if (workshopId == null) return [];
+    const rows = await this.prisma.productionInvoiceItem.findMany({
+      where: {
+        workshopId,
+        productionInvoiceId: { not: null },
+        productionOrder: {
+          is: { cancelRequests: { some: { status: 'APPROVED', cutDecision: 'CONTINUE' } } },
+        },
+      },
+      select: { productionInvoice: { select: { id: true, code: true } } },
+    });
+    const out = new Map<string, string>();
+    for (const r of rows) {
+      if (r.productionInvoice) out.set(r.productionInvoice.id.toString(), r.productionInvoice.code);
+    }
+    return [...out].map(([productionInvoiceId, code]) => ({ productionInvoiceId, code }));
   }
 
   /**
@@ -507,9 +536,23 @@ export class FloorScanService {
         where: { id: piId },
         select: { id: true, code: true },
       }),
-      // Huỷ lệnh theo SKU (23/11/2026): SKU đã huỷ không còn để chọn báo.
+      // Huỷ lệnh theo SKU (23/11/2026): SKU đã huỷ không còn để chọn báo - trừ tổ Phôi khi QLSX cho cắt tiếp (Q3, 24/11/2026).
       this.prisma.productionOrder.findMany({
-        where: { productionInvoiceItem: { productionInvoiceId: piId }, ...NOT_CANCELLED_ORDER },
+        where: {
+          productionInvoiceItem: { productionInvoiceId: piId },
+          OR: [
+            NOT_CANCELLED_ORDER,
+            ...(ws.stage === 'PHOI'
+              ? [
+                  {
+                    cancelRequests: {
+                      some: { status: 'APPROVED' as const, cutDecision: 'CONTINUE' as const },
+                    },
+                  },
+                ]
+              : []),
+          ],
+        },
         orderBy: { id: 'asc' },
         select: {
           id: true,

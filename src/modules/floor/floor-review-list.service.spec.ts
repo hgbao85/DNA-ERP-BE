@@ -109,9 +109,14 @@ describe('FloorReviewService.listOpen', () => {
       // Mặc định PI 45 còn SKU đang chạy; PI có 1 SKU (lệnh 41).
       productionInvoice: { findMany: jest.fn().mockResolvedValue([{ id: 45n }]) },
       productionOrder: {
-        findMany: jest
-          .fn()
-          .mockResolvedValue([{ ...order, productionInvoiceItem: { productionInvoiceId: 45n } }]),
+        // Câu 4: truy vấn lệnh đã huỷ (status CANCELLED) mặc định không có lệnh nào.
+        findMany: jest.fn((args?: { where?: { status?: string } }) =>
+          Promise.resolve(
+            args?.where?.status === 'CANCELLED'
+              ? []
+              : [{ ...order, productionInvoiceItem: { productionInvoiceId: 45n } }],
+          ),
+        ),
       },
     };
     steelIssues = {
@@ -457,41 +462,39 @@ describe('FloorReviewService.listOpen', () => {
 
   // ─── P1 (18/11/2026): KCS xem đợt đang mở, không lọc xưởng; piActive / blockedReason; pat + chân nhôm; stoppedPis ───
 
-  // Huỷ lệnh theo SKU (23/11/2026): KCS không chấm được đợt của SKU đã huỷ (409) - BE không trả đợt đang mở của lệnh huỷ và
-  // trả id lệnh huỷ để FE ẩn đợt chờ chấm lấy từ API danh sách riêng.
-  describe('huỷ lệnh theo SKU', () => {
-    it('lọc đợt của lệnh đã huỷ (giữ đợt cũ chưa gắn SKU) + trả cancelledOrderIds', async () => {
+  // Câu 4 (anh Nhân 24/11/2026, đảo cách ẩn 23/11): KCS chấm nốt đợt của SKU đã huỷ - đợt vẫn hiện, không xám dù PI không còn
+  // SKU đang chạy; cancelledOrderIds để FE gắn nhãn "SKU đã huỷ".
+  describe('huỷ lệnh theo SKU - KCS chấm nốt', () => {
+    it('không lọc lệnh đã huỷ; đợt của lệnh huỷ không xám dù PI dừng + trả cancelledOrderIds', async () => {
+      prisma.productionInvoice.findMany.mockResolvedValue([]);
       prisma.productionOrder.findMany.mockImplementation((args: { where?: { status?: string } }) =>
         Promise.resolve(
           args.where?.status === 'CANCELLED'
-            ? [{ id: 99n }]
+            ? [{ id: 41n }]
             : [{ ...order, productionInvoiceItem: { productionInvoiceId: 45n } }],
         ),
       );
-      const res = await service.listOpen('PHOI');
-      const nullableFilter = {
-        OR: [{ productionOrderId: null }, { productionOrder: { status: { not: 'CANCELLED' } } }],
-      };
-      expect(prisma.cutBundle.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: expect.objectContaining(nullableFilter) as unknown }),
-      );
-      expect(prisma.stepBatch.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: expect.objectContaining(nullableFilter) as unknown }),
-      );
-      expect(prisma.productionBatch.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            AND: [{ productionOrder: { status: { not: 'CANCELLED' } } }],
-          }) as unknown,
-        }),
-      );
-      expect(res.cancelledOrderIds).toEqual(['99']);
-    });
-
-    it('tổ Hàn/Sơn cũng trả cancelledOrderIds', async () => {
-      prisma.productionOrder.findMany.mockResolvedValue([{ id: 7n }]);
+      prisma.productionBatch.findMany.mockResolvedValue([
+        {
+          id: 106n,
+          stage: 'HAN',
+          productionOrderId: 41n,
+          pieceId: 73n,
+          reportedQty: 4,
+          reportedAt: at('2026-10-13T01:00:00Z'),
+          reportedBy: user('Hai'),
+          piece: { code: 'KT', name: 'Khung tựa' },
+          productionOrder: { ...order, productionInvoiceItem: { productionInvoice: pi } },
+          floorReports: [],
+        },
+      ]);
       const res = await service.listOpen('HAN');
-      expect(res.cancelledOrderIds).toEqual(['7']);
+      const where = (prisma.productionBatch.findMany.mock.calls[0] as [{ where: object }])[0].where;
+      expect(JSON.stringify(where)).not.toContain('CANCELLED');
+      expect(res.pieceBatches[0]).toEqual(
+        expect.objectContaining({ piActive: true, blockedReason: null }),
+      );
+      expect(res.cancelledOrderIds).toEqual(['41']);
     });
   });
 
@@ -837,11 +840,7 @@ describe('FloorReviewService.listOpen', () => {
         expect.objectContaining({
           where: {
             pieceStepBundleId: null,
-            // Huỷ lệnh theo SKU (23/11/2026): bỏ đợt của lệnh đã huỷ.
-            AND: [
-              { productionOrder: { status: { not: 'CANCELLED' } } },
-              { productionOrder: { productionInvoiceItem: { productionInvoiceId: 45n } } },
-            ],
+            productionOrder: { productionInvoiceItem: { productionInvoiceId: 45n } },
           },
         }),
       );

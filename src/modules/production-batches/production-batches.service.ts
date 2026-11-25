@@ -41,6 +41,7 @@ import { ProcessStepValue, sortProcessSteps } from '../../common/constants/proce
 import {
   assertItemPiHasActiveFloor,
   assertItemPiHasActiveFloorLocked,
+  isOrderCancelledById,
 } from '../../common/utils/floor-gate.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { NOT_CANCELLED_ORDER } from '../../common/utils/cancelled-order.util';
@@ -559,7 +560,8 @@ export class ProductionBatchesService {
     reportedById: string,
     callerMfgRole: string | null,
     warehouseScope: string | null,
-    opts: { notifyKcs?: boolean; gateLabel?: string } = {},
+    /** allowCancelled: chỉ KCS "chốt để chấm" truyền - câu 4 (24/11/2026), lô của SKU đã huỷ vẫn chốt + chấm nốt. */
+    opts: { notifyKcs?: boolean; gateLabel?: string; allowCancelled?: boolean } = {},
   ): Promise<ProductionBatchResponseDto> {
     const notifyKcs = opts.notifyKcs ?? true;
     const gateLabel = opts.gateLabel ?? 'gửi KCS';
@@ -568,11 +570,16 @@ export class ProductionBatchesService {
     if (batch.status !== ProductionBatchStatus.OPEN) {
       throw new ConflictException('Lô này vừa được chốt để chấm - tải lại trang.');
     }
-    await assertItemPiHasActiveFloor(
-      this.prisma,
-      batch.productionOrder.productionInvoiceItemId,
-      gateLabel,
-    );
+    const kcsOnCancelled =
+      opts.allowCancelled === true &&
+      (await isOrderCancelledById(this.prisma, batch.productionOrderId));
+    if (!kcsOnCancelled) {
+      await assertItemPiHasActiveFloor(
+        this.prisma,
+        batch.productionOrder.productionInvoiceItemId,
+        gateLabel,
+      );
+    }
     if (batch.reportedQty <= 0) {
       throw new BadRequestException('Lô này không còn số nào để chấm - tải lại trang.');
     }
@@ -879,18 +886,25 @@ export class ProductionBatchesService {
     dto: SubmitPieceStepDto,
     submittedById: string,
     callerMfgRole: string | null,
-    opts: { gateLabel?: string } = {},
+    /** allowCancelled: chỉ KCS "chốt để chấm" truyền - câu 4 (24/11/2026), pat của SKU đã huỷ vẫn chốt + chấm nốt. */
+    opts: { gateLabel?: string; allowCancelled?: boolean } = {},
   ): Promise<PieceStepBundleResponseDto> {
     const gateLabel = opts.gateLabel ?? 'gửi KCS công đoạn';
     this.assertMfgRoleMatchesStage(callerMfgRole, MfgStage.PHOI);
     const order = await this.findOrderOrThrow(productionOrderId);
-    await assertItemPiHasActiveFloor(this.prisma, order.productionInvoiceItemId, gateLabel);
+    const kcsOnCancelled =
+      opts.allowCancelled === true && (await isOrderCancelledById(this.prisma, order.id));
+    if (!kcsOnCancelled) {
+      await assertItemPiHasActiveFloor(this.prisma, order.productionInvoiceItemId, gateLabel);
+    }
     const pieceBigId = parseBigIntId(dto.pieceId);
 
     const created = await this.prisma.$transaction(
       async (tx) => {
         await lockBusinessKey(tx, `piece-step-bundle:${order.id}:${pieceBigId}:${dto.step}`);
-        await assertItemPiHasActiveFloorLocked(tx, order.productionInvoiceItemId, gateLabel);
+        if (!kcsOnCancelled) {
+          await assertItemPiHasActiveFloorLocked(tx, order.productionInvoiceItemId, gateLabel);
+        }
         // Câu chung khi không còn lần báo nào chưa chấm (vừa được chốt bởi bên kia) - dùng mã mảnh, không id thô.
         const noPendingMessage = async (): Promise<string> => {
           const piece = await tx.piece.findUnique({

@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
@@ -42,8 +43,10 @@ import { notifyPurchaseProposalCreated } from '../purchase-proposals/purchase-pr
 import { effectiveOrderQty } from '../purchase-proposals/purchase-order-qty.util';
 import {
   PurchaseRecomputeEvent,
+  applySignedLowering,
   emitPurchaseRecomputeNotifications,
   isUnsignedStatus,
+  planSignedLowering,
   planUnsignedWrite,
   sortItemsById,
   toRecomputeItem,
@@ -98,11 +101,12 @@ import { frameDeadlineOf } from '../../common/utils/frame-deadline.util';
 import { NOT_CANCELLED_ORDER, isCancelledOrder } from '../../common/utils/cancelled-order.util';
 import { WarehouseLike, WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import {
-  checkMergeRules,
-  maxGapDays,
-  ownSteelDeadlineOf,
-  skuLabel,
-} from '../../common/utils/merge-rules.util';
+  CUTTING_PROPOSAL_SEGMENT_REF,
+  SegmentStockService,
+} from '../segment-stock/segment-stock.service';
+import { isSegmentStockEnabled } from '../segment-stock/segment-stock.config';
+import { normalizeSegmentSteps } from '../../common/utils/segment-code.util';
+import { checkMergeRules, ownSteelDeadlineOf, skuLabel } from '../../common/utils/merge-rules.util';
 
 const SYSTEM_CONFIG_ID = 1;
 
@@ -344,9 +348,27 @@ const DETAIL_INCLUDE = {
  * Đầu vào đã dựng xong của 1 lần gọi solver. Có 2 nguồn dựng ra nó (xem buildOrderJob/
  * buildInvoiceJob) nhưng phần gọi solver + lưu kết quả dùng chung hoàn toàn.
  */
+/** Câu 14a: 1 ô đoạn dư phương án lấy từ kho Phôi (lưu trong requestParams.segment_stock_use, approve() giữ thật). */
+type SegmentStockUse = {
+  warehouse_id: string;
+  segment_spec_id: string;
+  segment_steps: string;
+  qty: number;
+};
+
 type SolverJob = {
   /** Nhãn cho log/thông báo QLSX: mã lệnh SX, hoặc mã PI khi cắt chung cả nhóm. */
   label: string;
+  /**
+   * Câu 14a + mục 2 (anh Nhân 24/11/2026): PI + các SKU (bản định mức, số bộ) để tính số cần theo (cỡ đoạn, bộ công đoạn) rồi trừ
+   * đoạn dư đúng quy cách ở kho Phôi của xưởng. Thiếu (lượt tính trước PI) = không trừ (chưa có PI để giữ đoạn).
+   */
+  stockDemand?: {
+    /** null = lượt tính TRƯỚC PI (gom đợt cắt): kho Phôi theo xưởng KHSX chọn, giữ đoạn lúc duyệt (khi đó đã có PI). */
+    piId: bigint | null;
+    workshopId?: bigint | null;
+    entries: { bomRevisionId: bigint; quantity: number }[];
+  };
   numSets: number;
   bomRows: SolverBomRow[];
   segmentSpecLookup: Map<string, bigint>;
@@ -419,6 +441,8 @@ export class CuttingProposalsService {
     private readonly stockReservationsService: StockReservationsService,
     private readonly notifications: NotificationsService,
     private readonly realtime: RealtimeService,
+    /** Câu 14a + mục 2 (24/11/2026): trừ đoạn dư trong kho Phôi trước khi tính cắt (chỉ khi SEGMENT_STOCK_ENABLED). */
+    @Optional() private readonly segmentStock?: SegmentStockService,
   ) {}
 
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
@@ -675,6 +699,7 @@ export class CuttingProposalsService {
           productionInvoiceId: true,
           prodApprovalStatus: true,
           materialDeadline: true,
+          cancelledAt: true,
           stages: { select: { stageType: true, deadline: true } },
           mfgProduct: { select: { factoryCode: true } },
           salesOrder: { select: { orderCode: true } },
@@ -684,6 +709,12 @@ export class CuttingProposalsService {
         const found = new Set(items.map((i) => i.id));
         throw new NotFoundException(
           `Không tìm thấy SKU: ${itemIds.filter((id) => !found.has(id)).join(', ')}`,
+        );
+      }
+      const cancelled = items.filter((i) => i.cancelledAt != null).map((i) => i.id.toString());
+      if (cancelled.length > 0) {
+        throw new ConflictException(
+          `SKU đã huỷ (dòng đơn bị Sales huỷ hoặc dòng của lệnh đã huỷ), không lên lệnh được: ${cancelled.join(', ')}`,
         );
       }
       // LUẬT GỘP (2026-10-24, Sếp Nhân: "chỉ được gom các lệnh cách nhau khoảng 3 ngày đổ lại", "sẽ kiểm soát lúc lên kế hoạch") -
@@ -1888,13 +1919,11 @@ export class CuttingProposalsService {
           const chain: typeof pool = [];
           for (const c of pool) {
             if (chain.length >= capacity) break;
-            const trial = [...selected, ...chain.map((x) => x.e.item), c.e.item];
-            const span = ruleOf(trial).spanDays;
-            if (span !== null && span > maxGapDays(windowDays)) continue;
+            // 24/11/2026 (anh Nhân): không loại đơn ngoài khung N ngày nữa - pool đã xếp theo độ gần mốc cần sắt (ưu tiên gần).
             chain.push(c);
           }
           if (chain.length === 0) {
-            row.addReason = `Không còn đơn nào dùng ${material.code} có mốc cần sắt trong khung ${windowDays} ngày với đợt này.`;
+            row.addReason = `Không còn đơn nào dùng ${material.code} để gộp thêm với đợt này.`;
           } else {
             let best: CuttingBatchFixAddDto | null = null;
             for (let k = 1; k <= chain.length; k++) {
@@ -1939,6 +1968,8 @@ export class CuttingProposalsService {
               blade_width: kerfMm,
               max_waste_percentage: thresholdPct,
               max_surplus: config.solverMaxSurplus,
+              // Anh Nhân câu 9-11 (24/11/2026): cây mua cuối cắt khúc thừa thành đoạn dư, không giới hạn số đoạn dư.
+              last_bar_fill: true,
               auto_scan: true,
               stop_on_first: true,
               min_length: config.solverMinLengthMm,
@@ -1972,6 +2003,8 @@ export class CuttingProposalsService {
               blade_width: kerfMm,
               max_waste_percentage: 100,
               max_surplus: config.solverMaxSurplus,
+              // Anh Nhân câu 9-11 (24/11/2026): cây mua cuối cắt khúc thừa thành đoạn dư, không giới hạn số đoạn dư.
+              last_bar_fill: true,
               auto_scan: false,
               time_limit_seconds: FIX_OPTIONS_SOLVER_TIME_LIMIT_SEC,
             },
@@ -2371,6 +2404,8 @@ export class CuttingProposalsService {
   private async loadBatchContextFresh() {
     const items = await this.prisma.productionInvoiceItem.findMany({
       where: {
+        // Huỷ lệnh câu 2 (24/11): dòng SKU đã huỷ (dòng đơn bị Sales huỷ) không hiện để gom nữa.
+        cancelledAt: null,
         AND: [
           {
             // "Sếp chưa duyệt" = chưa APPROVED. PHẢI viết dạng OR có nhánh null: item vừa sinh từ
@@ -2535,7 +2570,13 @@ export class CuttingProposalsService {
     return rows.map((r) => r.id);
   }
 
-  async approve(id: string, actorUserId: string | null): Promise<CuttingProposalResponseDto> {
+  async approve(
+    id: string,
+    actorUserId: string | null,
+    /** Huỷ lệnh câu 5 (anh Nhân 24/11): luồng huỷ SKU của lệnh gộp hạ "số cần" (buyQty) dòng SẮT đã ký NCC xuống nhu cầu mới,
+     *  giữ số đã ký (orderQty) - như 3 nguồn mua ngoài sắt (planSignedLowering). Mặc định không. */
+    opts: { lowerSignedOnDrop?: boolean } = {},
+  ): Promise<CuttingProposalResponseDto> {
     const bigId = parseBigIntId(id);
     const proposal = await this.prisma.cuttingProposal.findUnique({
       where: { id: bigId },
@@ -2778,6 +2819,10 @@ export class CuttingProposalsService {
                 refType: StockReservationRefType.CUTTING_PROPOSAL,
                 refId: s.id.toString(),
               });
+              // Câu 14a: đoạn dư phương án cũ đã lấy từ kho trả về phần dư chung (phương án mới lấy lại ở dưới nếu cần).
+              if (this.segmentStock) {
+                await this.segmentStock.releaseProposalAllocations(tx, s.id, actorUserId);
+              }
             }
           }
         }
@@ -2786,6 +2831,16 @@ export class CuttingProposalsService {
         // (giữ chỗ tồn / đề xuất mua). Chạy SAU bước supersede ở trên - "Tính lại" phải được phép
         // chuyển chủ từ phương án vừa bị đánh SUPERSEDED. Xem doc comment model CuttingPlanCoverage.
         await this.claimCuttingPlanCoverage(tx, bigId, proposal);
+
+        // Câu 14a + mục 2 (anh Nhân 24/11/2026): giữ thật phần đoạn dư lượt tính đã trừ khỏi nhu cầu. Không còn đủ (lệnh khác vừa lấy)
+        // thì không duyệt được - phải Tính lại (giống cây lẻ CS2).
+        await this.allocateSegmentStockUse(
+          tx,
+          bigId,
+          proposal.requestParams,
+          targetProductionInvoiceId,
+          actorUserId,
+        );
 
         const result = await tx.cuttingProposal.update({
           where: { id: bigId },
@@ -2963,6 +3018,26 @@ export class CuttingProposalsService {
                   demandDropped: { neededQty: n.gross, signedQty: n.firmed },
                 });
               }
+            }
+          }
+
+          // Huỷ lệnh câu 5: hạ buyQty dòng sắt ĐÃ KÝ (PURCHASING) về nhu cầu mới (trừ phần dòng đã đóng PURCHASED), không dưới số đã
+          // nhận; hàng về vượt thành tồn chung, "Đóng phần thiếu" không mua bù. Chỉ khi luồng huỷ yêu cầu.
+          if (opts.lowerSignedOnDrop && existingProposal && netByMaterial) {
+            for (const [materialId, n] of netByMaterial) {
+              const rows = existingProposal.items.filter((x) => x.materialId === materialId);
+              const signed = rows.filter((x) => x.status === PurchaseProposalStatus.PURCHASING);
+              if (signed.length === 0) continue;
+              const closedNeed = rows
+                .filter((x) => x.status === PurchaseProposalStatus.PURCHASED)
+                .reduce((sum, x) => sum + x.buyQty.toNumber(), 0);
+              await applySignedLowering(
+                tx,
+                planSignedLowering(
+                  signed.map((x) => toRecomputeItem(x)),
+                  Math.max(0, n.gross - closedNeed),
+                ),
+              );
             }
           }
 
@@ -3220,7 +3295,24 @@ export class CuttingProposalsService {
       const job = await buildJob();
       poNumber = job.label;
       batchLabel = job.label;
-      const { bomRows, segmentSpecLookup, segmentNames } = job;
+      const { segmentSpecLookup, segmentNames } = job;
+      let { bomRows } = job;
+      let numSets = job.numSets;
+      // Câu 14a + mục 2 (anh Nhân 24/11/2026): đoạn dư đúng quy cách trong kho Phôi của xưởng trừ khỏi nhu cầu TRƯỚC khi gửi bộ giải
+      // (phần còn thiếu mới tính cắt + mua sắt). Lúc duyệt mới giữ thật (approve). Lỗi đọc không làm hỏng lượt tính.
+      let segmentStockUse: SegmentStockUse[] = [];
+      try {
+        const r = await this.planSegmentStockUse(proposalId, job);
+        if (r) {
+          segmentStockUse = r.use;
+          bomRows = r.bomRows;
+          numSets = 1;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Cutting proposal ${proposalId}: không đọc được đoạn dư kho Phôi, tính như không có: ${(error as Error).message}`,
+        );
+      }
       const config = await this.prisma.systemConfig.findUniqueOrThrow({
         where: { id: SYSTEM_CONFIG_ID },
       });
@@ -3351,8 +3443,10 @@ export class CuttingProposalsService {
       }
 
       const baseRequestBody = {
-        num_sets: job.numSets,
+        num_sets: numSets,
         bom: bomRows,
+        // Câu 14a: đoạn dư lấy từ kho (đã trừ khỏi bom). Bộ giải bỏ qua khoá này; approve() đọc lại để giữ đoạn.
+        ...(segmentStockUse.length > 0 ? { segment_stock_use: segmentStockUse } : {}),
         // views.py đọc stock_lengths bằng str(...).replace(",", " ").split() - PHẢI gửi chuỗi
         // cách nhau bởi khoảng trắng, gửi mảng JSON sẽ bị solver parse sai (str([5850,6000]) ->
         // "[5850 6000]" -> phần tử đầu/cuối dính ký tự "[" "]" và bị loại bỏ, ra 0).
@@ -3387,6 +3481,8 @@ export class CuttingProposalsService {
           ? { leftover_stock_by_material: leftoverStockBody }
           : {}),
         max_surplus: config.solverMaxSurplus,
+        // Anh Nhân câu 9-11 (24/11/2026): cây mua cuối cắt khúc thừa thành đoạn dư, không giới hạn số đoạn dư.
+        last_bar_fill: true,
         min_length: config.solverMinLengthMm,
         max_length: config.solverMaxLengthMm,
         length_step: config.solverLengthStepMm,
@@ -3628,7 +3724,7 @@ export class CuttingProposalsService {
     }
     const qualityReason = await this.solutionQualityBlockReason(response);
     if (qualityReason) return { approved: false, reason: qualityReason };
-    await this.approve(proposalId.toString(), actorUserId);
+    await this.approve(proposalId.toString(), actorUserId, { lowerSignedOnDrop: true });
     return { approved: true };
   }
 
@@ -4524,6 +4620,8 @@ export class CuttingProposalsService {
           ...machineBody,
           max_waste_percentage: thresholdPct,
           max_surplus: maxSurplus,
+          // Anh Nhân câu 9-11 (24/11/2026): cây mua cuối cắt khúc thừa thành đoạn dư, không giới hạn số đoạn dư.
+          last_bar_fill: true,
           auto_scan: false,
           // Còn ít thời gian thì bảo solver tự dừng sớm hơn timeout HTTP (trả "tốt nhất đang có" thay vì bị ngắt giữa chừng).
           time_limit_seconds: Math.min(
@@ -4605,6 +4703,147 @@ export class CuttingProposalsService {
   }
 
   /** 1 lệnh SX cắt riêng: đúng 1 định mức, số bộ để solver tự nhân - hành vi có từ Phase 7. */
+  /**
+   * Câu 14a + mục 2 (anh Nhân 24/11/2026): "kho Phôi có 5 đoạn dư 1.990 mm, lệnh mới cần 30 -> dùng 5 đoạn dư trước, chỉ cắt 25".
+   * Số cần theo (cỡ đoạn, bộ công đoạn) của các SKU trong job; đoạn dư chỉ dùng cho đúng bộ công đoạn (câu 12b: đoạn dư đã làm đủ
+   * công đoạn như đoạn của lệnh). Có sẵn = dư dùng được của ô + phần chính PI này đang giữ từ phương án cũ (sẽ nhả khi phương án này
+   * thay). Trả bom tuyệt đối (num_sets = 1) đã trừ; null khi tắt / không có gì để trừ.
+   */
+  private async planSegmentStockUse(
+    proposalId: bigint,
+    job: SolverJob,
+  ): Promise<{ use: SegmentStockUse[]; bomRows: SolverBomRow[] } | null> {
+    if (!isSegmentStockEnabled() || !this.segmentStock || !job.stockDemand) return null;
+    const { piId, entries } = job.stockDemand;
+    if (entries.length === 0) return null;
+    const specIds = [...new Set([...job.segmentSpecLookup.values()].map((v) => v.toString()))].map(
+      (v) => BigInt(v),
+    );
+    if (specIds.length === 0) return null;
+    const revIds = [...new Set(entries.map((e) => e.bomRevisionId))];
+    const [bomPieces, pieceBoms] = await Promise.all([
+      this.prisma.bomPiece.findMany({
+        where: { bomRevisionId: { in: revIds } },
+        select: { bomRevisionId: true, pieceId: true, qtyPerUnit: true },
+      }),
+      this.prisma.pieceBom.findMany({
+        where: { bomRevisionId: { in: revIds }, segmentSpecId: { in: specIds } },
+        select: {
+          bomRevisionId: true,
+          pieceId: true,
+          segmentSpecId: true,
+          qtyPerPiece: true,
+          processSteps: true,
+        },
+      }),
+    ]);
+    const qpu = new Map(bomPieces.map((b) => [`${b.bomRevisionId}:${b.pieceId}`, b.qtyPerUnit]));
+    const need = new Map<string, number>(); // `${spec}|${steps}`
+    for (const e of entries) {
+      for (const pb of pieceBoms) {
+        if (pb.bomRevisionId !== e.bomRevisionId) continue;
+        const qty =
+          pb.qtyPerPiece * (qpu.get(`${pb.bomRevisionId}:${pb.pieceId}`) ?? 0) * e.quantity;
+        if (qty <= 0) continue;
+        const k = `${pb.segmentSpecId}|${normalizeSegmentSteps(pb.processSteps)}`;
+        need.set(k, (need.get(k) ?? 0) + qty);
+      }
+    }
+    const resolver = new WorkshopWarehouseResolver(this.prisma);
+    const warehouse =
+      piId != null
+        ? await resolver.phoiWarehouseOfPi(piId)
+        : job.stockDemand.workshopId != null
+          ? await resolver.phoiWarehouseOf(job.stockDemand.workshopId)
+          : null;
+    if (!warehouse) return null;
+    const [surplus, own] = await Promise.all([
+      this.segmentStock.readSurplusMany(this.prisma, warehouse.id, specIds),
+      piId != null
+        ? this.segmentStock.allocatedFromStockByPi(this.prisma, piId)
+        : Promise.resolve(new Map<string, { warehouseId: bigint; qty: number }>()),
+    ]);
+    const use: SegmentStockUse[] = [];
+    const usedBySpec = new Map<string, number>();
+    for (const [k, n] of [...need.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      const ownQty = own.get(k);
+      const have =
+        (surplus.get(k) ?? 0) + (ownQty && ownQty.warehouseId === warehouse.id ? ownQty.qty : 0);
+      const take = Math.floor(Math.min(n, have) + 1e-9);
+      if (take <= 0) continue;
+      const [spec, steps] = k.split('|');
+      use.push({
+        warehouse_id: warehouse.id.toString(),
+        segment_spec_id: spec,
+        segment_steps: steps,
+        qty: take,
+      });
+      usedBySpec.set(spec, (usedBySpec.get(spec) ?? 0) + take);
+    }
+    if (use.length === 0) return null;
+    // Bom tuyệt đối rồi trừ theo cỡ đoạn (khoá material:cut_length -> segmentSpecId như segmentSpecLookup).
+    const left = new Map(usedBySpec);
+    const rows: SolverBomRow[] = [];
+    for (const row of job.bomRows) {
+      let qty = row.qty_per_set * row.qty_per_part * job.numSets;
+      const spec = job.segmentSpecLookup.get(`${row.material}:${row.cut_length}`)?.toString();
+      const l = spec ? (left.get(spec) ?? 0) : 0;
+      if (l > 0) {
+        const cut = Math.min(l, qty);
+        qty -= cut;
+        left.set(spec!, l - cut);
+      }
+      if (qty > 0) rows.push({ ...row, qty_per_set: 1, qty_per_part: qty });
+    }
+    // Đoạn dư phủ hết mọi cỡ: không còn gì để giải - bộ giải không nhận bom rỗng, tính như thường (cắt đủ, không lấy dư).
+    if (rows.length === 0) return null;
+    this.logger.log(
+      `Cutting proposal ${proposalId}: dùng ${use.reduce((t, u) => t + u.qty, 0)} đoạn dư kho Phôi ${warehouse.id} trước khi tính cắt`,
+    );
+    return { use, bomRows: rows };
+  }
+
+  /** approve(): giữ đoạn dư đã trừ lúc tính (requestParams.segment_stock_use) cho PI của phương án. */
+  private async allocateSegmentStockUse(
+    tx: PrismaTx,
+    proposalId: bigint,
+    requestParams: Prisma.JsonValue,
+    piId: bigint | null | undefined,
+    actorUserId: string | null,
+  ): Promise<void> {
+    const use = (requestParams as { segment_stock_use?: SegmentStockUse[] } | null)
+      ?.segment_stock_use;
+    if (!use || use.length === 0) return;
+    if (!this.segmentStock || !piId) {
+      throw new ConflictException(
+        `Phương án cắt ${proposalId} đã trừ đoạn dư trong kho nhưng không giữ được đoạn (chưa có lệnh sản xuất). Bấm "Tính lại".`,
+      );
+    }
+    for (const u of [...use].sort(
+      (a, b) =>
+        a.warehouse_id.localeCompare(b.warehouse_id) ||
+        a.segment_spec_id.localeCompare(b.segment_spec_id) ||
+        a.segment_steps.localeCompare(b.segment_steps),
+    )) {
+      const r = await this.segmentStock.allocateSurplusToOrder(tx, {
+        warehouseId: BigInt(u.warehouse_id),
+        segmentSpecId: BigInt(u.segment_spec_id),
+        segmentSteps: u.segment_steps,
+        productionInvoiceId: piId,
+        qty: u.qty,
+        refType: CUTTING_PROPOSAL_SEGMENT_REF,
+        refId: proposalId.toString(),
+        note: 'Phương án cắt dùng đoạn dư trong kho trước khi cắt',
+        actorId: actorUserId ?? undefined,
+      });
+      if (r.allocatedQty + 1e-9 < u.qty) {
+        throw new ConflictException(
+          `Đoạn dư trong kho Phôi đã bị lệnh khác dùng (cần ${u.qty}, còn ${r.allocatedQty}) - bấm "Tính lại" để tính với số dư mới.`,
+        );
+      }
+    }
+  }
+
   private async buildOrderJob(productionOrderId: bigint): Promise<SolverJob> {
     const order = await this.prisma.productionOrder.findUniqueOrThrow({
       where: { id: productionOrderId },
@@ -4612,6 +4851,7 @@ export class CuttingProposalsService {
         productionInvoiceItem: {
           select: {
             workshopId: true,
+            productionInvoiceId: true,
             salesOrder: { select: { orderCode: true } },
             productionInvoice: {
               select: {
@@ -4634,6 +4874,14 @@ export class CuttingProposalsService {
     const label = order.productionInvoiceItem.salesOrder?.orderCode ?? order.poNumber;
     return {
       label,
+      ...(order.productionInvoiceItem.productionInvoiceId
+        ? {
+            stockDemand: {
+              piId: order.productionInvoiceItem.productionInvoiceId,
+              entries: [{ bomRevisionId: order.bomRevisionId, quantity: order.quantity }],
+            },
+          }
+        : {}),
       numSets: order.quantity,
       bomRows,
       segmentSpecLookup,
@@ -4693,6 +4941,13 @@ export class CuttingProposalsService {
 
     return {
       label: pi.code,
+      stockDemand: {
+        piId: pi.id,
+        entries: orders.map(({ order }) => ({
+          bomRevisionId: order.bomRevisionId,
+          quantity: order.quantity,
+        })),
+      },
       numSets: 1,
       bomRows,
       segmentSpecLookup,
@@ -4793,6 +5048,17 @@ export class CuttingProposalsService {
       workshopId?: string;
     };
     const codes = proposal.items.map((it) => it.productionInvoiceItem.mfgProduct.factoryCode);
+    // Câu 14a + mục 2: lượt "Tính" ở gom đợt cắt là luồng chính của KHSX - cũng trừ đoạn dư kho Phôi của xưởng đã chọn (thử sống 25/11).
+    const stockDemand = options.workshopId
+      ? {
+          piId: null,
+          workshopId: BigInt(options.workshopId),
+          entries: proposal.items.map((it) => ({
+            bomRevisionId: it.bomRevisionId,
+            quantity: it.quantity,
+          })),
+        }
+      : undefined;
     const { bomRows, segmentSpecLookup, segmentNames } = await this.aggregateDemand(
       proposal.items.map((it) => ({
         code: it.productionInvoiceItem.mfgProduct.factoryCode,
@@ -4802,6 +5068,7 @@ export class CuttingProposalsService {
     );
     return {
       label: [...new Set(codes)].join(', '),
+      ...(stockDemand ? { stockDemand } : {}),
       numSets: 1,
       bomRows,
       segmentSpecLookup,
@@ -4972,14 +5239,27 @@ export class CuttingProposalsService {
   private buildPieceSummary(
     item: SolverProposeResponse['purchase_plan'][number],
     segmentNames: Map<string, string[]>,
+    /** Câu 14a: đoạn dư lấy từ kho theo khoá `${materialId}:${size}` (đã trừ khỏi demand gửi bộ giải). */
+    fromStockByKey: Map<string, number> = new Map(),
   ): Prisma.InputJsonValue | undefined {
     if (!item.pieces?.length) return undefined;
-    return [...item.pieces]
+    const pieces = [...item.pieces];
+    // Cỡ được đoạn dư trong kho phủ hết không còn trong bài giải - vẫn hiện trên Hướng dẫn cắt ("có sẵn N, cắt 0").
+    for (const [key, qty] of fromStockByKey) {
+      const [material, size] = key.split(':');
+      if (material !== String(item.material) || qty <= 0) continue;
+      if (!pieces.some((p) => p.size === Number(size)))
+        pieces.push({ size: Number(size), demand: 0, produced: 0, surplus: 0 });
+    }
+    return pieces
       .sort((a, b) => b.size - a.size)
       .map((p) => ({
         size: p.size,
         demand: p.demand,
         produced: p.produced,
+        ...(fromStockByKey.get(`${item.material}:${p.size}`)
+          ? { fromStock: fromStockByKey.get(`${item.material}:${p.size}`) }
+          : {}),
         // Khoá tra cứu dựng y hệt segmentSpecLookup ở dòng lưu pattern bên dưới - `item.material`
         // là materialId thô, `p.size` là number thường từ JSON (xem buildBomRows để biết vì sao
         // KHÔNG được ghép thẳng Decimal vào đây).
@@ -5037,6 +5317,18 @@ export class CuttingProposalsService {
       thresholdPct?: number | null;
     } = {},
   ): Promise<boolean> {
+    // Câu 14a: đoạn dư lấy từ kho theo cỡ (khoá như segmentSpecLookup) để Hướng dẫn cắt ghi "cần / có sẵn / cắt".
+    const fromStockByKey = new Map<string, number>();
+    const stockUse = (requestBody as { segment_stock_use?: SegmentStockUse[] } | null)
+      ?.segment_stock_use;
+    if (stockUse?.length) {
+      for (const [key, specId] of segmentSpecLookup) {
+        const qty = stockUse
+          .filter((u) => u.segment_spec_id === specId.toString())
+          .reduce((t, u) => t + u.qty, 0);
+        if (qty > 0) fromStockByKey.set(key, qty);
+      }
+    }
     // Suy 2 cờ tổng hợp TỪ response gốc trước khi lưu - lý do tồn tại xem comment schema.prisma
     // (hasInfeasibleLine/hasOverThreshold): để màn Cắt sắt lọc/đếm được BẰNG SQL khi poll định kỳ,
     // không phải kéo lines[] về rồi lọc ở code (xem changelog 2026-08-15 mục 15 - đợt 2 sẽ dùng).
@@ -5104,7 +5396,7 @@ export class CuttingProposalsService {
               // tên mảnh dựng từ chính bomRevision vừa gửi đi. undefined (không phải null) khi
               // solver không trả pieces: dòng infeasible - để Prisma bỏ qua cột thay vì ghi JSON
               // null, phân biệt được "không có dữ liệu" với "đã tính, rỗng".
-              pieceSummary: this.buildPieceSummary(item, segmentNames),
+              pieceSummary: this.buildPieceSummary(item, segmentNames, fromStockByKey),
               // 5 field mới (2026-08-19) - lưu NGUYÊN VĂN những gì solver trả, không diễn giải lại
               // ở đây (xem lý do "luôn dùng bản solver" - changelog 2026-08-15 mục 15.5-(d)). Câu
               // tiếng Việt hiển thị cho người dùng sẽ dựng ở tầng response DTO/FE (đợt sau), không

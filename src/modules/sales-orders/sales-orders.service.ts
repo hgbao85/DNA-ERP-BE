@@ -35,6 +35,7 @@ import { toContainerLoadDto } from '../../common/dto/container-load.dto';
 import { SalesOrderItemResponseDto } from './dto/sales-order-item-response.dto';
 import { UpdateSalesOrderDto } from './dto/update-sales-order.dto';
 import { UpdateSalesOrderItemDto } from './dto/update-sales-order-item.dto';
+import { CancelSalesOrderItemDto } from './dto/cancel-sales-order-item.dto';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { RealtimeEntityAction } from '../../realtime/realtime.contract';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
@@ -598,6 +599,111 @@ export class SalesOrdersService {
     return this.toItemResponseDto(updated, await this.resolveItemStage(updated));
   }
 
+  /**
+   * Huỷ lệnh câu 2 (anh Nhân 24/11/2026): khách huỷ hẳn thì Sales tự huỷ dòng đơn (huỷ lệnh SX chỉ huỷ phần sản xuất, đơn bán
+   * vẫn sinh dòng SKU mới). Chỉ huỷ được khi: chưa xuất bộ nào, không còn lệnh sản xuất sống (có thì KHSX đề nghị huỷ lệnh
+   * trước, Sếp duyệt), không đang được tính phương án cắt, không nằm trong booking chưa huỷ. Dòng SKU chưa gom của dòng này
+   * gắn cancelledAt để KHSX hết thấy ở Gom đợt cắt.
+   */
+  async cancelItem(
+    salesOrderId: string,
+    id: string,
+    dto: CancelSalesOrderItemDto,
+  ): Promise<SalesOrderItemResponseDto> {
+    const order = await this.findOneOrThrow(salesOrderId);
+    const userId = this.cls.get('userId');
+    if (!userId) throw new BadRequestException('Không xác định được người dùng');
+    const reason = dto.reason.trim();
+    if (!reason) throw new BadRequestException('Cần ghi lý do huỷ dòng');
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const item = await this.findItemOrThrow(order.id, id, tx);
+      const label = `Dòng ${item.mfgProduct.factoryCode} của đơn ${order.orderCode}`;
+      if (item.cancelledAt) throw new ConflictException(`${label} đã huỷ rồi`);
+      if (item.shippedQty > 0) {
+        throw new ConflictException(`${label} đã xuất ${item.shippedQty} bộ - không huỷ được`);
+      }
+      const piItems = await tx.productionInvoiceItem.findMany({
+        where: { salesOrderItemId: item.id },
+        select: { id: true, productionInvoiceId: true, cancelledAt: true },
+        orderBy: { id: 'asc' },
+      });
+      // Cùng khoá với Tính phương án cắt (cutting-batch-solve) - không để 1 lượt tính đang chạy giữ dòng sắp huỷ.
+      for (const p of piItems) await lockBusinessKey(tx, `cutting-batch-solve:${p.id}`);
+      if (piItems.some((p) => p.productionInvoiceId !== null && p.cancelledAt === null)) {
+        throw new ConflictException(
+          `${label} đang có lệnh sản xuất - KHSX đề nghị huỷ lệnh (Sếp duyệt) trước, rồi mới huỷ dòng đơn`,
+        );
+      }
+      const openIds = piItems.filter((p) => p.cancelledAt === null).map((p) => p.id);
+      if (openIds.length > 0) {
+        const solving = await tx.cuttingProposalItem.findFirst({
+          where: {
+            productionInvoiceItemId: { in: openIds },
+            cuttingProposal: {
+              status: {
+                in: [
+                  CuttingProposalStatus.CALCULATING,
+                  CuttingProposalStatus.DRAFT,
+                  CuttingProposalStatus.FAILED,
+                ],
+              },
+              productionOrderId: null,
+              productionInvoiceId: null,
+            },
+          },
+          select: { id: true },
+        });
+        if (solving) {
+          throw new ConflictException(
+            `${label} đang được KHSX tính phương án cắt - nhờ KHSX bỏ lượt tính đó trước`,
+          );
+        }
+      }
+      const booked = await tx.bookingLine.findFirst({
+        where: { salesOrderItemId: item.id, booking: { status: { not: BookingStatus.CANCELLED } } },
+        select: { booking: { select: { bookingNo: true } } },
+      });
+      if (booked) {
+        throw new ConflictException(
+          `${label} đang nằm trong booking ${booked.booking.bookingNo} - bỏ khỏi booking trước`,
+        );
+      }
+      const now = new Date();
+      if (openIds.length > 0) {
+        await tx.productionInvoiceItem.updateMany({
+          where: { id: { in: openIds }, productionInvoiceId: null },
+          data: { cancelledAt: now },
+        });
+      }
+      const row = await tx.salesOrderItem.update({
+        where: { id: item.id },
+        data: { cancelledAt: now, cancelledById: userId, cancelReason: reason },
+        include: ITEM_INCLUDE,
+      });
+      // KHSX vừa gom dòng này trong lúc Sales huỷ -> huỷ cả lần huỷ, để KHSX đề nghị huỷ lệnh theo đường chuẩn.
+      const pinned = await tx.productionInvoiceItem.findFirst({
+        where: { salesOrderItemId: item.id, productionInvoiceId: { not: null }, cancelledAt: null },
+        select: { id: true },
+      });
+      if (pinned) {
+        throw new ConflictException(
+          `${label} vừa được KHSX gom vào lệnh sản xuất - không huỷ được nữa`,
+        );
+      }
+      await writeAuditLog(auditClient(tx), this.cls, {
+        action: AuditAction.UPDATE,
+        tableName: ITEM_AUDIT_TABLE,
+        recordId: item.id.toString(),
+        oldValue: { cancelledAt: null },
+        newValue: { cancelledAt: now.toISOString(), cancelReason: reason },
+      });
+      return row;
+    });
+    await this.recomputeDeliveryDate(order.id);
+    this.publishRealtime(updated.salesOrderId, 'UPDATED');
+    return this.toItemResponseDto(updated, await this.resolveItemStage(updated));
+  }
+
   /** Kiểm + ghi 1 dòng trong transaction của caller (updateItem 1 dòng, update nhiều dòng - K6 16/11). */
   private async updateItemInTx(
     tx: PrismaTx,
@@ -606,6 +712,9 @@ export class SalesOrdersService {
     dto: UpdateSalesOrderItemDto,
   ): Promise<SalesOrderItemWithProduct> {
     const item = await this.findItemOrThrow(order.id, id, tx);
+    if (item.cancelledAt) {
+      throw new ConflictException(`Dòng ${item.mfgProduct.factoryCode} đã huỷ - không sửa được`);
+    }
 
     // Medium fix: totalQty trước đây sửa được vô hạn định, kể cả sau khi đã ghim vào
     // ProductionInvoiceItem.quantity (chỉ ghim 1 lần lúc PI được tạo, không tự đồng bộ lại) -
@@ -883,7 +992,8 @@ export class SalesOrdersService {
     db: PrismaServiceType | PrismaTx = this.prisma,
   ): Promise<void> {
     const items = await db.salesOrderItem.findMany({
-      where: { salesOrderId },
+      // Huỷ lệnh câu 2: dòng Sales đã huỷ không còn quyết định hạn giao của đơn.
+      where: { salesOrderId, cancelledAt: null },
       select: { deliveryDate: true },
     });
     const dates = items.map((it) => it.deliveryDate).filter((d): d is Date => !!d);
@@ -1093,6 +1203,8 @@ export class SalesOrdersService {
       deliveryDate: item.deliveryDate,
       wireMaterial: item.wireMaterial ? toMaterialChoiceRef(item.wireMaterial) : null,
       cushionMaterial: item.cushionMaterial ? toMaterialChoiceRef(item.cushionMaterial) : null,
+      cancelledAt: item.cancelledAt,
+      cancelReason: item.cancelReason,
     });
   }
 }

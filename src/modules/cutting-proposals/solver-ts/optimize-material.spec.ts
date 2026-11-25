@@ -314,4 +314,64 @@ describe('optimizeMaterial', () => {
       expect(r.reason).toContain('bó');
     });
   });
+
+  describe('cây mua cuối cắt khúc thừa thành đoạn dư (anh Nhân câu 9-11, 24/11/2026)', () => {
+    const opts = { maxWasteRatio: 0.01, timeLimit: 20, maxSurplus: 10 };
+
+    it('150 đoạn 60 mm trên cây 6 m: tắt thì vô nghiệm (dư ≤ 10), bật thì 2 cây, cây cuối cắt hết khúc thừa thành đoạn dư', () => {
+      const off = optimizeMaterial(highs, [60], [150], [6000], TRIM, KERF, opts);
+      expect(off.feasible).toBe(false);
+      const on = optimizeMaterial(highs, [60], [150], [6000], TRIM, KERF, {
+        ...opts,
+        lastBarFill: true,
+      });
+      expect(on.feasible).toBe(true);
+      if (!on.feasible) return;
+      expect(on.total_bars).toBe(2);
+      // cây 5990 dùng được / 61 = 98 đoạn, cùi 12 mm mỗi cây
+      expect(on.produced[0]).toBe(196);
+      expect(on.total_surplus_pieces).toBe(46);
+      expect(on.waste_pct).toBeLessThan(1);
+      expect(on.stats?.last_bar_filled).toBe(true);
+    });
+
+    it('nhiều cỡ: cây mua cuối chọn cỡ cho cùi nhỏ nhất, không mua thêm cây', () => {
+      const on = optimizeMaterial(highs, [1990, 900, 450], [5, 3, 1], [6000], TRIM, KERF, {
+        ...opts,
+        lastBarFill: true,
+      });
+      expect(on.feasible).toBe(true);
+      if (!on.feasible) return;
+      // nhu cầu 5·1991 + 3·901 + 451 = 13.109 mm -> tối thiểu 3 cây
+      expect(on.total_bars).toBe(3);
+      expect(on.waste_pct).toBeLessThan(1);
+    });
+
+    it('luật laze nhát cắt cuối 100 mm: cây mua cuối vẫn chừa cùi (đoạn cuối + cùi > 100)', () => {
+      const r = optimizeMaterial(highs, [60, 45], [150, 20], [6000], TRIM, KERF, {
+        ...opts,
+        lastBarFill: true,
+        laserMinTailMm: 100,
+      });
+      expect(r.feasible).toBe(true);
+      if (!r.feasible) return;
+      for (const p of r.plan) {
+        const longest = Math.max(...p.counts.map((c, k) => (c > 0 ? [60, 45][k] : 0)));
+        expect(longest + p.waste_per_bar).toBeGreaterThan(100);
+      }
+    });
+
+    it('cắt thường đã ra nghiệm thì giữ nguyên (không thêm cây mua cuối)', () => {
+      const base = optimizeMaterial(highs, [497, 355], [160, 320], [6000], TRIM, KERF, opts);
+      const on = optimizeMaterial(highs, [497, 355], [160, 320], [6000], TRIM, KERF, {
+        ...opts,
+        lastBarFill: true,
+      });
+      expect(base.feasible && on.feasible).toBe(true);
+      if (!base.feasible || !on.feasible) return;
+      expect(on.total_bars).toBe(base.total_bars);
+      expect(on.produced).toEqual(base.produced);
+      expect(on.stats?.last_bar_filled).toBeUndefined();
+    });
+  });
 });

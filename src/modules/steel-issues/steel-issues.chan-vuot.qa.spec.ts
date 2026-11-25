@@ -112,6 +112,7 @@ interface FakePrisma {
   productionOrder: MockGroup;
   pieceBom: MockGroup;
   bomPiece: MockGroup;
+  cuttingPlanCoverage: MockGroup;
   segmentSpec: MockGroup;
   cutPatternSegment: MockGroup;
   qcReviewSegment: MockGroup;
@@ -205,6 +206,7 @@ function build(world: World) {
       ),
     ),
   };
+  prisma.cuttingPlanCoverage = { findMany: jest.fn().mockResolvedValue([]) };
   prisma.bomPiece = {
     findMany: jest.fn().mockResolvedValue([{ bomRevisionId: 5n, pieceId: 20n, qtyPerUnit: 1 }]),
   };

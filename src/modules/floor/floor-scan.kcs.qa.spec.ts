@@ -353,6 +353,8 @@ function buildSteelPrisma(world: World) {
   };
   prisma.cuttingProposalLine = { findMany: jest.fn().mockResolvedValue([]) };
   prisma.stockReservation = { findMany: jest.fn().mockResolvedValue([]) };
+  prisma.steelReturn = { findMany: jest.fn().mockResolvedValue([]) };
+  prisma.cuttingPlanCoverage = { findMany: jest.fn().mockResolvedValue([]) };
   return prisma;
 }
 

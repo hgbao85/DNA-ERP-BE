@@ -32,6 +32,8 @@ export class PhoiProgressOrderSegmentDto {
   @Expose() @ApiProperty() reportedQty: number = 0;
   /** Lần báo kế tiếp tối đa được bao nhiêu = max(0, min(room, physicalLeft)); Cắt thì max(0, room). */
   @Expose() @ApiProperty() maxNow: number = 0;
+  /** Câu 12b/13a (24/11/2026): đoạn dư theo phương án được báo thêm ngoài số cần (đã gồm trong maxNow, không gồm trong required). */
+  @Expose() @ApiProperty() planSurplus: number = 0;
   /** Số đoạn còn "có thật" để làm công đoạn này (đoạn đã cắt - đã dùng); null với Cắt. */
   @Expose() @ApiPropertyOptional({ nullable: true }) physicalLeft: number | null = null;
   /** Phần của `done` CHƯA gửi KCS (đợt cắt đang CUTTING / dòng công đoạn phụ chưa vào đợt gửi KCS). */
@@ -68,6 +70,8 @@ export class PhoiProgressSegmentDto {
   @Expose() @ApiProperty() reportedQty: number = 0;
   /** Lần báo kế tiếp tối đa được bao nhiêu = max(0, min(room, physicalLeft)); Cắt thì max(0, room). */
   @Expose() @ApiProperty() maxNow: number = 0;
+  /** Câu 12b/13a (24/11/2026): đoạn dư theo phương án được báo thêm ngoài số cần (đã gồm trong maxNow, không gồm trong required). */
+  @Expose() @ApiProperty() planSurplus: number = 0;
   /** Số đoạn còn "có thật" để làm công đoạn này; null với Cắt. */
   @Expose() @ApiPropertyOptional({ nullable: true }) physicalLeft: number | null = null;
   /** Σ failedQty (lỗi KCS cộng dồn, không còn resolvedQty) của mọi QcReviewSegment thuộc cỡ này trong cả PI.

@@ -300,4 +300,56 @@ describe('phoi-need.util - công thức số cần / giới hạn vật lý', ()
       expect(phoiOrderKey([{ id: 9n }, { id: 8n }], 8n)).toBe('8');
     });
   });
+
+  describe('đoạn dư theo phương án + đoạn dư lấy từ kho (anh Nhân câu 12b/13a/14a, 24/11/2026)', () => {
+    const rows = (planSurplus: Parameters<typeof buildPhoiNeedIndex>[0]['planSurplus']) =>
+      buildPhoiNeedIndex({
+        orders: [{ id: 1n, bomRevisionId: 5n, quantity: 10 }],
+        bomPieces: [{ bomRevisionId: 5n, pieceId: 20n, qtyPerUnit: 1 }],
+        pieceBoms: [
+          {
+            bomRevisionId: 5n,
+            pieceId: 20n,
+            segmentSpecId: 7n,
+            qtyPerPiece: 3,
+            processSteps: ['UON'],
+          },
+        ],
+        cut: [{ segmentSpecId: 7n, productionOrderId: 1n, qty: 30 }],
+        cutQc: [],
+        step: [],
+        stepQc: [],
+        planSurplus,
+      }).get('1', '7')!;
+
+    it('dư theo phương án: số cần giữ 30, báo thêm được 4 đoạn ở Cắt và Uốn', () => {
+      const input = rows([{ productionOrderId: 1n, segmentSpecId: 7n, qty: 4 }]);
+      const cat = computePhoiStep(input, 'CAT');
+      expect(cat.required).toBe(30);
+      expect(cat.planSurplus).toBe(4);
+      expect(cat.maxNow).toBe(4);
+      const uon = computePhoiStep(input, 'UON');
+      expect(uon.required).toBe(30);
+      expect(uon.maxNow).toBe(30);
+      expect(pickPhoiBlock(cat, 5)).toBe('NEED');
+      expect(pickPhoiBlock(cat, 4)).toBeNull();
+    });
+
+    it('lấy 5 đoạn đã uốn từ kho: số cần Cắt và Uốn còn 25', () => {
+      const input = rows([
+        { productionOrderId: 1n, segmentSpecId: 7n, qty: 5, fromStockSteps: 'UON' },
+      ]);
+      expect(computePhoiStep(input, 'CAT').required).toBe(25);
+      expect(computePhoiStep(input, 'UON').required).toBe(25);
+      expect(computePhoiStep(input, 'CAT').over).toBe(5);
+    });
+
+    it('lấy đoạn trơn từ kho: chỉ giảm số cần Cắt, Uốn vẫn đủ 30', () => {
+      const input = rows([
+        { productionOrderId: 1n, segmentSpecId: 7n, qty: 5, fromStockSteps: '' },
+      ]);
+      expect(computePhoiStep(input, 'CAT').required).toBe(25);
+      expect(computePhoiStep(input, 'UON').required).toBe(30);
+    });
+  });
 });

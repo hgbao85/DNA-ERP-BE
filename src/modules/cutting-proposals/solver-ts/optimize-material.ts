@@ -56,6 +56,13 @@ export interface OptimizeMaterialOptions {
    * xem TwoStageInput.lengthCaps).
    */
   lengthCaps?: Record<number, number>;
+  /**
+   * Anh Nhân câu 9-11 (24/11/2026): cây mua cuối của MỌI lệnh được cắt khúc thừa thành đoạn dư, không giới hạn maxSurplus, chọn cỡ
+   * cho cùi nhỏ nhất. Bật thì: (1) cây mua cuối CS2 (có cây lẻ) không còn giới hạn đoạn dư; (2) lệnh không cây lẻ mà cắt thường vô
+   * nghiệm (mọi cây ≤ ngưỡng + dư ≤ maxSurplus) thì giải lại cho 1 cây mua cuối cắt tự do (ít cây mua nhất trước). Lệnh cắt thường
+   * ra nghiệm thì giữ nguyên (mọi cây đã ≤ ngưỡng, khúc thừa đã nhỏ).
+   */
+  lastBarFill?: boolean;
 }
 
 /** Số kiểu cắt ít phế nhất của MỖI chiều dài cây lẻ luôn được giữ khi lọc bớt kiểu cắt đưa vào IP (CS2). */
@@ -128,6 +135,7 @@ export function optimizeMaterial(
         allowShortage: opts.allowShortage,
         hardMaxSizesPerBar: opts.hardMaxSizesPerBar,
         laserMinTailMm: opts.laserMinTailMm,
+        lastBarFill: opts.lastBarFill,
       });
       if (!r.feasible) continue;
       const key: [number, number] = [Math.round(r.waste_pct * 1e4) / 1e4, r.total_purchased_mm];
@@ -215,7 +223,9 @@ export function optimizeMaterial(
   const enumSeconds = (performance.now() - tEnum) / 1000;
   let rssPeak = rssMb();
 
-  if (!allPatterns.length) {
+  const purchaseLengthsAll = stockLengths.filter((S) => !cappedSet.has(S));
+  const canFillLast = !!opts.lastBarFill && purchaseLengthsAll.length === 1;
+  if (!allPatterns.length && !(canFillLast && patternsComplete)) {
     if (!patternsComplete) {
       return {
         feasible: false,
@@ -313,15 +323,23 @@ export function optimizeMaterial(
   // CS2 cây mua cuối (anh Nhân 23/11): phần còn thiếu sau khi xếp cây lẻ được cắt trên 1 cây mua tự do (không theo ngưỡng). Chỉ khi
   // có đúng 1 chiều dài mua. MC Tự động: cây đó cắt tay (tính vào số cây cắt tay tối đa).
   const purchaseLengths = stockLengths.filter((S) => !cappedSet.has(S));
-  const tailLength =
+  let tailLength =
     lengthCaps.length > 0 && purchaseLengths.length === 1 ? purchaseLengths[0] : null;
-  const res = solveTwoStage(highs, {
+  const tailMaxSizes = hardCap ?? mctdCap ?? (limitedSizesUsed ? MAX_SIZES_PER_BAR : null);
+  // Luật laze "nhát cắt cuối" (đoạn dài nhất trên cây + cùi > minTail) cho cây mua cuối: cây cuối cắt tự do không đi qua bộ lọc
+  // kiểu cắt, nên chừa sẵn cùi đủ cho trường hợp xấu nhất (đoạn dài nhất trên cây là cỡ ngắn nhất). Thiếu thì cây cuối cắt sát cùi
+  // ra kiểu laze không làm được (thử sống 25/11: 150 đoạn 60 mm, cùi 12 mm, ngưỡng 100 mm).
+  const tailReserveS =
+    minTail > 0 ? Math.max(0, scale(minTail) - scale(Math.min(...cutLengths)) + 1) : 0;
+  const solveInput = (tl: number | null, ungated: boolean) => ({
     ...(lengthCaps.length > 0 ? { lengthCaps } : {}),
-    ...(tailLength !== null
+    ...(tl !== null
       ? {
           tailBar: {
-            usableS: scale(tailLength) - scale(trim),
-            maxSizes: hardCap ?? mctdCap ?? (limitedSizesUsed ? MAX_SIZES_PER_BAR : null),
+            usableS: scale(tl) - scale(trim) - tailReserveS,
+            maxSizes: tailMaxSizes,
+            ...(ungated ? { ungated: true } : {}),
+            ...(opts.lastBarFill ? { unlimitedSurplus: true } : {}),
           },
         }
       : {}),
@@ -341,6 +359,24 @@ export function optimizeMaterial(
     bundle,
     allowShortage: opts.allowShortage,
   });
+  let res = allPatterns.length > 0 ? solveTwoStage(highs, solveInput(tailLength, false)) : null;
+  // Câu 9b/11a: cắt thường vô nghiệm (không do hết giờ) -> giải lại với 1 cây mua cuối cắt tự do khúc thừa thành đoạn dư.
+  let lastBarFilled = false;
+  if (
+    canFillLast &&
+    tailLength === null &&
+    (!res || (!res.y && res.stage1.status !== 'time_limit_no_solution'))
+  ) {
+    const retry = solveTwoStage(highs, solveInput(purchaseLengthsAll[0], true));
+    if (retry.y || !res) {
+      res = retry;
+      if (retry.y) {
+        tailLength = purchaseLengthsAll[0];
+        lastBarFilled = true;
+      }
+    }
+  }
+  if (!res) throw new Error('unreachable');
   rssPeak = Math.max(rssPeak, rssMb());
 
   const stats: SolveStats = {
@@ -363,6 +399,7 @@ export function optimizeMaterial(
     stage1_by_n: res.stage1.byN,
     stage2_by_n: res.stage2.byN,
     ...(res.narrow ? { bundle_narrow: res.narrow } : {}),
+    ...(lastBarFilled ? { last_bar_filled: true } : {}),
   };
 
   if (!res.y) {

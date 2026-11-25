@@ -15,8 +15,11 @@ import {
   PrismaClient,
   ProductionInvoiceStatus,
   ProductionOrderCancelStatus,
+  ProductionOrderCutDecision,
   ProductionOrderStatus,
   PurchaseProposalStatus,
+  SteelIssueStatus,
+  StockLedgerRefType,
 } from '../../../generated/prisma/client';
 import { AppClsStore } from '../../../common/interfaces/cls-store.interface';
 import { lockBusinessKey } from '../../../common/utils/advisory-lock.util';
@@ -36,7 +39,12 @@ import { NotificationsService } from '../../notifications/notifications.service'
 import { ProductionOrdersService } from '../../production-orders/production-orders.service';
 import { cancelEmptiedDraftOrders } from '../../purchase-proposals/supplier-order-cleanup.util';
 import { recomputeProposalStatus } from '../../purchase-proposals/purchase-proposal-status.util';
+import { supplierOrderCode } from '../../purchase-proposals/supplier-order-code.util';
 import { ProductionInvoicesService } from '../production-invoices.service';
+import { SegmentProductionService } from '../../segment-stock/segment-production.service';
+import { StockLedgerService } from '../../stock/stock-ledger.service';
+import { WorkshopWarehouseResolver } from '../../stock/workshop-warehouse.util';
+import { DecideCutDto } from './order-cancellation.dto';
 
 /** Người gọi (KHSX / Admin / Sếp) - roles để biết có được thao tác đề nghị của người khác không. */
 export interface CancelActor {
@@ -67,6 +75,32 @@ export interface OrderCancelRequestDto {
   decisionNote: string | null;
   replacementItemId: string | null;
   wipSnapshot: unknown;
+  /** Q3: QLSX quyết sắt chưa cắt - null = chưa quyết. */
+  cutDecision: ProductionOrderCutDecision | null;
+  cutDecidedAt: Date | null;
+  cutDecisionNote: string | null;
+}
+
+/** Q3: 1 SKU đã huỷ còn sắt ở tổ cắt, theo loại sắt của lệnh. */
+export interface CutSteelRowDto {
+  request: OrderCancelRequestDto;
+  isMergedInvoice: boolean;
+  /** Lệnh còn SKU khác đang chạy (sắt còn lại có thể vẫn cần cho SKU đó). */
+  otherSkuActive: boolean;
+  materials: {
+    materialId: string;
+    materialCode: string;
+    materialName: string;
+    /** Các chiều dài cây đã xuất (cây nguyên trả về đúng chiều dài này). */
+    barLengthsMm: number[];
+    /** Cây đã xuất mà tổ cắt chưa xác nhận nhận. */
+    unreceivedBars: number;
+    /** Sắt đã nhận chưa cắt (mm, đã trừ phần nhập trả). */
+    leftoverMm: number;
+    /** Đã nhập trả (mm). */
+    returnedMm: number;
+  }[];
+  returns: { materialCode: string; lengthMm: number; bars: number; createdAt: Date }[];
 }
 
 /** Số hàng của SKU đang nằm ở từng công đoạn lúc Sếp duyệt huỷ - đợt 2 dùng để đưa vào tồn. Chỉ đọc, không đổi gì. */
@@ -91,6 +125,46 @@ export interface CancelWipSnapshot {
     bars: number;
     receivedBars: number;
   }[];
+}
+
+/**
+ * Câu 8 (anh Nhân 24/11/2026): hộp duyệt huỷ của Sếp cần thấy đã xuất bao nhiêu sắt, dòng mua đã ký (kèm tiền) và hàng đã làm ở
+ * từng công đoạn. Sắt và dòng mua đi theo CẢ lệnh (PI) - lệnh gộp thì gồm cả phần của SKU khác. Đề nghị đã duyệt thì số công đoạn
+ * lấy từ wipSnapshot lúc duyệt; đề nghị chưa duyệt thì đếm ngay lúc xem.
+ */
+export interface CancelImpactDto {
+  requestId: string;
+  /** true = số công đoạn chụp lúc Sếp duyệt (wipSnapshot); false = đếm lúc xem. */
+  fromSnapshot: boolean;
+  takenAt: string;
+  floorStage: string;
+  isMergedInvoice: boolean;
+  steelIssued: {
+    materialCode: string;
+    materialName: string;
+    barLengthMm: number;
+    bars: number;
+    receivedBars: number;
+  }[];
+  signedPurchases: {
+    itemId: string;
+    materialCode: string;
+    materialName: string;
+    unit: string;
+    /** Số đã ký với NCC (orderQty, chưa có thì buyQty). */
+    signedQty: number;
+    receivedQty: number;
+    unitPrice: number | null;
+    /** signedQty × đơn giá NCC đã chọn; null khi chưa có giá. */
+    amount: number | null;
+    supplierName: string | null;
+    supplierOrderCode: string | null;
+  }[];
+  /** Tổng tiền các dòng có giá (dòng thiếu giá không cộng - xem missingPriceCount). */
+  signedAmountTotal: number;
+  missingPriceCount: number;
+  /** Hàng đã làm ra của SKU này theo công đoạn. */
+  stages: { stage: string; label: string; rows: { name: string; qty: number }[] }[];
 }
 
 const REQUEST_INCLUDE = {
@@ -145,6 +219,8 @@ export class OrderCancellationService {
     private readonly cuttingProposals: CuttingProposalsService,
     private readonly productionOrders: ProductionOrdersService,
     private readonly productionInvoices: ProductionInvoicesService,
+    private readonly segmentProduction: SegmentProductionService,
+    private readonly stockLedger: StockLedgerService,
   ) {}
 
   // ─── Đọc ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -173,6 +249,448 @@ export class OrderCancellationService {
     return rows.map((r) => this.toDto(r));
   }
 
+  /** Câu 8: số liệu cho hộp duyệt huỷ của Sếp - chỉ đọc. */
+  async impact(requestId: string): Promise<CancelImpactDto> {
+    const id = parseBigIntId(requestId);
+    const req = await this.prisma.productionOrderCancelRequest.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        wipSnapshot: true,
+        productionOrder: {
+          select: {
+            id: true,
+            floorStage: true,
+            floorStartedAt: true,
+            productionInvoiceItemId: true,
+            productionInvoiceItem: {
+              select: {
+                productionInvoiceId: true,
+                productionInvoice: { select: { isMerged: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!req) throw new NotFoundException(`Không tìm thấy đề nghị huỷ ${requestId}`);
+    const order = req.productionOrder;
+    const piId = order.productionInvoiceItem.productionInvoiceId;
+    const saved = req.wipSnapshot as CancelWipSnapshot | null;
+    const snap =
+      saved ?? (await this.prisma.$transaction((tx) => this.snapshotWip(tx, order, piId)));
+
+    const purchases =
+      piId == null
+        ? []
+        : await this.prisma.purchaseProposalItem.findMany({
+            where: {
+              proposal: { productionInvoiceId: piId },
+              status: PurchaseProposalStatus.PURCHASING,
+            },
+            select: {
+              id: true,
+              buyQty: true,
+              orderQty: true,
+              receivedQty: true,
+              material: { select: { code: true, name: true, unit: true } },
+              quotes: {
+                where: { isChosen: true },
+                select: { unitPrice: true, supplierName: true },
+                take: 1,
+              },
+              supplierOrder: {
+                select: { seq: true, year: true, supplier: { select: { name: true } } },
+              },
+            },
+            orderBy: { id: 'asc' },
+          });
+
+    const steelMaterialIds = [
+      ...new Set(snap.steelIssuedForInvoice.map((s) => BigInt(s.materialId))),
+    ];
+    const pieceIds = [
+      ...new Set(
+        [
+          ...snap.pieceBatches,
+          ...snap.pieceStepQty,
+          ...snap.weavingIssued,
+          ...snap.weavingReceived,
+          ...snap.transferChecked,
+        ].map((p) => BigInt(p.pieceId)),
+      ),
+    ];
+    const specIds = [...new Set(snap.cutSegments.map((c) => BigInt(c.segmentSpecId)))];
+    const [materials, pieces, specs] = await Promise.all([
+      steelMaterialIds.length
+        ? this.prisma.material.findMany({
+            where: { id: { in: steelMaterialIds } },
+            select: { id: true, code: true, name: true },
+          })
+        : Promise.resolve([]),
+      pieceIds.length
+        ? this.prisma.piece.findMany({
+            where: { id: { in: pieceIds } },
+            select: { id: true, code: true, name: true },
+          })
+        : Promise.resolve([]),
+      specIds.length
+        ? this.prisma.segmentSpec.findMany({
+            where: { id: { in: specIds } },
+            select: { id: true, cutLengthMm: true, material: { select: { code: true } } },
+          })
+        : Promise.resolve([]),
+    ]);
+    const matById = new Map(materials.map((m) => [m.id.toString(), m]));
+    const pieceName = new Map(pieces.map((p) => [p.id.toString(), `${p.code} ${p.name}`.trim()]));
+    const specName = new Map(
+      specs.map((s) => [s.id.toString(), `${s.material.code} ${s.cutLengthMm.toString()} mm`]),
+    );
+
+    const sumBy = (rows: { key: string; qty: number }[]) => {
+      const m = new Map<string, number>();
+      for (const r of rows) if (r.qty) m.set(r.key, (m.get(r.key) ?? 0) + r.qty);
+      return [...m.entries()].map(([name, qty]) => ({ name, qty }));
+    };
+    const byPiece = (rows: { pieceId: string; qty: number }[]) =>
+      sumBy(
+        rows.map((r) => ({ key: pieceName.get(r.pieceId) ?? `Mảnh #${r.pieceId}`, qty: r.qty })),
+      );
+    const CUT_STATUS: Record<string, string> = {
+      CUTTING: 'đang cắt',
+      AWAITING_QC: 'chờ KCS',
+      QC_PASSED: 'KCS đạt',
+    };
+    const stages: CancelImpactDto['stages'] = [
+      {
+        stage: 'CUT',
+        label: 'Cắt sắt (đoạn)',
+        rows: sumBy(
+          snap.cutSegments.map((c) => ({
+            key: `${specName.get(c.segmentSpecId) ?? `Đoạn #${c.segmentSpecId}`} (${CUT_STATUS[c.status] ?? c.status})`,
+            qty: c.qty,
+          })),
+        ),
+      },
+      ...(['PHOI', 'HAN', 'SON'] as const).map((st) => ({
+        stage: st,
+        label: { PHOI: 'Phôi', HAN: 'Hàn', SON: 'Sơn' }[st],
+        rows: byPiece(snap.pieceBatches.filter((b) => b.stage === st)),
+      })),
+      { stage: 'PIECE_STEP', label: 'Vật tư thành phẩm', rows: byPiece(snap.pieceStepQty) },
+      { stage: 'DAN_OUT', label: 'Đã xuất đan', rows: byPiece(snap.weavingIssued) },
+      { stage: 'DAN_IN', label: 'Đan đã nhận về', rows: byPiece(snap.weavingReceived) },
+      { stage: 'CHECK', label: 'Kiểm chuyền', rows: byPiece(snap.transferChecked) },
+      {
+        stage: 'PACK',
+        label: 'Đóng gói (thùng)',
+        rows: snap.boxesPacked ? [{ name: 'Thùng đã đóng', qty: snap.boxesPacked }] : [],
+      },
+    ].filter((s) => s.rows.length > 0);
+
+    const signedPurchases = purchases.map((p) => {
+      const signedQty = (p.orderQty ?? p.buyQty).toNumber();
+      const price = p.quotes[0]?.unitPrice?.toNumber() ?? null;
+      return {
+        itemId: p.id.toString(),
+        materialCode: p.material.code,
+        materialName: p.material.name,
+        unit: p.material.unit,
+        signedQty,
+        receivedQty: p.receivedQty.toNumber(),
+        unitPrice: price,
+        amount: price == null ? null : Math.round(signedQty * price),
+        supplierName: p.supplierOrder?.supplier.name ?? p.quotes[0]?.supplierName ?? null,
+        supplierOrderCode: p.supplierOrder
+          ? supplierOrderCode(p.supplierOrder.seq, p.supplierOrder.year)
+          : null,
+      };
+    });
+    return {
+      requestId: req.id.toString(),
+      fromSnapshot: saved != null,
+      takenAt: snap.takenAt,
+      floorStage: snap.floorStage,
+      isMergedInvoice: order.productionInvoiceItem.productionInvoice?.isMerged ?? false,
+      steelIssued: snap.steelIssuedForInvoice.map((s) => ({
+        materialCode: matById.get(s.materialId)?.code ?? `#${s.materialId}`,
+        materialName: matById.get(s.materialId)?.name ?? '',
+        barLengthMm: s.barLengthMm,
+        bars: s.bars,
+        receivedBars: s.receivedBars,
+      })),
+      signedPurchases,
+      signedAmountTotal: signedPurchases.reduce((sum, p) => sum + (p.amount ?? 0), 0),
+      missingPriceCount: signedPurchases.filter((p) => p.amount == null).length,
+      stages,
+    };
+  }
+
+  /**
+   * Q3: sắt tổ cắt đã nhận mà chưa cắt, theo loại sắt (mm) = Σ cây đã nhận × dài cây - Σ đoạn đã báo cắt (mọi SKU, kể cả SKU đã
+   * huỷ) × dài đoạn - Σ đã nhập trả. Không trừ tề đầu / mạch cưa (cận trên, dễ hiểu cho QLSX). Tự tính vì tiến độ Phôi bỏ SKU đã huỷ
+   * khỏi lệnh - lệnh huỷ hết không còn dòng nào.
+   */
+  private async steelLeftoverMm(db: PrismaTx, piId: bigint): Promise<Map<string, number>> {
+    const [issues, cuts, returns] = await Promise.all([
+      db.steelIssue.findMany({
+        where: { productionInvoiceId: piId, status: { not: SteelIssueStatus.ISSUED } },
+        select: { materialId: true, barLengthMm: true, barCount: true, receivedBarCount: true },
+      }),
+      db.cutPatternSegment.findMany({
+        where: { cutBundle: { steelIssue: { productionInvoiceId: piId } } },
+        select: {
+          qty: true,
+          segmentSpec: { select: { cutLengthMm: true } },
+          cutBundle: { select: { steelIssue: { select: { materialId: true } } } },
+        },
+      }),
+      db.steelReturn.findMany({
+        where: { productionInvoiceId: piId },
+        select: { materialId: true, lengthMm: true, bars: true },
+      }),
+    ]);
+    const m = new Map<string, number>();
+    const add = (k: string, v: number) => m.set(k, (m.get(k) ?? 0) + v);
+    for (const i of issues)
+      add(i.materialId.toString(), (i.receivedBarCount ?? i.barCount) * i.barLengthMm);
+    for (const c of cuts) {
+      add(
+        c.cutBundle.steelIssue.materialId.toString(),
+        -c.qty * c.segmentSpec.cutLengthMm.toNumber(),
+      );
+    }
+    for (const r of returns) add(r.materialId.toString(), -r.lengthMm * r.bars);
+    for (const [k, v] of m) m.set(k, Math.max(0, Math.round(v)));
+    return m;
+  }
+
+  // ─── Q3: sắt đã xuất chưa cắt của SKU đã huỷ (QLSX quyết) ──────────────────────────────────────────────────────────────
+
+  /** Đề nghị đã duyệt mà lệnh có phiếu xuất sắt, chưa "Ngưng" - QLSX cần quyết (hoặc đang cho cắt tiếp). */
+  async listCutSteel(): Promise<CutSteelRowDto[]> {
+    const rows = await this.prisma.productionOrderCancelRequest.findMany({
+      where: {
+        status: ProductionOrderCancelStatus.APPROVED,
+        OR: [{ cutDecision: null }, { cutDecision: ProductionOrderCutDecision.CONTINUE }],
+        productionOrder: {
+          productionInvoiceItem: { productionInvoice: { steelIssues: { some: {} } } },
+        },
+      },
+      include: REQUEST_INCLUDE,
+      orderBy: { id: 'desc' },
+      take: 100,
+    });
+    const out: CutSteelRowDto[] = [];
+    for (const r of rows) {
+      const piId = r.productionOrder.productionInvoiceItem.productionInvoice?.id;
+      if (piId == null) continue;
+      out.push(await this.cutSteelRow(r, piId));
+    }
+    return out;
+  }
+
+  private async cutSteelRow(r: RequestRow, piId: bigint): Promise<CutSteelRowDto> {
+    const [pi, issues, leftover, returns, otherActive] = await Promise.all([
+      this.prisma.productionInvoice.findUnique({ where: { id: piId }, select: { isMerged: true } }),
+      this.prisma.steelIssue.findMany({
+        where: { productionInvoiceId: piId },
+        select: {
+          materialId: true,
+          barLengthMm: true,
+          barCount: true,
+          status: true,
+          material: { select: { code: true, name: true } },
+        },
+      }),
+      this.steelLeftoverMm(this.prisma, piId),
+      this.prisma.steelReturn.findMany({
+        where: { productionInvoiceId: piId },
+        select: {
+          materialId: true,
+          lengthMm: true,
+          bars: true,
+          createdAt: true,
+          material: { select: { code: true } },
+        },
+        orderBy: { id: 'asc' },
+      }),
+      this.prisma.productionOrder.count({
+        where: {
+          productionInvoiceItem: { productionInvoiceId: piId },
+          status: { not: ProductionOrderStatus.CANCELLED },
+          floorStage: { not: 'FINISHED' },
+        },
+      }),
+    ]);
+    const byMat = new Map<string, CutSteelRowDto['materials'][number]>();
+    for (const i of issues) {
+      const k = i.materialId.toString();
+      const m = byMat.get(k) ?? {
+        materialId: k,
+        materialCode: i.material.code,
+        materialName: i.material.name,
+        barLengthsMm: [],
+        unreceivedBars: 0,
+        leftoverMm: 0,
+        returnedMm: 0,
+      };
+      if (!m.barLengthsMm.includes(i.barLengthMm)) m.barLengthsMm.push(i.barLengthMm);
+      if (i.status === SteelIssueStatus.ISSUED) m.unreceivedBars += i.barCount;
+      byMat.set(k, m);
+    }
+    for (const [materialId, mm] of leftover) {
+      const m = byMat.get(materialId);
+      if (m) m.leftoverMm = mm;
+    }
+    for (const ret of returns) {
+      const m = byMat.get(ret.materialId.toString());
+      if (m) m.returnedMm += ret.lengthMm * ret.bars;
+    }
+    return {
+      request: this.toDto(r),
+      isMergedInvoice: pi?.isMerged ?? false,
+      otherSkuActive: otherActive > 0,
+      materials: [...byMat.values()].map((m) => ({
+        ...m,
+        barLengthsMm: m.barLengthsMm.sort((a, b) => b - a),
+      })),
+      returns: returns.map((x) => ({
+        materialCode: x.material.code,
+        lengthMm: x.lengthMm,
+        bars: x.bars,
+        createdAt: x.createdAt,
+      })),
+    };
+  }
+
+  /**
+   * Q3 (anh Nhân 24/11/2026): QLSX quyết từng trường hợp. CONTINUE = tổ cắt cắt tiếp cho SKU đã huỷ (tới số cần cũ), đoạn vào dư
+   * kho Phôi (Q2). STOP = ngưng; cây còn lại (nguyên hoặc lẻ) nhập trả kho Phôi của xưởng làm lệnh - vào tồn đúng chiều dài, lệnh sau
+   * dùng cây lẻ trước (CS2). Tổng mm trả không vượt sắt tổ cắt đã nhận chưa cắt. STOP là quyết định cuối.
+   */
+  async decideCut(
+    actor: CancelActor,
+    requestId: string,
+    dto: DecideCutDto,
+  ): Promise<CutSteelRowDto> {
+    const id = parseBigIntId(requestId);
+    const returns = dto.decision === ProductionOrderCutDecision.STOP ? (dto.returns ?? []) : [];
+    if (dto.decision === ProductionOrderCutDecision.CONTINUE && (dto.returns?.length ?? 0) > 0) {
+      throw new BadRequestException('Cho cắt tiếp thì không nhập trả cây');
+    }
+    const head = await this.prisma.productionOrderCancelRequest.findUnique({
+      where: { id },
+      select: {
+        status: true,
+        productionOrder: {
+          select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+        },
+      },
+    });
+    if (!head) throw new NotFoundException(`Không tìm thấy đề nghị huỷ ${requestId}`);
+    if (head.status !== ProductionOrderCancelStatus.APPROVED) {
+      throw new ConflictException('Chỉ quyết sắt của SKU Sếp đã duyệt huỷ');
+    }
+    const piId = head.productionOrder.productionInvoiceItem.productionInvoiceId;
+    if (piId == null)
+      throw new ConflictException('SKU này chưa thuộc lệnh nào - không có sắt để quyết');
+
+    await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `steel-return:${piId}`);
+      const fresh = await tx.productionOrderCancelRequest.findUniqueOrThrow({
+        where: { id },
+        select: { cutDecision: true },
+      });
+      if (fresh.cutDecision === ProductionOrderCutDecision.STOP) {
+        throw new ConflictException('Đã ngưng cắt SKU này rồi - không đổi được');
+      }
+      if (returns.length > 0) {
+        const issues = await tx.steelIssue.findMany({
+          where: { productionInvoiceId: piId },
+          select: { materialId: true, barLengthMm: true, status: true },
+        });
+        // Đọc trong khoá steel-return:{PI} - 2 lần trả cùng lúc không vượt.
+        const leftoverByMat = await this.steelLeftoverMm(tx, piId);
+        const mmByMat = new Map<string, number>();
+        for (const line of returns) {
+          const mine = issues.filter((i) => i.materialId.toString() === line.materialId);
+          if (mine.length === 0) {
+            throw new BadRequestException(`Loại sắt ${line.materialId} không xuất cho lệnh này`);
+          }
+          if (mine.some((i) => i.status === SteelIssueStatus.ISSUED)) {
+            throw new ConflictException(
+              'Còn phiếu xuất sắt loại này tổ cắt chưa xác nhận nhận - xác nhận nhận trước rồi mới nhập trả',
+            );
+          }
+          const maxLen = Math.max(...mine.map((i) => i.barLengthMm));
+          if (line.lengthMm > maxLen) {
+            throw new BadRequestException(
+              `Cây trả dài ${line.lengthMm} mm - dài hơn cây đã xuất (${maxLen} mm)`,
+            );
+          }
+          mmByMat.set(
+            line.materialId,
+            (mmByMat.get(line.materialId) ?? 0) + line.lengthMm * line.bars,
+          );
+        }
+        for (const [materialId, mm] of mmByMat) {
+          const left = leftoverByMat.get(materialId) ?? 0;
+          if (mm > left) {
+            throw new BadRequestException(
+              `Trả ${mm.toLocaleString('vi-VN')} mm sắt - vượt sắt tổ cắt đã nhận chưa cắt (${left.toLocaleString('vi-VN')} mm)`,
+            );
+          }
+        }
+        const phoi = await new WorkshopWarehouseResolver(tx).phoiWarehouseOfPi(piId);
+        const production = await tx.warehouse.findUniqueOrThrow({ where: { code: 'PRODUCTION' } });
+        for (const line of returns) {
+          const row = await tx.steelReturn.create({
+            data: {
+              cancelRequestId: id,
+              productionInvoiceId: piId,
+              materialId: parseBigIntId(line.materialId),
+              lengthMm: line.lengthMm,
+              bars: line.bars,
+              warehouseId: phoi.id,
+              createdById: actor.id,
+            },
+          });
+          await this.stockLedger.postEntry(
+            {
+              fromWarehouseId: production.id,
+              toWarehouseId: phoi.id,
+              materialId: row.materialId,
+              qty: line.bars,
+              refType: StockLedgerRefType.STEEL_RETURN,
+              refId: row.id.toString(),
+              createdById: actor.id,
+              idempotencyKey: `steel-return:${row.id}`,
+              stockLengthMm: line.lengthMm,
+              note: `Tổ cắt trả cây - ngưng cắt SKU đã huỷ (đề nghị ${id})`,
+            },
+            tx,
+          );
+        }
+      }
+      await tx.productionOrderCancelRequest.update({
+        where: { id },
+        data: {
+          cutDecision: dto.decision,
+          cutDecidedById: actor.id,
+          cutDecidedAt: new Date(),
+          cutDecisionNote: dto.note?.trim() || null,
+        },
+      });
+    });
+    const row = await this.prisma.productionOrderCancelRequest.findUniqueOrThrow({
+      where: { id },
+      include: REQUEST_INCLUDE,
+    });
+    this.publish(row.productionOrderId, actor.id);
+    return this.cutSteelRow(row, piId);
+  }
+
   // ─── KHSX đề nghị / rút lại ─────────────────────────────────────────────────────────────────────────────────────────────
 
   async request(
@@ -187,6 +705,7 @@ export class OrderCancellationService {
       select: {
         id: true,
         status: true,
+        floorStage: true,
         productionInvoiceItemId: true,
         productionInvoiceItem: {
           select: {
@@ -202,6 +721,7 @@ export class OrderCancellationService {
     if (order.status === ProductionOrderStatus.CANCELLED) {
       throw new ConflictException('Lệnh này đã huỷ');
     }
+    this.assertNotFinished(order.floorStage);
     await this.assertNotShipped(this.prisma, order.productionInvoiceItemId);
 
     let created: RequestRow;
@@ -375,6 +895,7 @@ export class OrderCancellationService {
     if (order.status === ProductionOrderStatus.CANCELLED) {
       throw new ConflictException('Lệnh này đã huỷ');
     }
+    this.assertNotFinished(order.floorStage);
     const item = order.productionInvoiceItem;
     await this.assertNotShipped(tx, item.id);
     await this.assertNoOpenBookingLines(tx, item.id);
@@ -425,9 +946,11 @@ export class OrderCancellationService {
           productVariantId: item.productVariantId,
           wireMaterialId: item.wireMaterialId,
           cushionMaterialId: item.cushionMaterialId,
+          // Câu 3 (anh Nhân 24/11): giữ đủ số lượng cũ (KHSX tự bớt nếu hàng đã làm vẫn dùng được); BỎ mốc cũ - lên lệnh lại KHSX
+          // đặt mốc mới. Hạn giao là của dòng đơn bán (Sales), giữ nguyên.
           quantity: item.quantity,
-          materialDeadline: item.materialDeadline,
-          finishedMaterialDeadline: item.finishedMaterialDeadline,
+          materialDeadline: null,
+          finishedMaterialDeadline: null,
           deliveryDeadline: item.deliveryDeadline,
           lsxCode: moveLsx ? item.lsxCode : null,
         },
@@ -529,6 +1052,9 @@ export class OrderCancellationService {
 
     // Mọi lệnh SX còn lại của PI đã Kết thúc (hoặc cả lệnh huỷ) -> nhả giữ chỗ vật tư + giữ đoạn như luồng Kết thúc.
     await this.productionOrders.releaseReservationsIfPiFinished(outcome.itemId);
+    // Đợt 2 - Q2 (anh Nhân 24/11/2026): đoạn đã cắt + KCS đạt của SKU huỷ tự vào dư kho Phôi (tính lại ngay, không chờ lần KCS sau).
+    // Công tắc SEGMENT_STOCK_ENABLED tắt thì không làm gì; lỗi chỉ log.
+    await this.segmentProduction.recomputeAfterQc(piId, actorId, `PO_CANCELLED:${outcome.orderId}`);
 
     if (outcome.invoiceCancelled) {
       await this.step('gỡ phương án cắt chưa duyệt', () =>
@@ -698,6 +1224,13 @@ export class OrderCancellationService {
   }
 
   // ─── Kiểm ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  /** Câu 1 file 24/11 (Sang chốt, anh Nhân đồng ý): lệnh đã Kết thúc (xưởng làm xong) thì không huỷ - tránh cấp dòng mới rồi làm lại. */
+  private assertNotFinished(floorStage: string): void {
+    if (floorStage === 'FINISHED') {
+      throw new ConflictException('Lệnh đã Kết thúc (xưởng làm xong) - không huỷ được');
+    }
+  }
 
   /** Câu 5: đã giao (booking đã xuất dòng của SKU này) thì không huỷ. */
   private async assertNotShipped(
@@ -916,6 +1449,9 @@ export class OrderCancellationService {
       decisionNote: r.decisionNote,
       replacementItemId: r.replacementItemId?.toString() ?? null,
       wipSnapshot: r.wipSnapshot,
+      cutDecision: r.cutDecision,
+      cutDecidedAt: r.cutDecidedAt,
+      cutDecisionNote: r.cutDecisionNote,
     };
   }
 }

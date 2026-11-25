@@ -87,6 +87,8 @@ export interface OneMaterialOptions {
    * ưu tiên dùng hết cây lẻ trước. Chiều dài MUA vẫn chỉ 1 / loại sắt như cũ.
    */
   leftovers?: Array<{ length: number; count: number }>;
+  /** Câu 9-11 (24/11/2026): xem OptimizeMaterialOptions.lastBarFill - đi theo mọi lần giải (chuẩn, dò, bestAchievable). */
+  lastBarFill?: boolean;
 }
 
 export type OptimizeMaterialFn = typeof optimizeMaterial;
@@ -279,6 +281,7 @@ function optimizeOneMaterialAtCap(
     maxSizesPerBar: opts.maxSizesPerBar,
     allowShortage: opts.allowShortage,
     ...(opts.hardMaxSizesPerBar != null ? { hardMaxSizesPerBar: opts.hardMaxSizesPerBar } : {}),
+    ...(opts.lastBarFill ? { lastBarFill: true } : {}),
   };
   const machineOpts = { ...baseMachineOpts, ...(minTail > 0 ? { laserMinTailMm: minTail } : {}) };
   // CS2: thêm cây lẻ (khác chiều dài mua đang thử) + giới hạn số cây vào mọi lần giải. Anh Nhân câu 2b: dùng cây lẻ trước kể cả

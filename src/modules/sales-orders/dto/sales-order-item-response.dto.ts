@@ -26,6 +26,9 @@ export class SalesOrderItemResponseDto {
   @Expose()
   @ApiPropertyOptional({ type: MaterialChoiceRefDto, nullable: true })
   cushionMaterial!: MaterialChoiceRefDto | null;
+  /** Huỷ lệnh câu 2 (24/11/2026): Sales đã huỷ dòng (khách huỷ hẳn). */
+  @Expose() @ApiPropertyOptional({ nullable: true }) cancelledAt!: Date | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) cancelReason!: string | null;
 
   constructor(partial: Partial<SalesOrderItemResponseDto>) {
     Object.assign(this, partial);

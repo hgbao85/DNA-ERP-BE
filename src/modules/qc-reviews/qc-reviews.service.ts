@@ -21,7 +21,7 @@ import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../common/constants/roles.cons
 import {
   assertOrderPiHasActiveFloor,
   assertPiHasActiveFloor,
-  assertOrderNotCancelled,
+  isOrderCancelledById,
 } from '../../common/utils/floor-gate.util';
 import { processStepLabel } from '../../common/constants/process-steps.constant';
 
@@ -515,9 +515,9 @@ export class QcReviewsService {
         `Đợt cắt ${cutBundleId} đang ở trạng thái ${bundle.status} - chỉ đợt chờ KCS mới duyệt được`,
       );
     }
-    await assertPiHasActiveFloor(this.prisma, bundle.steelIssue.productionInvoiceId, 'duyệt KCS');
-    if (bundle.productionOrderId != null) {
-      await assertOrderNotCancelled(this.prisma, bundle.productionOrderId, 'duyệt KCS');
+    // Câu 4 (24/11/2026): đợt của SKU đã huỷ KCS vẫn chấm nốt - bỏ cổng xưởng.
+    if (!(await isOrderCancelledById(this.prisma, bundle.productionOrderId))) {
+      await assertPiHasActiveFloor(this.prisma, bundle.steelIssue.productionInvoiceId, 'duyệt KCS');
     }
 
     const specIds = dto.segments.map((s) => parseBigIntId(s.segmentSpecId));
@@ -742,9 +742,9 @@ export class QcReviewsService {
         `Đợt gửi KCS ${stepBundleId} đang ở trạng thái ${String(bundle.status)} - chỉ đợt chờ KCS mới duyệt được`,
       );
     }
-    await assertPiHasActiveFloor(this.prisma, bundle.productionInvoiceId, 'duyệt KCS');
-    if (bundle.productionOrderId != null) {
-      await assertOrderNotCancelled(this.prisma, bundle.productionOrderId, 'duyệt KCS');
+    // Câu 4 (24/11/2026): đợt của SKU đã huỷ KCS vẫn chấm nốt - bỏ cổng xưởng.
+    if (!(await isOrderCancelledById(this.prisma, bundle.productionOrderId))) {
+      await assertPiHasActiveFloor(this.prisma, bundle.productionInvoiceId, 'duyệt KCS');
     }
 
     const specIds = dto.segments.map((s) => parseBigIntId(s.segmentSpecId));
@@ -897,7 +897,10 @@ export class QcReviewsService {
         `Đợt sản xuất ${productionBatchId} đang ở trạng thái ${batch.status} - chỉ AWAITING_QC mới duyệt KCS được`,
       );
     }
-    await assertOrderPiHasActiveFloor(this.prisma, batch.productionOrderId, 'duyệt KCS');
+    // Câu 4 (24/11/2026): lô của SKU đã huỷ KCS vẫn chấm nốt - bỏ cổng xưởng.
+    if (!(await isOrderCancelledById(this.prisma, batch.productionOrderId))) {
+      await assertOrderPiHasActiveFloor(this.prisma, batch.productionOrderId, 'duyệt KCS');
+    }
 
     const shortQty = dto.shortQty ?? 0;
     if (dto.failedQty + shortQty > batch.reportedQty) {
@@ -1045,7 +1048,14 @@ export class QcReviewsService {
         `Đợt gửi KCS ${pieceStepBundleId} đang ở trạng thái ${String(bundle.status)} - chỉ AWAITING_QC mới duyệt được`,
       );
     }
-    await assertOrderPiHasActiveFloor(this.prisma, bundle.productionOrderId, 'duyệt KCS công đoạn');
+    // Câu 4 (24/11/2026): đợt của SKU đã huỷ KCS vẫn chấm nốt - bỏ cổng xưởng.
+    if (!(await isOrderCancelledById(this.prisma, bundle.productionOrderId))) {
+      await assertOrderPiHasActiveFloor(
+        this.prisma,
+        bundle.productionOrderId,
+        'duyệt KCS công đoạn',
+      );
+    }
 
     const shortQty = dto.shortQty ?? 0;
     if (dto.failedQty + shortQty > bundle.qty) {

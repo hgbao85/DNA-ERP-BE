@@ -102,6 +102,8 @@ describe('BookingsService (Phần A – Đợt 10a)', () => {
       createMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     productionInvoiceItem: { findMany: jest.fn().mockResolvedValue([pii()]) },
+    // Huỷ lệnh câu 7 (24/11): mặc định không SKU nào đang chờ Sếp duyệt huỷ.
+    productionOrderCancelRequest: { findMany: jest.fn().mockResolvedValue([]) },
     salesOrderItem: {
       findMany: jest.fn().mockResolvedValue([{ id: 7n, totalQty: 100, shippedQty: 0 }]),
     },
@@ -184,6 +186,16 @@ describe('BookingsService (Phần A – Đợt 10a)', () => {
       await expect(
         service.create({ ...baseDto, lines: [{ productionInvoiceItemId: '11', qty: 1 }] }),
       ).rejects.toThrow(BadRequestException);
+      expect(prisma.bookingLine.createMany).not.toHaveBeenCalled();
+    });
+
+    it('huỷ lệnh câu 7 (24/11): SKU đang chờ Sếp duyệt huỷ -> 400, không ghi dòng', async () => {
+      prisma.productionOrderCancelRequest.findMany.mockResolvedValue([
+        { productionOrder: { productionInvoiceItemId: 11n } },
+      ]);
+      await expect(
+        service.create({ ...baseDto, lines: [{ productionInvoiceItemId: '11', qty: 1 }] }),
+      ).rejects.toThrow(/đang chờ Sếp duyệt huỷ/);
       expect(prisma.bookingLine.createMany).not.toHaveBeenCalled();
     });
 

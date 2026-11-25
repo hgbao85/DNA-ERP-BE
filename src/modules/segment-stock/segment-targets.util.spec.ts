@@ -225,4 +225,24 @@ describe('computeSegmentTargets', () => {
       }
     }
   });
+
+  it('câu 12b: đoạn dư theo phương án sẽ uốn - cắt 14, cần Uốn 12, chưa uốn: 2 đoạn dư là đang chờ, không thành dư trơn', () => {
+    const before = computeSegmentTargets({
+      cutPassedQty: 14,
+      stepPassedQty: {},
+      variants: [{ segmentSteps: 'UON', needQty: 12 }],
+      plannedSurplus: { UON: 2 },
+    });
+    expect(before.variants.find((v) => v.segmentSteps === '')).toBeUndefined();
+    expect(before.wipQty).toBe(14);
+    const after = computeSegmentTargets({
+      cutPassedQty: 14,
+      stepPassedQty: { UON: 14 },
+      variants: [{ segmentSteps: 'UON', needQty: 12 }],
+      plannedSurplus: { UON: 2 },
+    });
+    expect(after.variants).toEqual([
+      { segmentSteps: 'UON', needQty: 12, heldQty: 12, surplusQty: 2 },
+    ]);
+  });
 });

@@ -104,6 +104,7 @@ describe('ProductionInvoicesService', () => {
       count: jest.Mock;
     };
     weavingReceipt: { groupBy: jest.Mock; aggregate: jest.Mock };
+    cancelledGoodsTransfer: { groupBy: jest.Mock; aggregate: jest.Mock };
     warehouseTransferPieceItem: { groupBy: jest.Mock; aggregate: jest.Mock };
     packagingRecord: { create: jest.Mock; aggregate: jest.Mock; groupBy: jest.Mock };
     auditLog: { create: jest.Mock };
@@ -265,6 +266,10 @@ describe('ProductionInvoicesService', () => {
         update: jest.fn(),
         findMany: jest.fn(),
         count: jest.fn(),
+      },
+      cancelledGoodsTransfer: {
+        groupBy: jest.fn().mockResolvedValue([]),
+        aggregate: jest.fn().mockResolvedValue({ _sum: { qty: null } }),
       },
       weavingReceipt: {
         groupBy: jest.fn().mockResolvedValue([]),
@@ -428,17 +433,17 @@ describe('ProductionInvoicesService', () => {
       );
     });
 
-    it('lệnh gộp: mốc cần sắt sau khi lưu cách nhau quá 3 ngày -> 400 (rollback), không gửi thông báo', async () => {
+    // 24/11/2026 (anh Nhân): bỏ chặn khung N ngày - lệnh gộp mốc cách xa vẫn lưu được.
+    it('lệnh gộp: mốc cần sắt sau khi lưu cách nhau 9 ngày VẪN lưu được (bỏ chặn khung ngày 24/11)', async () => {
       prisma.productionInvoiceItem.findMany.mockResolvedValue([
         withDeadline(20n, '2026-11-01'),
         withDeadline(21n, '2026-11-10'),
       ]);
 
-      await expect(
-        updateItemsDeadlinesAs('50', {
-          items: [{ itemId: '21', materialDeadline: '2026-11-10T00:00:00.000Z' }],
-        }),
-      ).rejects.toThrow(/lệnh gộp cách nhau 9 ngày.*tách SKU ra lệnh riêng/);
+      await updateItemsDeadlinesAs('50', {
+        items: [{ itemId: '21', materialDeadline: '2026-11-10T00:00:00.000Z' }],
+      });
+      expect(prisma.productionInvoiceItem.update).toHaveBeenCalledTimes(1);
     });
 
     it('dời CẢ NHÓM cùng lúc (vẫn trong 3 ngày) -> lưu được trong 1 giao dịch', async () => {
@@ -965,7 +970,7 @@ describe('ProductionInvoicesService', () => {
       expect(prisma.productionInvoice.create).not.toHaveBeenCalled();
     });
 
-    it('LUẬT GỘP: mốc cần sắt cách nhau quá 3 ngày -> 400, nêu SKU sớm/muộn nhất, không tạo PI (Sếp Nhân 2026-10-24)', async () => {
+    it('LUẬT GỘP: mốc cần sắt cách nhau 7 ngày KHÔNG còn bị chặn (anh Nhân bỏ khung ngày 24/11)', async () => {
       prisma.productionInvoiceItem.findMany.mockResolvedValue([
         mergeCandidate(20n, { materialDeadline: new Date('2026-09-01') }),
         mergeCandidate(21n, { materialDeadline: new Date('2026-09-08') }),
@@ -977,10 +982,8 @@ describe('ProductionInvoicesService', () => {
           'user-khsx',
         )
         .catch((e: Error) => e)) as Error;
-      expect(err).toBeInstanceOf(BadRequestException);
-      expect(err.message).toContain('cách nhau 7 ngày');
-      expect(err.message).toContain('trong khung 3 ngày');
-      expect(prisma.productionInvoice.create).not.toHaveBeenCalled();
+      // 24/11/2026: không còn chặn theo khung ngày (lỗi nếu có là do mock của bước sau, không phải luật gộp).
+      expect(String(err?.message ?? '')).not.toContain('trong khung');
     });
 
     it('LUẬT GỘP: quá trần số SKU -> 400', async () => {
@@ -2099,7 +2102,8 @@ describe('ProductionInvoicesService', () => {
       });
     });
 
-    it('PI gộp vi phạm luật gộp -> 400 kèm gợi ý "Sửa thời hạn", không đổi trạng thái, không audit chuyển trạng thái', async () => {
+    // 24/11/2026 (anh Nhân): bỏ chặn khung N ngày - PI gộp mốc cách 12 ngày vẫn gửi QLSX được.
+    it('PI gộp mốc cần sắt cách 12 ngày vẫn gửi QLSX được (bỏ chặn khung ngày 24/11)', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi({ isMerged: true }));
       prisma.productionInvoiceItem.findUnique.mockResolvedValue(item240());
       prisma.productionInvoiceItem.findMany.mockResolvedValue([
@@ -2107,11 +2111,8 @@ describe('ProductionInvoicesService', () => {
         piItem({ id: 21n, materialDeadline: day('2026-11-20') }),
       ]);
 
-      await expect(service.sendItemToQlsx('7', '20', 'user-khsx')).rejects.toThrow(
-        /lệnh gộp cách nhau 12 ngày.*mở "Sửa thời hạn" đặt mốc Mua VT khung & đan/,
-      );
-      expect(prisma.productionInvoiceItem.updateMany).not.toHaveBeenCalled();
-      expect(prisma.auditLog.create).not.toHaveBeenCalled();
+      await expect(service.sendItemToQlsx('7', '20', 'user-khsx')).resolves.toBeDefined();
+      expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalled();
     });
 
     it('gửi cả phiếu: tự lưu cho từng SKU trống mốc trong 1 giao dịch, rồi mới đổi trạng thái', async () => {

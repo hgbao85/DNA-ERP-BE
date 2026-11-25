@@ -40,6 +40,9 @@ const PRODUCTION_WAREHOUSE_CODE = 'PRODUCTION';
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4 + 0; // "+ 0" đổi -0 thành 0
 const EPS = 1e-9;
 
+/** refType nhật ký giữ đoạn khi phương án cắt lấy đoạn dư trong kho (câu 14a, 24/11/2026) - refId = id phương án. */
+export const CUTTING_PROPOSAL_SEGMENT_REF = 'CUTTING_PROPOSAL';
+
 /** Số nhật ký tối đa trả về ở getOrderHoldings. */
 const ORDER_LOG_LIMIT = 100;
 
@@ -537,6 +540,154 @@ export class SegmentStockService {
   // ---------------------------------------------------------------------------
   // Chia dư / nhả
   // ---------------------------------------------------------------------------
+
+  /**
+   * Anh Nhân câu 14a + mục 2 (24/11/2026): đọc dư dùng được (tồn - Σ còn giữ mọi lệnh) của nhiều ô trong 1 kho, KHÔNG khoá - dùng
+   * lúc tính phương án cắt (trừ đoạn dư khỏi nhu cầu trước khi gửi bộ giải). Lúc duyệt mới khoá + giữ thật (allocateSurplusToOrder).
+   * Khoá trả về `${segmentSpecId}|${segmentSteps}`.
+   */
+  async readSurplusMany(
+    db: PrismaTx | PrismaServiceType,
+    warehouseId: bigint,
+    segmentSpecIds: bigint[],
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    if (segmentSpecIds.length === 0) return out;
+    const [quants, reservations] = await Promise.all([
+      db.stockQuant.findMany({
+        where: { warehouseId, segmentSpecId: { in: segmentSpecIds } },
+        select: { segmentSpecId: true, segmentSteps: true, qty: true },
+      }),
+      db.segmentReservation.findMany({
+        where: { warehouseId, segmentSpecId: { in: segmentSpecIds } },
+        select: { segmentSpecId: true, segmentSteps: true, reservedQty: true, consumedQty: true },
+      }),
+    ]);
+    const key = (spec: bigint | null, steps: string | null) => `${spec}|${steps ?? ''}`;
+    for (const q of quants) {
+      if (q.segmentSpecId == null) continue;
+      const k = key(q.segmentSpecId, q.segmentSteps);
+      out.set(k, round4((out.get(k) ?? 0) + q.qty.toNumber()));
+    }
+    for (const r of reservations) {
+      const k = key(r.segmentSpecId, r.segmentSteps);
+      out.set(k, round4((out.get(k) ?? 0) - (r.reservedQty.toNumber() - r.consumedQty.toNumber())));
+    }
+    for (const [k, v] of out) if (v <= EPS) out.delete(k);
+    return out;
+  }
+
+  /**
+   * Đoạn dư lệnh (PI) đang giữ do PHƯƠNG ÁN CẮT lấy từ kho (câu 14a): Σ SURPLUS_IN refType CUTTING_PROPOSAL − Σ RELEASE cùng
+   * refType, theo ô. Khoá `${segmentSpecId}|${segmentSteps}`. Dùng để: tính lại thì coi phần này là "có" (sắp được nhả khi phương
+   * án mới thay), và trừ khỏi số cần cắt của lệnh.
+   */
+  async allocatedFromStockByPi(
+    db: PrismaTx | PrismaServiceType,
+    productionInvoiceId: bigint,
+  ): Promise<Map<string, { warehouseId: bigint; qty: number }>> {
+    const logs = await db.segmentReservationLog.findMany({
+      where: {
+        refType: CUTTING_PROPOSAL_SEGMENT_REF,
+        kind: { in: [SegmentReservationLogKind.SURPLUS_IN, SegmentReservationLogKind.RELEASE] },
+        reservation: { productionInvoiceId },
+      },
+      select: {
+        kind: true,
+        qty: true,
+        reservation: { select: { warehouseId: true, segmentSpecId: true, segmentSteps: true } },
+      },
+    });
+    const out = new Map<string, { warehouseId: bigint; qty: number }>();
+    for (const l of logs) {
+      const k = `${l.reservation.segmentSpecId}|${l.reservation.segmentSteps}`;
+      const cur = out.get(k) ?? { warehouseId: l.reservation.warehouseId, qty: 0 };
+      const sign = l.kind === SegmentReservationLogKind.SURPLUS_IN ? 1 : -1;
+      cur.qty = round4(cur.qty + sign * l.qty.toNumber());
+      out.set(k, cur);
+    }
+    for (const [k, v] of out) if (v.qty <= EPS) out.delete(k);
+    return out;
+  }
+
+  /**
+   * Nhả phần đoạn dư 1 phương án cắt đã lấy từ kho (phương án bị thay khi Tính lại / huỷ SKU tính lại): còn giữ của mỗi ô giảm
+   * min(phần phương án lấy chưa nhả, phần còn giữ), nhật ký RELEASE refType CUTTING_PROPOSAL. Idempotent. Không ghi sổ kho.
+   */
+  async releaseProposalAllocations(
+    tx: PrismaTx,
+    cuttingProposalId: bigint,
+    actorId?: string | null,
+  ): Promise<number> {
+    const logs = await tx.segmentReservationLog.findMany({
+      where: {
+        refType: CUTTING_PROPOSAL_SEGMENT_REF,
+        refId: cuttingProposalId.toString(),
+        kind: { in: [SegmentReservationLogKind.SURPLUS_IN, SegmentReservationLogKind.RELEASE] },
+      },
+      select: {
+        kind: true,
+        qty: true,
+        reservation: {
+          select: {
+            id: true,
+            warehouseId: true,
+            productionInvoiceId: true,
+            segmentSpecId: true,
+            segmentSteps: true,
+          },
+        },
+      },
+    });
+    const net = new Map<string, { cell: CellRef & { id: bigint; pi: bigint }; qty: number }>();
+    for (const l of logs) {
+      const r = l.reservation;
+      const cur = net.get(r.id.toString()) ?? {
+        cell: { ...r, pi: r.productionInvoiceId },
+        qty: 0,
+      };
+      cur.qty = round4(
+        cur.qty + (l.kind === SegmentReservationLogKind.SURPLUS_IN ? 1 : -1) * l.qty.toNumber(),
+      );
+      net.set(r.id.toString(), cur);
+    }
+    const open = [...net.values()]
+      .filter((v) => v.qty > EPS)
+      .sort((a, b) => compareCells(a.cell, b.cell));
+    let released = 0;
+    for (const { cell, qty } of open) {
+      await lockBusinessKey(
+        tx,
+        segmentBucketLockKey(cell.warehouseId, cell.segmentSpecId, cell.segmentSteps),
+      );
+      const fresh = await tx.segmentReservation.findUnique({
+        where: { id: cell.id },
+        select: { reservedQty: true, consumedQty: true },
+      });
+      if (!fresh) continue;
+      const amount = round4(
+        Math.min(qty, fresh.reservedQty.toNumber() - fresh.consumedQty.toNumber()),
+      );
+      if (amount <= EPS) continue;
+      await tx.segmentReservation.update({
+        where: { id: cell.id },
+        data: { reservedQty: { decrement: amount } },
+      });
+      await tx.segmentReservationLog.create({
+        data: {
+          reservationId: cell.id,
+          kind: SegmentReservationLogKind.RELEASE,
+          qty: amount,
+          refType: CUTTING_PROPOSAL_SEGMENT_REF,
+          refId: cuttingProposalId.toString(),
+          note: 'Phương án cắt bị thay - nhả đoạn dư đã lấy từ kho',
+          createdById: actorId ?? null,
+        },
+      });
+      released = round4(released + amount);
+    }
+    return released;
+  }
 
   /** Chia chủ động `qty` đoạn từ cột dư của xưởng sang giữ cho 1 lệnh (tối đa bằng dư hiện có). Không ghi sổ kho (đoạn vẫn nằm trong kho). */
   async allocateSurplusToOrder(

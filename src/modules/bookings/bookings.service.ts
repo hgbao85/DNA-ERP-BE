@@ -735,6 +735,19 @@ export class BookingsService {
       select: PII_SELECT,
     });
     const piiById = new Map(piiRows.map((p) => [p.id.toString(), p]));
+    // Huỷ lệnh - câu 7 file 24/11 (anh Nhân chọn a): SKU đang có đề nghị huỷ chờ Sếp thì không xếp booking (trước đây xếp được, tới lúc
+    // Sếp duyệt mới bị báo "gỡ khỏi booking trước").
+    const pendingCancelPiiIds = new Set(
+      (
+        await tx.productionOrderCancelRequest.findMany({
+          where: {
+            status: 'PENDING',
+            productionOrder: { productionInvoiceItemId: { in: piiRows.map((p) => p.id) } },
+          },
+          select: { productionOrder: { select: { productionInvoiceItemId: true } } },
+        })
+      ).map((r) => r.productionOrder.productionInvoiceItemId.toString()),
+    );
     for (const l of inputs) {
       const pii = piiById.get(l.productionInvoiceItemId);
       if (!pii) {
@@ -743,6 +756,11 @@ export class BookingsService {
       const label = `SKU ${pii.mfgProduct.factoryCode} (PO ${pii.salesOrder?.orderCode ?? '?'})`;
       if (pii.cancelledAt != null) {
         throw new BadRequestException(`${label} đã bị huỷ lệnh - không xếp vào booking được`);
+      }
+      if (pendingCancelPiiIds.has(pii.id.toString())) {
+        throw new BadRequestException(
+          `${label} đang chờ Sếp duyệt huỷ - không xếp vào booking được. Bỏ SKU này khỏi booking hoặc chờ Sếp quyết.`,
+        );
       }
       if (pii.salesOrderItemId === null || !pii.salesOrder) {
         throw new BadRequestException(

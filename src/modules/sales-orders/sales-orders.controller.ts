@@ -21,6 +21,7 @@ import { CreateSalesOrderDto } from './dto/create-sales-order.dto';
 import { CreateSalesOrderItemDto } from './dto/create-sales-order-item.dto';
 import { UpdateSalesOrderDto } from './dto/update-sales-order.dto';
 import { UpdateSalesOrderItemDto } from './dto/update-sales-order-item.dto';
+import { CancelSalesOrderItemDto } from './dto/cancel-sales-order-item.dto';
 import { SalesOrdersService } from './sales-orders.service';
 
 @ApiTags('Sales Orders')
@@ -81,6 +82,19 @@ export class SalesOrdersController {
     @Body() dto: UpdateSalesOrderItemDto,
   ) {
     return this.salesOrdersService.updateItem(id, itemId, dto);
+  }
+
+  /** Huỷ lệnh câu 2 (anh Nhân 24/11/2026): khách huỷ hẳn - Sales huỷ 1 dòng đơn (kèm lý do). */
+  @Post(':id/items/:itemId/cancel')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions({ module: PERMISSION_MODULES.SALES_ORDER, action: PermissionAction.UPDATE })
+  @RequireRole(BUSINESS_ROLES.SALES_STAFF, DEFAULT_ROLES.ADMIN)
+  cancelItem(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: CancelSalesOrderItemDto,
+  ) {
+    return this.salesOrdersService.cancelItem(id, itemId, dto);
   }
 
   // Đợt 10b (5.7): bỏ nút "Xuất giao" - mọi lần xuất hàng đi qua booking (POST /booking-shipments/:id/ship).
