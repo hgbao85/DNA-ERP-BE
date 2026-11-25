@@ -32,6 +32,11 @@ export interface ProposeRequest {
     Array<{ length: number | string; count: number | string }>
   >;
   max_surplus?: number | string;
+  /**
+   * Anh Nhân câu 9-11 (24/11/2026): cây mua cuối cắt khúc thừa thành đoạn dư, không giới hạn max_surplus (xem
+   * OptimizeMaterialOptions.lastBarFill). ERP luôn gửi true; thiếu = tắt (giữ hành vi cũ cho test đối chiếu).
+   */
+  last_bar_fill?: boolean;
   auto_scan?: boolean;
   stop_on_first?: boolean;
   min_length?: number | string;
@@ -317,6 +322,8 @@ export interface SolveStats {
    * MC Tự động đi đường "thu hẹp" (highs-solver.ts solveBundled): bài không-bó lấy tập pattern, bài bó thu
    * hẹp, bài bó đầy đủ - số pattern, trạng thái từng bài và nghiệm cuối lấy từ bài nào.
    */
+  /** Anh Nhân câu 9-11 (24/11/2026): cắt thường vô nghiệm, đã giải lại với 1 cây mua cuối cắt tự do khúc thừa thành đoạn dư */
+  last_bar_filled?: boolean;
   bundle_narrow?: {
     relaxSeconds: number;
     relaxPatterns: number;

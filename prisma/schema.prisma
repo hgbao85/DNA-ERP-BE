@@ -664,6 +664,7 @@ model Material {
   productionOrdersAsCushion       ProductionOrder[]              @relation("ProductionOrderCushion")
   purchaseReceipts                PurchaseReceipt[]
   issueSlipLines                  IssueSlipLine[]
+  steelReturns                    SteelReturn[]
 
   @@index([materialGroupId])
   @@index([warehouseId])
@@ -1465,6 +1466,11 @@ model SalesOrderItem {
   /// ghim bản sao riêng (ProductionOrder.wireMaterialId/cushionMaterialId).
   wireMaterialId    BigInt?
   cushionMaterialId BigInt?
+  /// Huỷ lệnh câu 2 (anh Nhân 24/11/2026): khách huỷ hẳn thì Sales tự huỷ dòng đơn. Chỉ huỷ được khi chưa xuất, không còn lệnh SX
+  /// sống và không nằm trong booking chưa huỷ. Dòng SKU chưa lên lệnh của dòng này cũng gắn cancelledAt để KHSX hết thấy.
+  cancelledAt       DateTime?
+  cancelledById     String?
+  cancelReason      String?
 
   salesOrder             SalesOrder              @relation(fields: [salesOrderId], references: [id])
   mfgProduct             MfgProduct              @relation(fields: [mfgProductId], references: [id])
@@ -2034,9 +2040,13 @@ model PackagingRecord {
   note                    String?
   packedById              String
   packedAt                DateTime @default(now())
+  /// Huỷ lệnh đợt 2 - Q5: dòng sinh từ lần chuyển hàng đã đóng gói của SKU đã huỷ sang SKU này (không phải tổ đóng gói làm) - sản
+  /// lượng theo ngày bỏ các dòng này. NULL = đóng gói thật.
+  transferId              BigInt?  @unique
 
-  productionInvoiceItem ProductionInvoiceItem @relation(fields: [productionInvoiceItemId], references: [id])
-  packedBy              User                  @relation(fields: [packedById], references: [id])
+  productionInvoiceItem ProductionInvoiceItem   @relation(fields: [productionInvoiceItemId], references: [id])
+  packedBy              User                    @relation(fields: [packedById], references: [id])
+  transfer              CancelledGoodsTransfer? @relation(fields: [transferId], references: [id])
 
   @@index([productionInvoiceItemId])
   @@map("packaging_records")
@@ -2170,15 +2180,81 @@ model ProductionOrderCancelRequest {
   wipSnapshot       Json?
   /// Dòng SKU mới cấp cho dòng đơn bán sau khi huỷ (để lên lệnh lại). NULL = dòng SKU tạo tay, không gắn dòng đơn.
   replacementItemId BigInt?
+  /// Huỷ lệnh đợt 2 - Q3 (anh Nhân 24/11/2026): sắt đã xuất cho tổ cắt mà chưa cắt - QLSX quyết từng trường hợp. NULL = chưa quyết.
+  /// CONTINUE = cho cắt tiếp (tổ cắt báo cắt được cho SKU đã huỷ, đoạn vào dư kho Phôi); STOP = ngưng, cây còn lại nhập trả kho
+  /// Phôi (SteelReturn). STOP là quyết định cuối; CONTINUE đổi sang STOP được.
+  cutDecision       ProductionOrderCutDecision?
+  cutDecidedById    String?
+  cutDecidedAt      DateTime?
+  cutDecisionNote   String?
 
-  productionOrder ProductionOrder        @relation(fields: [productionOrderId], references: [id])
-  requestedBy     User                   @relation("PoCancelRequestedBy", fields: [requestedById], references: [id])
-  decidedBy       User?                  @relation("PoCancelDecidedBy", fields: [decidedById], references: [id])
-  replacementItem ProductionInvoiceItem? @relation("PoCancelReplacementItem", fields: [replacementItemId], references: [id])
+  productionOrder ProductionOrder          @relation(fields: [productionOrderId], references: [id])
+  steelReturns    SteelReturn[]
+  goodsTransfers  CancelledGoodsTransfer[]
+  requestedBy     User                     @relation("PoCancelRequestedBy", fields: [requestedById], references: [id])
+  decidedBy       User?                    @relation("PoCancelDecidedBy", fields: [decidedById], references: [id])
+  replacementItem ProductionInvoiceItem?   @relation("PoCancelReplacementItem", fields: [replacementItemId], references: [id])
 
   @@index([productionOrderId, status])
   @@index([status])
   @@map("production_order_cancel_requests")
+}
+
+enum ProductionOrderCutDecision {
+  CONTINUE
+  STOP
+}
+
+/// Huỷ lệnh đợt 2 - Q3: cây sắt tổ cắt trả về kho Phôi khi QLSX cho ngưng cắt SKU đã huỷ. Cây nguyên (dài = cây xuất) hoặc cây lẻ
+/// (phần còn lại của cây cắt dở) - vào tồn đúng chiều dài, phương án cắt lệnh sau dùng cây lẻ trước (CS2). Ghi sổ kho STEEL_RETURN
+/// (kho ảo sản xuất -> kho Phôi của xưởng làm lệnh), refId = id dòng này. Tiến độ Phôi trừ phần trả khỏi "sắt đã nhận chưa cắt".
+enum CancelledGoodsKind {
+  /// Hàng đã đóng gói (bộ) - Q5.
+  PACKED
+  /// Khung đã đan, đã nhận về từ điểm đan (theo mảnh) - Q6.
+  WOVEN
+}
+
+/// Huỷ lệnh đợt 2 - Q5/Q6 (anh Nhân 24/11/2026): KHSX chuyển hàng đã làm của SKU đã huỷ sang 1 dòng SKU khác đang chạy. Q5 hàng đã
+/// đóng gói: cùng sản phẩm + màu dây + vải nệm, đích nhận 1 PackagingRecord (transferId) nên booking giao được. Q6 khung đã đan: cùng
+/// sản phẩm + màu dây, theo mảnh, đích coi như đã nhận đan thêm (Chuyền kiểm làm tiếp). Nguồn bớt theo Σ đã chuyển.
+model CancelledGoodsTransfer {
+  id              BigInt             @id @default(autoincrement())
+  cancelRequestId BigInt
+  kind            CancelledGoodsKind
+  sourceItemId    BigInt
+  targetItemId    BigInt
+  /// Chỉ WOVEN: mảnh khung đan.
+  pieceId         BigInt?
+  qty             Int
+  note            String?
+  createdById     String
+  createdAt       DateTime           @default(now())
+
+  cancelRequest   ProductionOrderCancelRequest @relation(fields: [cancelRequestId], references: [id])
+  packagingRecord PackagingRecord?
+
+  @@index([sourceItemId, kind])
+  @@index([targetItemId, kind])
+  @@map("cancelled_goods_transfers")
+}
+
+model SteelReturn {
+  id                  BigInt   @id @default(autoincrement())
+  cancelRequestId     BigInt
+  productionInvoiceId BigInt
+  materialId          BigInt
+  lengthMm            Int
+  bars                Int
+  warehouseId         BigInt
+  createdById         String
+  createdAt           DateTime @default(now())
+
+  cancelRequest ProductionOrderCancelRequest @relation(fields: [cancelRequestId], references: [id])
+  material      Material                     @relation(fields: [materialId], references: [id])
+
+  @@index([productionInvoiceId, materialId])
+  @@map("steel_returns")
 }
 
 /// 1 lần gọi solver cat_sat_iea. cat_sat_iea không lưu gì (stateless) - toàn bộ input/output
@@ -2962,6 +3038,8 @@ enum StockLedgerRefType {
   /// Đoạn đủ công đoạn + KCS đạt của một lệnh vào kho Phôi của xưởng làm lệnh (13/11/2026, tồn đoạn theo lệnh - phía cộng).
   /// Nguồn kho ảo PRODUCTION -> đích kho Phôi; tính lại giảm thì ghi chiều ngược lại. refId = ProductionInvoice.id.
   SEGMENT_PRODUCE
+  /// Huỷ lệnh đợt 2 - Q3: tổ cắt trả cây chưa cắt của SKU đã huỷ về kho Phôi (SteelReturn).
+  STEEL_RETURN
 }
 
 enum TransferStatus {

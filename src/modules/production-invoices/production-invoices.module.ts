@@ -1,3 +1,5 @@
+import { CancelledGoodsService } from './order-cancellation/cancelled-goods.service';
+import { SegmentStockModule } from '../segment-stock/segment-stock.module';
 import { WarehouseTransfersModule } from '../warehouse-transfers/warehouse-transfers.module';
 import { Module } from '@nestjs/common';
 import { CuttingProposalsModule } from '../cutting-proposals/cutting-proposals.module';
@@ -33,6 +35,7 @@ import { OrderCancellationService } from './order-cancellation/order-cancellatio
     NotificationsModule,
     WorkshopsModule, // Phần A – Đợt 2
     WarehouseTransfersModule, // Người B – đổi xưởng (10/11/2026)
+    SegmentStockModule, // Huỷ lệnh đợt 2 - Q2: đoạn của SKU huỷ vào dư
   ],
   // Phần A – Đợt 9 (YC2): lõi đổi mốc + Excel kế hoạch
   controllers: [
@@ -43,6 +46,7 @@ import { OrderCancellationService } from './order-cancellation/order-cancellatio
     OrderCancellationController,
   ],
   providers: [
+    CancelledGoodsService, // Huỷ lệnh đợt 2 - Q5/Q6
     ProductionInvoicesService,
     PieceMaterialYieldPurchaseService,
     ConsumableMaterialPurchaseService,

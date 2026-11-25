@@ -1,4 +1,3 @@
-import { BadRequestException } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import { PrismaServiceType } from '../../prisma/prisma.service';
@@ -65,7 +64,8 @@ describe('ItemDeadlineWriter (Phần A – Đợt 9)', () => {
       salesOrder: null,
     });
 
-    it('giá trị đang lưu cách nhau 1 ngày nhưng yêu cầu chờ kéo ra 9 ngày → 400', async () => {
+    // 24/11/2026 (anh Nhân câu 3c): bỏ chặn khung N ngày - kéo mốc ra xa vẫn lưu được.
+    it('giá trị đang lưu cách nhau 1 ngày, yêu cầu chờ kéo ra 9 ngày → vẫn qua', async () => {
       tx.productionInvoiceItem.findMany.mockResolvedValue([
         item(1n, '2026-11-01'),
         item(2n, '2026-11-02'),
@@ -76,7 +76,7 @@ describe('ItemDeadlineWriter (Phần A – Đợt 9)', () => {
           7n,
           new Map([['2', { materialDeadline: '2026-11-10' }]]),
         ),
-      ).rejects.toThrow(BadRequestException);
+      ).resolves.toBeUndefined();
     });
 
     it('không có thay đổi dự kiến thì giống luật gộp thường (trong khung → qua)', async () => {

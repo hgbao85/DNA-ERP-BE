@@ -168,6 +168,53 @@ export async function assertOrderNotCancelled(
   if (order.status === 'CANCELLED') throwIfCancelled(new Date(0), actionLabel);
 }
 
+/**
+ * Câu 4 (anh Nhân 24/11/2026): KCS chấm nốt (và chốt để chấm) đợt của SKU đã huỷ - hàng đạt vào kho công đoạn như thường. Lệnh
+ * đã huỷ luôn ở FINISHED (lệnh 1 SKU thì PI không còn SKU nào ACTIVE) nên cổng xưởng chặn mất - nơi gọi của KCS bỏ qua cổng khi
+ * hàm này trả true. Huỷ không đảo lại được nên kiểm ngoài transaction là đủ. Công nhân vẫn không báo thêm được (cổng cũ).
+ */
+export async function isOrderCancelledById(
+  prisma: PrismaTx,
+  productionOrderId: bigint | null | undefined,
+): Promise<boolean> {
+  if (productionOrderId == null) return false;
+  const order = await prisma.productionOrder.findUnique({
+    where: { id: productionOrderId },
+    select: { status: true },
+  });
+  return order?.status === 'CANCELLED';
+}
+
+/**
+ * Huỷ lệnh đợt 2 - Q3 (anh Nhân 24/11/2026): QLSX cho tổ cắt "cắt tiếp" sắt đã xuất của SKU đã huỷ - đề nghị huỷ đã duyệt mang
+ * cutDecision = CONTINUE. Khi đó báo cắt / báo cắt xong / xác nhận nhận sắt của SKU này được qua cổng xưởng; đoạn ra vào dư kho Phôi.
+ */
+export async function isCutContinuedForOrder(
+  prisma: PrismaTx,
+  productionOrderId: bigint,
+): Promise<boolean> {
+  const row = await prisma.productionOrderCancelRequest.findFirst({
+    where: { productionOrderId, status: 'APPROVED', cutDecision: 'CONTINUE' },
+    select: { id: true },
+  });
+  return row != null;
+}
+
+/**
+ * Q3 theo PI: PI có SKU đã huỷ. Tổ cắt vẫn xác nhận nhận sắt đã xuất được (cắt tiếp hay nhập trả đều cần sắt đã về tổ) - trước đây
+ * lệnh huỷ hết thì phiếu xuất chưa nhận kẹt mãi (cổng xưởng chặn).
+ */
+export async function piHasCancelledSku(
+  prisma: PrismaTx,
+  productionInvoiceId: bigint,
+): Promise<boolean> {
+  const row = await prisma.productionOrder.findFirst({
+    where: { status: 'CANCELLED', productionInvoiceItem: { productionInvoiceId } },
+    select: { id: true },
+  });
+  return row != null;
+}
+
 /** Cùng assertOrderNotCancelled nhưng trên lệnh nơi gọi đã đọc sẵn (khỏi 1 truy vấn). Thiếu status (dữ liệu cũ) = chưa huỷ. */
 export function assertLoadedOrderNotCancelled(
   order: { status?: string | null },

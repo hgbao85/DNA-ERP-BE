@@ -111,6 +111,8 @@ interface FakePrisma {
   systemConfig: MockGroup;
   cuttingProposalLine: MockGroup;
   stockReservation: MockGroup;
+  steelReturn: MockGroup;
+  cuttingPlanCoverage: MockGroup;
 }
 
 function build(world: World) {
@@ -376,6 +378,8 @@ function build(world: World) {
   prisma.stockReservation = {
     findMany: jest.fn().mockImplementation(() => Promise.resolve(world.reservations)),
   };
+  prisma.steelReturn = { findMany: jest.fn().mockResolvedValue([]) };
+  prisma.cuttingPlanCoverage = { findMany: jest.fn().mockResolvedValue([]) };
 
   const notifications = {
     emit: jest.fn().mockResolvedValue(undefined),

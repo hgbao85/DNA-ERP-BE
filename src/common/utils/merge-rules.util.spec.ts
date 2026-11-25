@@ -19,31 +19,12 @@ describe('merge-rules.util', () => {
     expect(ownSteelDeadlineOf(item('A', null))).toBeNull();
   });
 
-  it('khung 3 ngày tính cả ngày đầu: ngày 1 gộp được ngày 3, KHÔNG gộp với ngày 4 (Sếp Nhân 2026-10-24)', () => {
-    expect(checkMergeRules([item('A', '2026-11-01'), item('B', '2026-11-03')], cfg).ok).toBe(true);
-    const day4 = checkMergeRules([item('A', '2026-11-01'), item('B', '2026-11-04')], cfg);
-    expect(day4).toMatchObject({ ok: false, spanDays: 3 });
-    expect(day4.reason).toContain('chênh tối đa 2 ngày');
-  });
-
-  it('khung 5 ngày (mặc định từ 13/11/2026): ngày 10 gộp được ngày 14, KHÔNG gộp được ngày 15', () => {
-    const cfg5 = { windowDays: 5, maxSkus: 5 };
-    expect(checkMergeRules([item('A', '2026-11-10'), item('B', '2026-11-14')], cfg5).ok).toBe(true);
-    const day15 = checkMergeRules([item('A', '2026-11-10'), item('B', '2026-11-15')], cfg5);
-    expect(day15).toMatchObject({ ok: false, spanDays: 5 });
-    expect(day15.reason).toContain('chênh tối đa 4 ngày');
-  });
-
-  it('vi phạm thì nêu SKU sớm nhất/muộn nhất', () => {
-    const r = checkMergeRules(
-      [item('A', '2026-11-12'), item('C', '2026-11-13'), item('B', '2026-11-16')],
-      cfg,
-    );
-    expect(r).toMatchObject({ ok: false, spanDays: 4 });
-    expect(r.reason).toContain('cách nhau 4 ngày');
-    expect(r.reason).toContain('12/11 – A');
-    expect(r.reason).toContain('16/11 – B');
-    expect(r.reason).toContain('trong khung 3 ngày');
+  // 24/11/2026 (anh Nhân): bỏ chặn 'chênh tối đa N ngày' - mốc cách xa vẫn gộp được, chỉ trả độ chênh để màn hiện / xếp ưu tiên.
+  it('mốc cần sắt cách xa (ngày 1 với ngày 20) vẫn gộp được, chỉ trả độ chênh', () => {
+    const r = checkMergeRules([item('A', '2026-11-01'), item('B', '2026-11-20')], cfg);
+    expect(r).toMatchObject({ ok: true, spanDays: 19, reason: null });
+    const inv = checkMergeRules([item('A', '2026-11-01'), item('B', '2026-11-20')], cfg, 'invoice');
+    expect(inv).toMatchObject({ ok: true, spanDays: 19, reason: null });
   });
 
   it('SKU chưa có mốc không bị chặn và không làm sai khoảng cách', () => {
@@ -61,12 +42,6 @@ describe('merge-rules.util', () => {
       'tối đa 2 SKU',
     );
     expect(checkMergeRules(six, cfg, 'invoice').ok).toBe(true);
-  });
-
-  it('câu báo lệnh gộp khuyên dời mốc / tách SKU', () => {
-    const r = checkMergeRules([item('A', '2026-11-01'), item('B', '2026-11-20')], cfg, 'invoice');
-    expect(r.reason).toContain('trong lệnh gộp');
-    expect(r.reason).toContain('tách SKU ra lệnh riêng');
   });
 
   it('nhãn câu báo kèm mã PO - nhiều đơn cùng SKU mới phân biệt được', () => {

@@ -238,6 +238,7 @@ export async function propose(body: ProposeRequest): Promise<ProposeResponse> {
   const stockLengthsByMaterial = parseStockLengthsByMaterial(body.stock_lengths_by_material);
   const leftoversByMaterial = parseLeftoversByMaterial(body.leftover_stock_by_material);
   const maxSurplus = Math.max(0, toInt(body.max_surplus ?? 10, 10));
+  const lastBarFill = body.last_bar_fill === true;
   const autoScan = Boolean(body.auto_scan ?? false);
   const stopOnFirst = Boolean(body.stop_on_first ?? false);
   const timeLimitSec = Math.max(5, toFloat(body.time_limit_seconds ?? 480, 480));
@@ -367,6 +368,7 @@ export async function propose(body: ProposeRequest): Promise<ProposeResponse> {
         // theo bó thì không.
         ...(!gBundle && laserMinTailMm > 0 ? { laserMinTailMm } : {}),
         ...(leftoversByMaterial[key] ? { leftovers: leftoversByMaterial[key] } : {}),
+        ...(lastBarFill ? { lastBarFill: true } : {}),
       },
     );
     const solveSeconds = Math.round(((performance.now() - t0) / 1000) * 100) / 100;

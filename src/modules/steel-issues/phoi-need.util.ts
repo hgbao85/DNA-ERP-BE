@@ -42,8 +42,13 @@ export interface PhoiNeedInput {
   /** processSteps của từng dòng định mức có số cần > 0 (để biết cặp công đoạn "cần cả T lẫn U"). */
   lineSteps: readonly (readonly string[])[];
   counts: Partial<Record<PhoiStep, PhoiStepCounts>>;
-  /** Phần "mở thêm" theo công đoạn - luôn 0 ở P1. */
+  /**
+   * Đoạn DƯ theo phương án cắt đã duyệt (anh Nhân câu 12b/13a, 24/11/2026) theo công đoạn: được báo THÊM ngoài số cần (cắt + làm đủ
+   * công đoạn của dòng định mức, KCS chấm, đạt vào phần dư chung). KHÔNG cộng vào `required` - tiến độ / "xong" vẫn theo số cần.
+   */
   openedByStep?: Partial<Record<PhoiStep, number>>;
+  /** Câu 14a (24/11/2026): đoạn dư lấy từ kho theo công đoạn - trừ khỏi số cần (không âm). */
+  fromStockByStep?: Partial<Record<PhoiStep, number>>;
 }
 
 /** Kết quả tính cho 1 (SKU, cỡ đoạn, công đoạn). */
@@ -60,8 +65,10 @@ export interface PhoiStepNeed {
   counted: number;
   /** required - counted (có thể âm khi đã vượt). */
   room: number;
-  /** max(0, counted - required): đã vượt bao nhiêu (số cũ báo vượt từ trước deploy). */
+  /** max(0, counted - required): đã vượt bao nhiêu (gồm đoạn dư theo phương án đã báo). */
   over: number;
+  /** Đoạn dư theo phương án được báo thêm ở công đoạn này (openedByStep), 0 khi không có. */
+  planSurplus: number;
   /** Chỉ công đoạn phụ: cutCap - dùng; null với Cắt. */
   physicalLeft: number | null;
   /** Chỉ công đoạn phụ: số đoạn cắt thực có = thô Cắt - thiếu Cắt; null với Cắt. */
@@ -124,9 +131,11 @@ export function computePhoiStep(input: PhoiNeedInput, step: PhoiStep): PhoiStepN
   const c = countsOf(input, step);
   const baseRequired = input.baseByStep[step] ?? 0;
   const extraNeed = extraNeedOf(step, scrapByStepOf(input.counts), input.lineSteps);
-  const required = baseRequired + extraNeed + (input.openedByStep?.[step] ?? 0);
+  const required = Math.max(0, baseRequired + extraNeed - (input.fromStockByStep?.[step] ?? 0));
+  const planSurplus = Math.max(0, input.openedByStep?.[step] ?? 0);
   const counted = c.raw - c.failed - c.short;
-  const room = required - counted;
+  // room = còn báo được theo số cần + đoạn dư theo phương án.
+  const room = required + planSurplus - counted;
   const over = Math.max(0, counted - required);
   if (step === 'CAT') {
     return {
@@ -141,6 +150,7 @@ export function computePhoiStep(input: PhoiNeedInput, step: PhoiStep): PhoiStepN
       counted,
       room,
       over,
+      planSurplus,
       physicalLeft: null,
       cutCap: null,
       cutRaw: null,
@@ -167,6 +177,7 @@ export function computePhoiStep(input: PhoiNeedInput, step: PhoiStep): PhoiStepN
     counted,
     room,
     over,
+    planSurplus,
     physicalLeft,
     cutCap,
     cutRaw: cut.raw,
@@ -201,11 +212,15 @@ export interface PhoiBlockContext {
 
 /** Câu 400 khi báo CẮT vượt số cần (hợp đồng v2 mục 11). */
 export function buildCutBlockMessage(n: PhoiStepNeed, ctx: PhoiBlockContext): string {
-  const extra = n.extraNeed > 0 ? ` (gồm ${n.extraNeed} đoạn cắt lại cho đoạn KCS bỏ)` : '';
+  const extra =
+    (n.extraNeed > 0 ? ` (gồm ${n.extraNeed} đoạn cắt lại cho đoạn KCS bỏ)` : '') +
+    (n.planSurplus > 0 ? ` + ${n.planSurplus} đoạn dư theo phương án` : '');
   return (
     `Cỡ ${ctx.cutLengthMm}mm (SKU ${ctx.skuLabel}): cần ${n.required} đoạn${extra}, đã tính ${n.counted} - ` +
     `lần này báo được tối đa ${Math.max(0, n.room)} đoạn, bạn nhập ${ctx.qty}. ` +
-    `Đếm lại; đoạn cắt dư để riêng dưới xưởng, không báo. ${PHOI_OVERUSE_SUFFIX}`
+    (n.planSurplus > 0
+      ? `Đếm lại; đoạn cắt quá số này để riêng dưới xưởng, không báo. ${PHOI_OVERUSE_SUFFIX}`
+      : `Đếm lại; đoạn cắt dư để riêng dưới xưởng, không báo. ${PHOI_OVERUSE_SUFFIX}`)
   );
 }
 
@@ -217,7 +232,9 @@ export function buildStepBlockMessage(
 ): string {
   const label = processStepLabel(n.step);
   if (kind === 'NEED') {
-    const extra = n.extraNeed > 0 ? ` (gồm ${n.extraNeed} đoạn làm bù cho đoạn KCS bỏ)` : '';
+    const extra =
+      (n.extraNeed > 0 ? ` (gồm ${n.extraNeed} đoạn làm bù cho đoạn KCS bỏ)` : '') +
+      (n.planSurplus > 0 ? ` + ${n.planSurplus} đoạn dư theo phương án` : '');
     return (
       `Cỡ ${ctx.cutLengthMm}mm (SKU ${ctx.skuLabel}): cần ${label} ${n.required} đoạn${extra}, đã tính ${n.counted} - ` +
       `lần này báo được tối đa ${Math.max(0, n.room)} đoạn, bạn nhập ${ctx.qty}. ` +
@@ -259,6 +276,8 @@ export function stepsOverCutCap(
 
 export interface PhoiNeedRows {
   orders: readonly { id: bigint; bomRevisionId: bigint; quantity: number }[];
+  /** Đoạn dư theo phương án đã duyệt, đã gán cho 1 SKU (loadPlanSurplus). Thiếu = không có. */
+  planSurplus?: readonly PlanSurplusRow[];
   bomPieces: readonly { bomRevisionId: bigint; pieceId: bigint; qtyPerUnit: number }[];
   pieceBoms: readonly {
     bomRevisionId: bigint;
@@ -297,6 +316,18 @@ export function phoiOrderKey(
 ): string {
   const resolved = id ?? (orders.length === 1 ? orders[0].id : null);
   return resolved == null ? 'none' : resolved.toString();
+}
+
+/** 1 dòng đoạn dư theo phương án đã gán cho SKU (xem plan-surplus.util). */
+export interface PlanSurplusRow {
+  productionOrderId: bigint;
+  segmentSpecId: bigint;
+  qty: number;
+  /**
+   * Có mặt = dòng ĐOẠN DƯ LẤY TỪ KHO (câu 14a): `qty` đoạn đã làm đủ bộ công đoạn này (mã đoạn, '' = trơn) - GIẢM số cần Cắt và
+   * các công đoạn trong bộ. Thiếu = dòng dư theo phương án (cho báo thêm).
+   */
+  fromStockSteps?: string;
 }
 
 /** Chỉ mục (SKU, cỡ đoạn) -> dữ liệu tính. Khoá `${orderKey}:${specKey}`. */
@@ -341,6 +372,31 @@ export class PhoiNeedIndex {
     counts[field] += qty;
   }
 
+  /**
+   * @internal Đoạn dư theo phương án (câu 12b): cắt + làm đủ công đoạn của dòng định mức NHIỀU công đoạn nhất của cỡ này ở SKU
+   * (đoạn dư nhập tồn đúng dạng đoạn của lệnh). Gọi SAU addBase; SKU không có cỡ này thì bỏ.
+   */
+  addOpened(orderKey: string, specKey: string, qty: number) {
+    const input = this.byKey.get(`${orderKey}:${specKey}`);
+    if (!input || qty <= 0 || input.lineSteps.length === 0) return;
+    const steps = [...input.lineSteps].sort((a, b) => b.length - a.length)[0];
+    const opened = (input.openedByStep ??= {});
+    opened.CAT = (opened.CAT ?? 0) + qty;
+    for (const st of PROCESS_STEPS)
+      if (st !== 'CAT' && steps.includes(st)) opened[st] = (opened[st] ?? 0) + qty;
+  }
+
+  /** @internal Câu 14a: đoạn dư lấy từ kho (bộ công đoạn `steps` dạng mã 'UON,DAP') giảm số cần Cắt + các công đoạn trong bộ. */
+  addFromStock(orderKey: string, specKey: string, steps: string, qty: number) {
+    const input = this.byKey.get(`${orderKey}:${specKey}`);
+    if (!input || qty <= 0) return;
+    const list = steps === '' ? [] : steps.split(',');
+    const m = (input.fromStockByStep ??= {});
+    m.CAT = (m.CAT ?? 0) + qty;
+    for (const st of PROCESS_STEPS)
+      if (st !== 'CAT' && list.includes(st)) m[st] = (m[st] ?? 0) + qty;
+  }
+
   /** @internal */
   addBase(orderKey: string, specKey: string, steps: readonly string[], qty: number) {
     const input = this.ensure(orderKey, specKey);
@@ -367,6 +423,16 @@ export function buildPhoiNeedIndex(rows: PhoiNeedRows): PhoiNeedIndex {
       if (segments <= 0) continue;
       index.addBase(order.id.toString(), pb.segmentSpecId.toString(), pb.processSteps, segments);
     }
+  }
+  for (const r of rows.planSurplus ?? []) {
+    if (r.fromStockSteps !== undefined)
+      index.addFromStock(
+        r.productionOrderId.toString(),
+        r.segmentSpecId.toString(),
+        r.fromStockSteps,
+        r.qty,
+      );
+    else index.addOpened(r.productionOrderId.toString(), r.segmentSpecId.toString(), r.qty);
   }
   for (const r of rows.cut) {
     index.add(keyOf(r.productionOrderId), r.segmentSpecId.toString(), 'CAT', 'raw', r.qty);

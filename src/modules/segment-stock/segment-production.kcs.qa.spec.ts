@@ -81,6 +81,8 @@ function setup(d: Data) {
       ),
     },
     pieceBom: { findMany: jest.fn().mockResolvedValue(d.pieceBoms) },
+    segmentReservationLog: { findMany: jest.fn().mockResolvedValue([]) },
+    cuttingPlanCoverage: { findMany: jest.fn().mockResolvedValue([]) },
     cutPatternSegment: { findMany: jest.fn().mockResolvedValue(d.cutSegments) },
     stepBatchSegment: { findMany: jest.fn().mockResolvedValue(d.stepSegments) },
     qcReviewSegment: {

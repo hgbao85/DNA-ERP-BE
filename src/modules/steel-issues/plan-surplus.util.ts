@@ -1,0 +1,153 @@
+import { PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
+import { normalizeSegmentSteps } from '../../common/utils/segment-code.util';
+import { PlanSurplusRow } from './phoi-need.util';
+
+/**
+ * Đoạn DƯ theo phương án cắt đã duyệt (anh Nhân câu 9-13, 24/11/2026): cây mua cuối được cắt khúc thừa thành đoạn dư, đoạn dư làm
+ * đủ công đoạn như đoạn của lệnh rồi qua KCS, đạt thì vào phần dư chung kho Phôi. Trước đây tổ cắt / công đoạn phụ bị chặn ở số
+ * cần (đoạn dư "để riêng dưới xưởng, không báo").
+ *
+ * Dư của 1 phương án theo cỡ đoạn = Σ (số cây kiểu cắt × số đoạn/cây) − Σ số cần định mức của MỌI SKU phương án phủ (kể cả SKU đã
+ * huỷ: phần của nó đi đường Q3 riêng, không cộng sang SKU khác để khỏi cho cắt 2 lần). Gán hết cho SKU CÒN CHẠY có id nhỏ nhất
+ * dùng cỡ đó (chỉ để có chỗ ghi; tồn đoạn tính theo cả PI nên SKU nào nhận không đổi số vào kho).
+ *
+ * Câu 14a (cùng ngày): phương án đã lấy đoạn dư trong kho (nhật ký giữ đoạn SURPLUS_IN refType CUTTING_PROPOSAL, refId = phương
+ * án, trừ phần đã nhả) -> dòng `fromStockSteps` GIẢM số cần cắt + công đoạn của SKU (gán cho SKU còn chạy id nhỏ nhất có đúng cỡ +
+ * bộ công đoạn đó), và dư theo phương án tính trên số cần đã trừ.
+ *
+ * `orderIds`: các SKU đang xét (thường mọi lệnh của 1 PI). Trả các dòng của SKU trong `orderIds`.
+ */
+export async function loadPlanSurplus(
+  db: PrismaTx | PrismaServiceType,
+  orderIds: readonly bigint[],
+): Promise<PlanSurplusRow[]> {
+  if (orderIds.length === 0) return [];
+  const mine = await db.cuttingPlanCoverage.findMany({
+    where: { productionOrderId: { in: [...orderIds] }, cuttingProposal: { status: 'APPROVED' } },
+    select: { cuttingProposalId: true },
+  });
+  const proposalIds = [...new Set(mine.map((c) => c.cuttingProposalId))];
+  if (proposalIds.length === 0) return [];
+  const [coverage, segments, stockLogs] = await Promise.all([
+    db.cuttingPlanCoverage.findMany({
+      where: { cuttingProposalId: { in: proposalIds } },
+      select: {
+        cuttingProposalId: true,
+        productionOrder: {
+          select: { id: true, bomRevisionId: true, quantity: true, status: true },
+        },
+      },
+    }),
+    db.cuttingProposalPatternSegment.findMany({
+      where: { pattern: { line: { cuttingProposalId: { in: proposalIds } } } },
+      select: {
+        segmentSpecId: true,
+        countPerBar: true,
+        pattern: { select: { barCount: true, line: { select: { cuttingProposalId: true } } } },
+      },
+    }),
+    db.segmentReservationLog.findMany({
+      where: {
+        refType: 'CUTTING_PROPOSAL',
+        refId: { in: proposalIds.map((id) => id.toString()) },
+        kind: { in: ['SURPLUS_IN', 'RELEASE'] },
+      },
+      select: {
+        refId: true,
+        kind: true,
+        qty: true,
+        reservation: { select: { segmentSpecId: true, segmentSteps: true } },
+      },
+    }),
+  ]);
+  const revIds = [...new Set(coverage.map((c) => c.productionOrder.bomRevisionId))];
+  // Cỡ đoạn được đoạn dư trong kho phủ HẾT không còn trong kiểu cắt nào - vẫn phải nạp định mức của nó để gán phần lấy từ kho
+  // (thử sống 25/11: lệnh gộp lấy đủ 8 đoạn 420 từ kho mà tổ Phôi vẫn thấy cần 8).
+  const specIds = [
+    ...new Set([
+      ...segments.map((s) => s.segmentSpecId.toString()),
+      ...stockLogs.map((l) => l.reservation.segmentSpecId.toString()),
+    ]),
+  ].map((v) => BigInt(v));
+  if (revIds.length === 0 || specIds.length === 0) return [];
+  const [bomPieces, pieceBoms] = await Promise.all([
+    db.bomPiece.findMany({
+      where: { bomRevisionId: { in: revIds } },
+      select: { bomRevisionId: true, pieceId: true, qtyPerUnit: true },
+    }),
+    db.pieceBom.findMany({
+      where: { bomRevisionId: { in: revIds }, segmentSpecId: { in: specIds } },
+      select: {
+        bomRevisionId: true,
+        pieceId: true,
+        segmentSpecId: true,
+        qtyPerPiece: true,
+        processSteps: true,
+      },
+    }),
+  ]);
+  const qpu = new Map(bomPieces.map((b) => [`${b.bomRevisionId}:${b.pieceId}`, b.qtyPerUnit]));
+  // Số cần định mức theo (bản định mức, cỡ) cho 1 bộ.
+  const perUnit = new Map<string, number>();
+  // (bản định mức, cỡ, bộ công đoạn) có trong định mức - để gán phần lấy từ kho cho SKU dùng đúng bộ công đoạn đó.
+  const hasSteps = new Set(
+    pieceBoms.map(
+      (pb) => `${pb.bomRevisionId}:${pb.segmentSpecId}|${normalizeSegmentSteps(pb.processSteps)}`,
+    ),
+  );
+  for (const pb of pieceBoms) {
+    const k = `${pb.bomRevisionId}:${pb.segmentSpecId}`;
+    perUnit.set(
+      k,
+      (perUnit.get(k) ?? 0) + pb.qtyPerPiece * (qpu.get(`${pb.bomRevisionId}:${pb.pieceId}`) ?? 0),
+    );
+  }
+
+  const produced = new Map<string, number>(); // `${proposal}:${spec}`
+  for (const s of segments) {
+    const k = `${s.pattern.line.cuttingProposalId}:${s.segmentSpecId}`;
+    produced.set(k, (produced.get(k) ?? 0) + s.countPerBar * s.pattern.barCount);
+  }
+  // Phần lấy từ kho còn giữ theo (phương án, cỡ, bộ công đoạn).
+  const stock = new Map<string, number>();
+  for (const l of stockLogs) {
+    const k = `${l.refId}:${l.reservation.segmentSpecId}|${l.reservation.segmentSteps}`;
+    stock.set(k, (stock.get(k) ?? 0) + (l.kind === 'SURPLUS_IN' ? 1 : -1) * l.qty.toNumber());
+  }
+  const wanted = new Set(orderIds.map((id) => id.toString()));
+  const out: PlanSurplusRow[] = [];
+  const fromStockBySpec = new Map<string, number>(); // `${proposal}:${spec}`
+  for (const [k, raw] of stock) {
+    const qty = Math.round(raw);
+    if (qty <= 0) continue;
+    const [pid, rest] = k.split(':');
+    const [spec, steps] = rest.split('|');
+    fromStockBySpec.set(`${pid}:${spec}`, (fromStockBySpec.get(`${pid}:${spec}`) ?? 0) + qty);
+    let owner: bigint | null = null;
+    for (const c of coverage) {
+      if (c.cuttingProposalId.toString() !== pid || c.productionOrder.status === 'CANCELLED')
+        continue;
+      if (!hasSteps.has(`${c.productionOrder.bomRevisionId}:${spec}|${steps}`)) continue;
+      if (owner === null || c.productionOrder.id < owner) owner = c.productionOrder.id;
+    }
+    if (owner === null || !wanted.has(owner.toString())) continue;
+    out.push({ productionOrderId: owner, segmentSpecId: BigInt(spec), qty, fromStockSteps: steps });
+  }
+  for (const [k, made] of produced) {
+    const [pid, spec] = k.split(':');
+    const covered = coverage.filter((c) => c.cuttingProposalId.toString() === pid);
+    let need = -(fromStockBySpec.get(k) ?? 0);
+    let owner: bigint | null = null;
+    for (const c of covered) {
+      const u = perUnit.get(`${c.productionOrder.bomRevisionId}:${spec}`) ?? 0;
+      if (u <= 0) continue;
+      need += u * c.productionOrder.quantity;
+      if (c.productionOrder.status === 'CANCELLED') continue;
+      if (owner === null || c.productionOrder.id < owner) owner = c.productionOrder.id;
+    }
+    const surplus = Math.round(made - need);
+    if (surplus <= 0 || owner === null || !wanted.has(owner.toString())) continue;
+    out.push({ productionOrderId: owner, segmentSpecId: BigInt(spec), qty: surplus });
+  }
+  return out;
+}

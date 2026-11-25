@@ -1,9 +1,11 @@
 import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
+  SegmentReservationLogKind,
   CutBundleStatus,
   ProcessStep,
   ProductionInvoiceStatus,
   ProductionOrderFloorStage,
+  ProductionOrderStatus,
   StepBundleStatus,
 } from '../../generated/prisma/client';
 import { lockBusinessKey, lockBusinessKeyShared } from '../../common/utils/advisory-lock.util';
@@ -17,10 +19,11 @@ import {
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
 import { isSegmentStockEnabled, SEGMENT_LEGACY_CONVERSION_LOCK } from './segment-stock.config';
-import { SegmentStockService } from './segment-stock.service';
+import { CUTTING_PROPOSAL_SEGMENT_REF, SegmentStockService } from './segment-stock.service';
 import type { SegmentSyncChange, SegmentTarget } from './segment-stock.types';
 import { computeSegmentTargets, SegmentTargetVariant } from './segment-targets.util';
 import { extraNeedOf } from '../steel-issues/phoi-need.util';
+import { loadPlanSurplus } from '../steel-issues/plan-surplus.util';
 
 /** Kết quả tính cho 1 cỡ đoạn của lệnh. */
 export interface SegmentProductionSpecResult {
@@ -57,6 +60,12 @@ export interface RecomputeSegmentStockResult {
 
 interface LoadedProduction {
   closed: boolean;
+  /**
+   * Huỷ lệnh đợt 2 - Q2 (anh Nhân 24/11/2026: đoạn đã cắt của SKU huỷ tự vào tồn kho Phôi): lệnh đã đóng (mọi SKU Kết thúc) mà có
+   * SKU bị huỷ thì vẫn tính lại, nhưng KHÔNG giữ gì cho lệnh - mọi đoạn đạt KCS vào dư. Cần vì KCS vẫn chấm nốt đợt của SKU đã huỷ
+   * (câu 4) sau khi lệnh đã đóng; không có chế độ này thì đoạn chấm sau không bao giờ vào sổ.
+   */
+  surplusOnly: boolean;
   specs: SegmentProductionSpecResult[];
 }
 
@@ -158,7 +167,7 @@ export class SegmentProductionService {
     await lockBusinessKey(tx, segmentProductionLockKey(productionInvoiceId));
     // Đọc số liệu SAU khi khoá: 2 lượt KCS sát nhau - lượt chạy sau phải thấy số mới nhất.
     const loaded = await this.loadProduction(tx, productionInvoiceId);
-    if (loaded.closed) return null;
+    if (loaded.closed && !loaded.surplusOnly) return null;
     const current = await this.loadCurrent(tx, productionInvoiceId);
     const wh = await new WorkshopWarehouseResolver(tx).phoiWarehouseOfPi(productionInvoiceId);
     const sync = await this.segmentStockService.syncOrderProduction(tx, {
@@ -249,7 +258,7 @@ export class SegmentProductionService {
       }),
       db.productionOrder.findMany({
         where: { productionInvoiceItem: { productionInvoiceId } },
-        select: { id: true, bomRevisionId: true, quantity: true, floorStage: true },
+        select: { id: true, bomRevisionId: true, quantity: true, floorStage: true, status: true },
       }),
     ]);
     const closed =
@@ -257,6 +266,13 @@ export class SegmentProductionService {
       invoice.status === ProductionInvoiceStatus.CANCELLED ||
       (orders.length > 0 &&
         orders.every((o) => o.floorStage === ProductionOrderFloorStage.FINISHED));
+    const anyCancelled = orders.some((o) => o.status === ProductionOrderStatus.CANCELLED);
+    const surplusOnly = closed && anyCancelled;
+    // Q2: SKU đã huỷ không còn cần đoạn - số cần chỉ tính SKU còn hiệu lực, đoạn đã cắt cho SKU huỷ thành dư. Chế độ chỉ-dư: không
+    // SKU nào cần (lệnh đã đóng, phần giữ đã nhả về dư lúc đóng).
+    const needOrders = surplusOnly
+      ? []
+      : orders.filter((o) => o.status !== ProductionOrderStatus.CANCELLED);
 
     const revisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
     const [bomPieces, pieceBoms, cutSegments, cutQc, stepSegments, stepQc] = await Promise.all([
@@ -307,7 +323,7 @@ export class SegmentProductionService {
       bomPieces.map((bp) => [`${bp.bomRevisionId}:${bp.pieceId}`, bp.qtyPerUnit]),
     );
     const needBySpec = new Map<string, Map<string, number>>();
-    for (const order of orders) {
+    for (const order of needOrders) {
       for (const pb of pieceBoms) {
         if (pb.bomRevisionId !== order.bomRevisionId) continue;
         const qtyPerUnit = qtyPerUnitByKey.get(`${pb.bomRevisionId}:${pb.pieceId}`) ?? 0;
@@ -319,6 +335,31 @@ export class SegmentProductionService {
         byCode.set(code, (byCode.get(code) ?? 0) + need);
         needBySpec.set(specKey, byCode);
       }
+    }
+    // Câu 14a (anh Nhân 24/11/2026): phần đoạn dư phương án cắt đã lấy từ kho cho lệnh (đang giữ, nhật ký SURPLUS_IN refType
+    // CUTTING_PROPOSAL trừ phần nhả) đã nằm trong giữ của lệnh -> đoạn TỰ CẮT chỉ cần phủ phần còn lại; phần cắt hơn thành dư.
+    if (needBySpec.size > 0) {
+      const stockLogs = await db.segmentReservationLog.findMany({
+        where: {
+          refType: CUTTING_PROPOSAL_SEGMENT_REF,
+          kind: { in: [SegmentReservationLogKind.SURPLUS_IN, SegmentReservationLogKind.RELEASE] },
+          reservation: { productionInvoiceId },
+        },
+        select: {
+          kind: true,
+          qty: true,
+          reservation: { select: { segmentSpecId: true, segmentSteps: true } },
+        },
+      });
+      for (const l of stockLogs) {
+        const byCode = needBySpec.get(l.reservation.segmentSpecId.toString());
+        const code = l.reservation.segmentSteps;
+        if (!byCode || !byCode.has(code)) continue;
+        const sign = l.kind === SegmentReservationLogKind.SURPLUS_IN ? -1 : 1;
+        byCode.set(code, (byCode.get(code) ?? 0) + sign * l.qty.toNumber());
+      }
+      for (const byCode of needBySpec.values())
+        for (const [code, v] of byCode) byCode.set(code, Math.max(0, v));
     }
 
     // Cắt: done = Σ qty, open = đợt CUTTING, awaiting = đợt AWAITING_QC, failed = lỗi KCS cộng dồn.
@@ -364,7 +405,7 @@ export class SegmentProductionService {
     }
     // Các dòng định mức (bộ công đoạn) của từng cỡ - để biết dòng nào cần cả 2 công đoạn khi chia phần bỏ.
     const lineStepsBySpec = new Map<string, string[][]>();
-    for (const order of orders) {
+    for (const order of needOrders) {
       for (const pb of pieceBoms) {
         if (pb.bomRevisionId !== order.bomRevisionId) continue;
         const qtyPerUnit = qtyPerUnitByKey.get(`${pb.bomRevisionId}:${pb.pieceId}`) ?? 0;
@@ -373,6 +414,31 @@ export class SegmentProductionService {
         const arr = lineStepsBySpec.get(specKey) ?? [];
         arr.push([...pb.processSteps]);
         lineStepsBySpec.set(specKey, arr);
+      }
+    }
+    // Câu 12b (24/11/2026): đoạn dư theo phương án làm đủ bộ công đoạn của dòng định mức NHIỀU công đoạn nhất (cùng luật
+    // PhoiNeedIndex.addOpened) - đã cắt mà chưa qua công đoạn thì là đoạn chờ công đoạn, không phải dư trơn.
+    const plannedBySpec = new Map<string, Record<string, number>>();
+    if (needOrders.length > 0) {
+      const rows = await loadPlanSurplus(
+        db,
+        needOrders.map((o) => o.id),
+      );
+      for (const r of rows) {
+        if (r.fromStockSteps !== undefined) continue;
+        const order = needOrders.find((o) => o.id === r.productionOrderId);
+        if (!order) continue;
+        const lines = pieceBoms
+          .filter(
+            (pb) =>
+              pb.bomRevisionId === order.bomRevisionId && pb.segmentSpecId === r.segmentSpecId,
+          )
+          .map((pb) => normalizeSegmentSteps(pb.processSteps))
+          .sort((a, b) => (b ? b.split(',').length : 0) - (a ? a.split(',').length : 0));
+        if (lines.length === 0 || lines[0] === '') continue;
+        const m = plannedBySpec.get(r.segmentSpecId.toString()) ?? {};
+        m[lines[0]] = (m[lines[0]] ?? 0) + r.qty;
+        plannedBySpec.set(r.segmentSpecId.toString(), m);
       }
     }
 
@@ -418,6 +484,7 @@ export class SegmentProductionService {
           segmentSteps,
           needQty,
         })),
+        plannedSurplus: plannedBySpec.get(specKey),
       });
       specs.push({
         segmentSpecId: specId,
@@ -428,6 +495,6 @@ export class SegmentProductionService {
         leftoverStepQty: r.leftoverStepQty,
       });
     }
-    return { closed, specs };
+    return { closed, surplusOnly, specs };
   }
 }

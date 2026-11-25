@@ -7,10 +7,6 @@ import {
 } from '../../generated/prisma/client';
 import type { PrismaTx } from '../../prisma/prisma.service';
 import type { StaleItem, StaleStage } from './floor-stale.util';
-import {
-  orderNotCancelled,
-  orderNotCancelledNullable,
-} from '../../common/utils/cancelled-order.util';
 
 /**
  * Các đợt công nhân đã báo mà KCS chưa chấm (P1 "KCS tự chuyển", 18/11/2026) - MỘT nguồn dùng chung cho:
@@ -133,6 +129,8 @@ type RawItem = {
   productionOrderId?: bigint | null;
   /** true = có thể bị CHUA_GAN_SKU (nhóm công đoạn phụ đang mở). */
   skuScoped?: boolean;
+  /** Câu 4 (24/11/2026): đợt của SKU đã huỷ - KCS vẫn chấm nốt, không xám dù PI không còn SKU đang chạy. */
+  orderCancelled?: boolean;
   waitingSince: Date;
 };
 
@@ -159,19 +157,19 @@ export async function listKcsPendingItems(
     db.cutBundle.findMany({
       where: {
         status: { in: [CutBundleStatus.CUTTING, CutBundleStatus.AWAITING_QC] },
-        // Huỷ lệnh theo SKU (23/11/2026): đợt của SKU đã huỷ KCS không chấm được - không đếm / nhắc.
-        ...orderNotCancelledNullable(),
       },
       select: {
         status: true,
         createdAt: true,
+        productionOrder: { select: { status: true } },
         steelIssue: { select: { productionInvoiceId: true } },
         floorReports: FIRST_LIVE_REPORT,
       },
     }),
     db.stepBatch.findMany({
-      where: { stepBundleId: null, ...orderNotCancelledNullable() },
+      where: { stepBundleId: null },
       select: {
+        productionOrder: { select: { status: true } },
         productionInvoiceId: true,
         materialId: true,
         step: true,
@@ -182,8 +180,9 @@ export async function listKcsPendingItems(
       },
     }),
     db.stepBundle.findMany({
-      where: { status: 'AWAITING_QC', ...orderNotCancelledNullable() },
+      where: { status: 'AWAITING_QC' },
       select: {
+        productionOrder: { select: { status: true } },
         productionInvoiceId: true,
         submittedAt: true,
         batches: { select: { createdAt: true, floorReports: FIRST_LIVE_REPORT } },
@@ -193,36 +192,44 @@ export async function listKcsPendingItems(
       where: {
         stage: { in: STAGE_ENUMS },
         status: { in: [ProductionBatchStatus.OPEN, ProductionBatchStatus.AWAITING_QC] },
-        ...orderNotCancelled(),
       },
       select: {
         stage: true,
         status: true,
         reportedAt: true,
         productionOrder: {
-          select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+          select: {
+            status: true,
+            productionInvoiceItem: { select: { productionInvoiceId: true } },
+          },
         },
         floorReports: FIRST_LIVE_REPORT,
       },
     }),
     db.pieceStepBatch.findMany({
-      where: { pieceStepBundleId: null, ...orderNotCancelled() },
+      where: { pieceStepBundleId: null },
       select: {
         productionOrderId: true,
         pieceId: true,
         step: true,
         reportedAt: true,
         productionOrder: {
-          select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+          select: {
+            status: true,
+            productionInvoiceItem: { select: { productionInvoiceId: true } },
+          },
         },
       },
     }),
     db.pieceStepBundle.findMany({
-      where: { status: 'AWAITING_QC', ...orderNotCancelled() },
+      where: { status: 'AWAITING_QC' },
       select: {
         submittedAt: true,
         productionOrder: {
-          select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+          select: {
+            status: true,
+            productionInvoiceItem: { select: { productionInvoiceId: true } },
+          },
         },
         batches: { select: { reportedAt: true } },
       },
@@ -248,6 +255,7 @@ export async function listKcsPendingItems(
       kind: 'CUT',
       state: b.status === CutBundleStatus.CUTTING ? 'OPEN' : 'AWAITING_QC',
       productionInvoiceId: b.steelIssue?.productionInvoiceId ?? null,
+      orderCancelled: b.productionOrder?.status === 'CANCELLED',
       waitingSince: waitingFrom(b.floorReports, [b.createdAt]),
     });
   }
@@ -262,6 +270,7 @@ export async function listKcsPendingItems(
       kind: 'STEP',
       state: 'AWAITING_QC',
       productionInvoiceId: sb.productionInvoiceId,
+      orderCancelled: sb.productionOrder?.status === 'CANCELLED',
       waitingSince: waitingFrom(reports, [...sb.batches.map((x) => x.createdAt), sb.submittedAt]),
     });
   }
@@ -275,6 +284,7 @@ export async function listKcsPendingItems(
       kind: 'PIECE_BATCH',
       state: p.status === ProductionBatchStatus.OPEN ? 'OPEN' : 'AWAITING_QC',
       productionInvoiceId: p.productionOrder?.productionInvoiceItem?.productionInvoiceId ?? null,
+      orderCancelled: p.productionOrder?.status === 'CANCELLED',
       waitingSince: waitingFrom(p.floorReports, [p.reportedAt]),
     });
   }
@@ -292,6 +302,7 @@ export async function listKcsPendingItems(
         kind: 'PIECE_STEP',
         state: 'OPEN',
         productionInvoiceId: r.productionOrder?.productionInvoiceItem?.productionInvoiceId ?? null,
+        orderCancelled: r.productionOrder?.status === 'CANCELLED',
         waitingSince: r.reportedAt,
       });
     }
@@ -303,6 +314,7 @@ export async function listKcsPendingItems(
       kind: 'PIECE_STEP',
       state: 'AWAITING_QC',
       productionInvoiceId: b.productionOrder?.productionInvoiceItem?.productionInvoiceId ?? null,
+      orderCancelled: b.productionOrder?.status === 'CANCELLED',
       waitingSince: earliest([...b.batches.map((x) => x.reportedAt), b.submittedAt]),
     });
   }
@@ -390,6 +402,7 @@ export async function listKcsPendingItems(
         productionInvoiceId: r.productionInvoiceId,
         productionOrderId: effectiveOrder,
         skuScoped: true,
+        orderCancelled: r.productionOrder?.status === 'CANCELLED',
         waitingSince: at,
       });
     }
@@ -399,7 +412,9 @@ export async function listKcsPendingItems(
   const out: KcsPendingItem[] = [];
   for (const r of raw) {
     const piActive =
-      r.productionInvoiceId == null || activePiSet.has(r.productionInvoiceId.toString());
+      r.productionInvoiceId == null ||
+      activePiSet.has(r.productionInvoiceId.toString()) ||
+      r.orderCancelled === true;
     const multiSku =
       r.skuScoped === true &&
       r.productionInvoiceId != null &&

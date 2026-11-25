@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import {
+  CancelledGoodsKind,
   AuditAction,
   CuttingProposalStatus,
   Prisma,
@@ -858,6 +859,12 @@ export class ProductionInvoicesService {
           `Không tìm thấy SKU: ${ids.filter((id) => !found.has(id)).join(', ')}`,
         );
       }
+      const cancelled = items.filter((i) => i.cancelledAt != null).map((i) => i.id.toString());
+      if (cancelled.length > 0) {
+        throw new ConflictException(
+          `SKU đã huỷ (dòng đơn bị Sales huỷ hoặc dòng của lệnh đã huỷ), không lên lệnh được: ${cancelled.join(', ')}`,
+        );
+      }
       // LUẬT GỘP (2026-10-24, Sếp: "chỉ được gom các lệnh cách nhau khoảng 3 ngày đổ lại";
       // 13/11/2026: khung 5 ngày) - kiểm lại dù cutting-batch-solve đã
       // chặn: hạn SKU có thể bị sửa giữa lúc tính và lúc gộp. Xem merge-rules.util.
@@ -1006,6 +1013,9 @@ export class ProductionInvoicesService {
       throw new ConflictException(
         `SKU ${itemId} đã được gom vào phiếu sản xuất rồi - không tạo mới đè lên`,
       );
+    }
+    if (item.cancelledAt != null) {
+      throw new ConflictException(`SKU ${itemId} đã huỷ - không lên lệnh được`);
     }
 
     const createdId = await this.prisma.$transaction(async (tx) => {
@@ -3192,7 +3202,7 @@ export class ProductionInvoicesService {
     const item = await this.findItemOrThrow(pi.id, itemId);
     const productionOrder = await this.findProductionOrderOrThrow(item.id, itemId);
 
-    const [bomPieces, results, receiptSums, transferSums] = await Promise.all([
+    const [bomPieces, results, receiptSums, transferSums, wovenInSums] = await Promise.all([
       this.prisma.bomPiece.findMany({
         where: { bomRevisionId: productionOrder.bomRevisionId },
         include: { piece: true },
@@ -3217,11 +3227,22 @@ export class ProductionInvoicesService {
         },
         _sum: { quantity: true },
       }),
+      // Huỷ lệnh đợt 2 - Q6: khung đã đan chuyển từ SKU đã huỷ sang SKU này coi như đã nhận đan.
+      this.prisma.cancelledGoodsTransfer.groupBy({
+        by: ['pieceId'],
+        where: { targetItemId: item.id, kind: CancelledGoodsKind.WOVEN },
+        _sum: { qty: true },
+      }),
     ]);
 
     const receivedByPiece = new Map<string, number>(
       receiptSums.map((r) => [r.pieceId.toString(), r._sum.qty ?? 0]),
     );
+    for (const w of wovenInSums) {
+      if (w.pieceId == null) continue;
+      const k = w.pieceId.toString();
+      receivedByPiece.set(k, (receivedByPiece.get(k) ?? 0) + (w._sum.qty ?? 0));
+    }
     const transferredByPiece = new Map<string, number>(
       transferSums.map((r) => [r.pieceId.toString(), r._sum.quantity ?? 0]),
     );
@@ -3263,7 +3284,7 @@ export class ProductionInvoicesService {
     const revisionIds = [...new Set(orders.map((o) => o.bomRevisionId))];
     const orderIds = orders.map((o) => o.id);
 
-    const [bomPieces, results, receiptSums, transferSums] = await Promise.all([
+    const [bomPieces, results, receiptSums, transferSums, wovenInSums] = await Promise.all([
       this.prisma.bomPiece.findMany({
         where: { bomRevisionId: { in: revisionIds } },
         include: { piece: true },
@@ -3287,6 +3308,12 @@ export class ProductionInvoicesService {
         },
         _sum: { quantity: true },
       }),
+      // Huỷ lệnh đợt 2 - Q6: khung đã đan chuyển từ SKU đã huỷ sang.
+      this.prisma.cancelledGoodsTransfer.groupBy({
+        by: ['pieceId', 'targetItemId'],
+        where: { targetItemId: { in: itemBigIds }, kind: CancelledGoodsKind.WOVEN },
+        _sum: { qty: true },
+      }),
     ]);
 
     const bomPiecesByRevision = new Map<string, typeof bomPieces>();
@@ -3299,6 +3326,12 @@ export class ProductionInvoicesService {
     const receivedByOrderPiece = new Map<string, number>();
     for (const r of receiptSums) {
       receivedByOrderPiece.set(`${r.productionOrderId}:${r.pieceId}`, r._sum.qty ?? 0);
+    }
+    for (const w of wovenInSums) {
+      const order = orderByItemId.get(w.targetItemId.toString());
+      if (!order || w.pieceId == null) continue;
+      const k = `${order.id}:${w.pieceId}`;
+      receivedByOrderPiece.set(k, (receivedByOrderPiece.get(k) ?? 0) + (w._sum.qty ?? 0));
     }
     const transferredByOrderPiece = new Map<string, number>();
     for (const r of transferSums) {
@@ -3370,12 +3403,21 @@ export class ProductionInvoicesService {
       await lockBusinessKey(tx, `transfer-check:${item.id}:${pieceBigId}`);
       const [received, checked] = await Promise.all([
         bomPiece.isWoven
-          ? tx.weavingReceipt
-              .aggregate({
+          ? Promise.all([
+              tx.weavingReceipt.aggregate({
                 where: { productionOrderId: productionOrder.id, pieceId: pieceBigId },
                 _sum: { qty: true },
-              })
-              .then((r) => r._sum.qty ?? 0)
+              }),
+              // Huỷ lệnh đợt 2 - Q6: khung đã đan chuyển từ SKU đã huỷ sang.
+              tx.cancelledGoodsTransfer.aggregate({
+                where: {
+                  targetItemId: item.id,
+                  pieceId: pieceBigId,
+                  kind: CancelledGoodsKind.WOVEN,
+                },
+                _sum: { qty: true },
+              }),
+            ]).then(([r, t]) => (r._sum.qty ?? 0) + (t._sum.qty ?? 0))
           : tx.warehouseTransferPieceItem
               .aggregate({
                 where: {

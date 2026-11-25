@@ -323,4 +323,20 @@ describe('CS2 - câu 2b: dùng cây lẻ kể cả khi vượt ngưỡng (KHSX x
     expect(r.total_bars).toBe(1);
     expect(r.over_waste).toBe(false);
   });
+
+  it('anh Nhân câu 11a (24/11/2026): có cây lẻ + bật cây mua cuối -> cây mua cuối cắt hết khúc thừa, không bị trần 10 đoạn dư', () => {
+    const o = { maxWasteRatio: 0.01, timeLimit: 10, maxSurplus: 10, lengthCaps: { 4500: 1 } };
+    const off = optimizeMaterial(highs, [60], [120], [4500, 6000], 10, 1, o);
+    const on = optimizeMaterial(highs, [60], [120], [4500, 6000], 10, 1, {
+      ...o,
+      lastBarFill: true,
+    });
+    expect(off.feasible && on.feasible).toBe(true);
+    if (!off.feasible || !on.feasible) return;
+    // cây lẻ 4500: 73 đoạn; còn 47 đoạn cắt trên 1 cây 6000 (98 đoạn/cây)
+    expect(on.bars_by_length).toEqual({ '4500': 1, '6000': 1 });
+    expect(off.produced[0]).toBeLessThanOrEqual(130);
+    expect(on.produced[0]).toBe(73 + 98);
+    expect(on.waste_pct).toBeLessThan(off.waste_pct);
+  });
 });

@@ -436,6 +436,7 @@ describe('FloorReviewService - KCS chốt để chấm (5 route close)', () => {
     expect(steelIssues.finishCutBundle).toHaveBeenCalledWith('52', {
       notifyKcs: false,
       gateLabel: GATE,
+      allowCancelled: true,
     });
     expect(prisma.user.findUnique).not.toHaveBeenCalled();
   });
@@ -468,7 +469,7 @@ describe('FloorReviewService - KCS chốt để chấm (5 route close)', () => {
       'kcs-1',
       'HAN',
       null,
-      { notifyKcs: false, gateLabel: GATE },
+      { notifyKcs: false, gateLabel: GATE, allowCancelled: true },
     );
   });
 
@@ -504,7 +505,7 @@ describe('FloorReviewService - KCS chốt để chấm (5 route close)', () => {
       'kcs-1',
       '41',
       { id: 'w-1' },
-      { gateLabel: GATE },
+      { gateLabel: GATE, allowCancelled: true },
     );
     await service.closeStepGroup(stepDto({ workerId: null }), 'kcs-1');
     expect((steelIssues.submitStepBundle.mock.calls as unknown[][])[1][5]).toEqual({ id: null });
@@ -547,7 +548,7 @@ describe('FloorReviewService - KCS chốt để chấm (5 route close)', () => {
       { pieceId: '9', step: 'DUC_LO' },
       'kcs-1',
       'PHOI',
-      { gateLabel: GATE },
+      { gateLabel: GATE, allowCancelled: true },
     );
   });
 

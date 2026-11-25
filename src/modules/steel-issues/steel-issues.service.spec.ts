@@ -117,6 +117,8 @@ describe('SteelIssuesService', () => {
     };
     systemConfig: { findUnique: jest.Mock };
     stockReservation: { update: jest.Mock; findMany: jest.Mock };
+    steelReturn: { findMany: jest.Mock };
+    cuttingPlanCoverage: { findMany: jest.Mock };
     stockQuant: { findMany: jest.Mock };
     warehouse: { findUniqueOrThrow: jest.Mock };
     productionInvoiceItem: { findFirst: jest.Mock };
@@ -333,6 +335,8 @@ describe('SteelIssuesService', () => {
         }),
       },
       stockReservation: { update: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
+      steelReturn: { findMany: jest.fn().mockResolvedValue([]) },
+      cuttingPlanCoverage: { findMany: jest.fn().mockResolvedValue([]) },
       stockQuant: { findMany: jest.fn().mockResolvedValue([]) },
       warehouse: { findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 950n }) },
       // Xưởng của lệnh lúc tra kho (rà soát 14/11 CK6, PreparedSteelIssue.workshopId) - mặc định chưa chọn xưởng.
@@ -4126,6 +4130,7 @@ describe('SteelIssuesService.assertStepsWithinCutAfterReduceInTx (X3 16/11)', ()
   const make = () => {
     const tx = {
       $executeRaw: jest.fn(),
+      cuttingPlanCoverage: { findMany: jest.fn().mockResolvedValue([]) },
       cutBundle: {
         findUnique: jest.fn().mockResolvedValue({
           productionOrderId: 41n,

@@ -633,12 +633,12 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       });
     });
 
-    it('fix-options: đơn kia ngoài cửa sổ (8 > 7 ngày) -> không gợi ý gộp, nói rõ vì sao', async () => {
+    // 24/11/2026 (anh Nhân): bỏ chặn khung N ngày - đơn mốc xa vẫn được gợi ý gộp (chỉ xếp sau đơn mốc gần), kèm độ chênh.
+    it('fix-options: đơn kia mốc cách 8 ngày (khung cài 7) VẪN được gợi ý gộp, kèm độ chênh', async () => {
       build(withWindow(7), fixSolver());
       const res = await service.getBatchFixOptions({ productionInvoiceItemIds: ['1'] });
-      expect(res.materials[0].addSuggestion).toBeNull();
-      expect(res.materials[0].addReason).toContain('trong khung 7 ngày');
-      expect(res.addAllItemIds).toBeNull();
+      expect(res.materials[0].addSuggestion?.itemIds).toEqual(['2']);
+      expect(res.materials[0].addSuggestion?.spanDaysAfter).toBe(8);
     });
 
     it('fix-options: đợt đã đủ trần SKU -> không gộp thêm', async () => {
@@ -700,11 +700,11 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       }
     });
 
-    it('fix-options: đợt đang chọn vi phạm luật gộp -> ruleOk=false kèm câu báo', async () => {
+    it('fix-options: đợt đang chọn mốc cách 8 ngày (khung cài 7) không còn vi phạm luật gộp', async () => {
       build(withWindow(7), fixSolver());
       const res = await service.getBatchFixOptions({ productionInvoiceItemIds: ['1', '2'] });
-      expect(res.ruleOk).toBe(false);
-      expect(res.ruleReason).toContain('cách nhau 8 ngày');
+      expect(res.ruleOk).toBe(true);
+      expect(res.ruleReason).toBeNull();
     });
 
     it('SKU chưa có định mức ACTIVE vẫn hiện ra, có cờ hasActiveBom=false', async () => {

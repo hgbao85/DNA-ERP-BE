@@ -88,7 +88,20 @@ export interface TwoStageInput {
    * sau khi xếp cây lẻ - chỉ khi có cắt cây lẻ. `usableS` = phần dùng được của chiều dài mua (đã scale); `maxSizes` = số cỡ tối đa
    * trên 1 cây (null = không giới hạn). Cần cutCostS. Có bó: là 1 cây cắt tay. Nghiệm trả ở TwoStageResult.tail.
    */
-  tailBar?: { usableS: number; maxSizes: number | null };
+  tailBar?: {
+    usableS: number;
+    maxSizes: number | null;
+    /**
+     * Anh Nhân câu 9b (24/11/2026): cây mua cuối có ở MỌI lệnh, không chỉ khi có cắt cây lẻ - bỏ hàng gate "z ≤ Σ cây lẻ đã dùng".
+     * Không có cây lẻ thì giải tầng 0b (ít cây mua nhất) rồi 2 tầng thường, bỏ tầng 0a (không có gì để dồn lên cây lẻ).
+     */
+    ungated?: boolean;
+    /**
+     * Anh Nhân câu 11a: riêng cây mua cuối KHÔNG giới hạn maxSurplus đoạn dư mỗi cỡ - cắt hết khúc thừa (câu 10a: tầng 1 min cùi
+     * tự chọn cỡ cho cùi nhỏ nhất). Các kiểu cắt khác vẫn giữ demand + maxSurplus (thêm hàng riêng chỉ gồm cột kiểu cắt).
+     */
+    unlimitedSurplus?: boolean;
+  };
 }
 
 export interface BundleOptions {
@@ -261,7 +274,9 @@ function build(highs: Highs, inp: TwoStageInput): Built {
   const capGroupOf = new Map<number, number>();
   caps.forEach((cg, g) => cg.patterns.forEach((p) => capGroupOf.set(p, g)));
   // CS2: có cây lẻ thì thêm 1 hàng "Σ cây mua" sau các hàng cây lẻ (tầng 0 tối thiểu hàng này, rồi chốt cận trên).
-  const purchaseRow = caps.length > 0 ? capRow0 + caps.length : -1;
+  // Cây mua cuối ở mọi lệnh (câu 9b, tailBar.ungated): không có cây lẻ vẫn cần hàng "Σ cây mua" (tầng 0b) + "Σ chiều dài cây mua".
+  const ungatedTail = !!inp.tailBar?.ungated && !!inp.cutCostS;
+  const purchaseRow = caps.length > 0 || ungatedTail ? capRow0 + caps.length : -1;
   const purchaseLenRow = purchaseRow >= 0 && inp.cutCostS ? purchaseRow + 1 : -1;
   const leftoverLenRow = purchaseLenRow >= 0 ? purchaseLenRow + 1 : -1;
   // CS2 cây mua cuối: 1 cây mua (chiều dài mua) cắt TỰ DO các cỡ, không cần nằm trong ngưỡng hao hụt - phần còn thiếu sau khi
@@ -275,13 +290,18 @@ function build(highs: Highs, inp: TwoStageInput): Built {
   const gateRow = tail ? knapRow + 1 : -1;
   const sizeRow0 = tailMaxSizes !== null ? gateRow + 1 : -1;
   const sizeCountRow = tailMaxSizes !== null ? sizeRow0 + n : -1;
-  const numRows =
+  // Câu 11a: cây mua cuối không giới hạn đoạn dư -> hàng nhu cầu k nới cận trên thêm phần cây mua cuối, và thêm n hàng (cuối cùng)
+  // "Σ đoạn cỡ k trên các KIỂU CẮT ≤ demand + maxSurplus" để kiểu cắt thường vẫn giữ giới hạn cũ.
+  const tailFree = !!tail?.unlimitedSurplus;
+  const rowsBeforeReg =
     capRow0 +
     caps.length +
     (purchaseRow >= 0 ? 1 : 0) +
     (purchaseLenRow >= 0 ? 2 : 0) +
     (tail ? 2 : 0) +
     (tailMaxSizes !== null ? n + 1 : 0);
+  const regRow0 = tailFree ? rowsBeforeReg : -1;
+  const numRows = rowsBeforeReg + (tailFree ? n : 0);
   const factors = bundle ?? [1];
   const tailCol0 = tail ? P * factors.length : -1;
   const numCols = P * factors.length + (tail ? n + 1 + (tailMaxSizes !== null ? n : 0) : 0);
@@ -352,6 +372,14 @@ function build(highs: Highs, inp: TwoStageInput): Built {
           purchaseLenCoef[col] = len * f;
         }
       }
+      if (regRow0 >= 0) {
+        for (let k = 0; k < n; k++) {
+          if (c[k] > 0) {
+            indices.push(regRow0 + k);
+            values.push(c[k] * f);
+          }
+        }
+      }
       starts.push(indices.length);
       // Có bó: cận trên số bó = ceil(cap / f) như app cũ (safe_div_ceil) - bó cuối có thể vượt cap
       // về số cây, nhưng ràng buộc hàng (≤ demand + maxSurplus) vẫn chặn đúng.
@@ -368,7 +396,10 @@ function build(highs: Highs, inp: TwoStageInput): Built {
     const tailUb = (k: number) =>
       Math.max(
         0,
-        Math.min(demands[k] + maxSurplus, Math.floor(tail.usableS / Math.max(1, cost[k]))),
+        Math.min(
+          tailFree ? Infinity : demands[k] + maxSurplus,
+          Math.floor(tail.usableS / Math.max(1, cost[k])),
+        ),
       );
     for (let k = 0; k < n; k++) {
       indices.push(k, purchaseLenRow, knapRow);
@@ -418,6 +449,12 @@ function build(highs: Highs, inp: TwoStageInput): Built {
   for (let k = 0; k < n; k++) {
     rowLower[k] = inp.allowShortage ? Math.max(0, demands[k] - maxSurplus) : demands[k];
     rowUpper[k] = demands[k] + maxSurplus;
+    if (regRow0 >= 0) {
+      const tailCap = Math.floor(tail!.usableS / Math.max(1, inp.cutCostS![k]));
+      rowUpper[k] += tailCap;
+      rowLower[regRow0 + k] = 0;
+      rowUpper[regRow0 + k] = demands[k] + maxSurplus;
+    }
   }
   if (useLb) {
     rowLower[sumRow] = minTotalBars;
@@ -445,7 +482,8 @@ function build(highs: Highs, inp: TwoStageInput): Built {
     rowLower[knapRow] = -highs.infinity;
     rowUpper[knapRow] = 0;
     rowLower[gateRow] = -highs.infinity;
-    rowUpper[gateRow] = 0;
+    // Câu 9b: cây mua cuối không cần có cắt cây lẻ - hàng gate thành vô hiệu.
+    rowUpper[gateRow] = tail.ungated ? highs.infinity : 0;
   }
   if (tailMaxSizes !== null) {
     for (let k = 0; k < n; k++) {
@@ -1767,7 +1805,8 @@ function solveWithLengthCaps(highs: Highs, b: Built, inp: TwoStageInput): TwoSta
   const rowLower = b.rowLower.slice();
   // Hệ số đã scale có thể lẻ: nới chút tương đối để chính nghiệm vừa tìm không bị loại vì sai số dấu phẩy động.
   const tol = (v: number) => Math.max(1e-6, Math.abs(v) * 1e-9);
-  if (b.purchaseLenRow >= 0) {
+  // Tầng 0a chỉ khi có cây lẻ (cây mua cuối ở lệnh không cây lẻ - câu 9b - đi thẳng 0b).
+  if (b.purchaseLenRow >= 0 && b.capRows.length > 0) {
     const s0a = runModel(highs, b, {
       colCost: b.purchaseLenCoef,
       timeLimitSec: Math.max(1, inp.timeLimitSec * 0.15),
@@ -1863,6 +1902,9 @@ function solveBundledWithLengthCaps(highs: Highs, inp: TwoStageInput): TwoStageR
 }
 
 export function solveTwoStage(highs: Highs, inp: TwoStageInput): TwoStageResult {
+  // Câu 9b: cây mua cuối ở lệnh không cây lẻ - cùng đường tầng 0 (ít cây mua nhất, rồi min cùi / min đoạn dư).
+  if (inp.tailBar?.ungated && inp.cutCostS && !(inp.lengthCaps && inp.lengthCaps.length > 0))
+    return solveWithLengthCaps(highs, build(highs, inp), inp);
   if (inp.lengthCaps && inp.lengthCaps.length > 0) {
     if (
       inp.bundle &&

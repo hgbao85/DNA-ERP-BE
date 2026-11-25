@@ -210,11 +210,19 @@ export class DailyOutputService {
             productionInvoiceItemId: { in: ids.map((i) => BigInt(i)) },
             packedAt: { lt: endOfDay },
           },
-          select: { productionInvoiceItemId: true, packedAt: true, boxesPacked: true },
+          // Huỷ lệnh đợt 2 - Q5: bỏ dòng chuyển hàng đã đóng gói từ SKU đã huỷ (không phải tổ đóng gói làm trong ngày).
+          select: {
+            productionInvoiceItemId: true,
+            packedAt: true,
+            boxesPacked: true,
+            transferId: true,
+          },
         });
         const done: UnitsByDay = new Map();
-        for (const rc of records)
+        for (const rc of records) {
+          if (rc.transferId != null) continue;
           bump(done, String(rc.productionInvoiceItemId), vnDayKey(rc.packedAt), rc.boxesPacked);
+        }
         for (const r of goi) {
           // boxesPacked ĐÃ là BỘ (V4-11): cont = bộ ÷ loadCont = bộ × (cont của dòng ÷ số lượng bộ). Không chia số thùng/bộ.
           const loadCont = loadContOf.get(r.itemId) ?? 0;

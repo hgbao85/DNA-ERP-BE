@@ -54,7 +54,7 @@ describe('SalesOrdersService', () => {
     packagingIssue: { groupBy: jest.Mock };
     $queryRaw: jest.Mock;
     $executeRaw: jest.Mock;
-    cuttingProposalItem: { findMany: jest.Mock; deleteMany: jest.Mock };
+    cuttingProposalItem: { findMany: jest.Mock; findFirst: jest.Mock; deleteMany: jest.Mock };
     auditLog: { create: jest.Mock };
     $transaction: jest.Mock;
   };
@@ -157,6 +157,7 @@ describe('SalesOrdersService', () => {
       $executeRaw: jest.fn().mockResolvedValue(1),
       cuttingProposalItem: {
         findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       auditLog: { create: jest.fn() },
@@ -1326,6 +1327,100 @@ describe('SalesOrdersService', () => {
       await service.updateItem('10', '5', {});
 
       expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    });
+  });
+  // Huỷ lệnh câu 2 (anh Nhân 24/11/2026): Sales huỷ 1 dòng đơn khi khách huỷ hẳn.
+  describe('cancelItem', () => {
+    const line = (overrides: Record<string, unknown> = {}) => ({
+      id: 5n,
+      salesOrderId: 10n,
+      mfgProductId: 2n,
+      totalQty: 10,
+      shippedQty: 0,
+      cancelledAt: null,
+      cancelReason: null,
+      mfgProduct: product,
+      wireMaterial: null,
+      cushionMaterial: null,
+      ...overrides,
+    });
+    beforeEach(() => {
+      (service['cls'].get as jest.Mock).mockReturnValue('u-sales');
+      prisma.salesOrder.findUnique.mockResolvedValue(orderWithItems());
+      prisma.salesOrderItem.findMany.mockResolvedValue([]);
+    });
+
+    it('huỷ dòng chưa lên lệnh: gắn cancelledAt cho dòng SKU chưa gom + ghi lý do', async () => {
+      prisma.salesOrderItem.findUnique.mockResolvedValue(line());
+      prisma.productionInvoiceItem.findMany.mockResolvedValueOnce([
+        { id: 70n, productionInvoiceId: null, cancelledAt: null },
+      ]);
+      prisma.salesOrderItem.update.mockImplementation(
+        ({ data }: { data: Record<string, unknown> }) => Promise.resolve(line(data)),
+      );
+      const res = await service.cancelItem('10', '5', { reason: ' Khách huỷ ' });
+      expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: [70n] }, productionInvoiceId: null },
+        data: { cancelledAt: expect.any(Date) as Date },
+      });
+      expect(prisma.salesOrderItem.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            cancelledById: 'u-sales',
+            cancelReason: 'Khách huỷ',
+          }) as object,
+        }),
+      );
+      expect(res.cancelReason).toBe('Khách huỷ');
+    });
+
+    it('chặn khi dòng còn lệnh sản xuất sống (KHSX phải đề nghị huỷ lệnh trước)', async () => {
+      prisma.salesOrderItem.findUnique.mockResolvedValue(line());
+      prisma.productionInvoiceItem.findMany.mockResolvedValueOnce([
+        { id: 70n, productionInvoiceId: 3n, cancelledAt: null },
+      ]);
+      await expect(service.cancelItem('10', '5', { reason: 'x' })).rejects.toThrow(
+        /đề nghị huỷ lệnh/,
+      );
+      expect(prisma.salesOrderItem.update).not.toHaveBeenCalled();
+    });
+
+    it('cho huỷ khi lệnh cũ đã huỷ (dòng SKU cũ cancelledAt) - không đụng dòng đã huỷ', async () => {
+      prisma.salesOrderItem.findUnique.mockResolvedValue(line());
+      prisma.productionInvoiceItem.findMany.mockResolvedValueOnce([
+        { id: 70n, productionInvoiceId: 3n, cancelledAt: new Date() },
+        { id: 71n, productionInvoiceId: null, cancelledAt: null },
+      ]);
+      prisma.salesOrderItem.update.mockResolvedValue(line({ cancelledAt: new Date() }));
+      await service.cancelItem('10', '5', { reason: 'x' });
+      expect(prisma.productionInvoiceItem.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: { in: [71n] }, productionInvoiceId: null } }),
+      );
+    });
+
+    it('chặn khi đã xuất, đã huỷ, hoặc đang trong booking', async () => {
+      prisma.salesOrderItem.findUnique.mockResolvedValueOnce(line({ shippedQty: 2 }));
+      await expect(service.cancelItem('10', '5', { reason: 'x' })).rejects.toThrow(/đã xuất 2 bộ/);
+      prisma.salesOrderItem.findUnique.mockResolvedValueOnce(line({ cancelledAt: new Date() }));
+      await expect(service.cancelItem('10', '5', { reason: 'x' })).rejects.toThrow(/đã huỷ rồi/);
+      prisma.salesOrderItem.findUnique.mockResolvedValueOnce(line());
+      prisma.bookingLine.findFirst.mockResolvedValueOnce({ booking: { bookingNo: 'BK1' } });
+      await expect(service.cancelItem('10', '5', { reason: 'x' })).rejects.toThrow(/booking BK1/);
+      expect(prisma.salesOrderItem.update).not.toHaveBeenCalled();
+    });
+
+    it('chặn khi đang được tính phương án cắt', async () => {
+      prisma.salesOrderItem.findUnique.mockResolvedValue(line());
+      prisma.productionInvoiceItem.findMany.mockResolvedValueOnce([
+        { id: 70n, productionInvoiceId: null, cancelledAt: null },
+      ]);
+      prisma.cuttingProposalItem.findFirst.mockResolvedValueOnce({ id: 1n });
+      await expect(service.cancelItem('10', '5', { reason: 'x' })).rejects.toThrow(/phương án cắt/);
+    });
+
+    it('updateItem chặn sửa dòng đã huỷ', async () => {
+      prisma.salesOrderItem.findUnique.mockResolvedValue(line({ cancelledAt: new Date() }));
+      await expect(service.updateItem('10', '5', { totalQty: 3 })).rejects.toThrow(/đã huỷ/);
     });
   });
 });

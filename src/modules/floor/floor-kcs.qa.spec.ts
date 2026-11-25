@@ -920,6 +920,7 @@ describe('UB8 AC2 - route close gọi đúng hàm chốt (controller -> FloorRev
     expect(steelIssues.finishCutBundle).toHaveBeenCalledWith('53', {
       notifyKcs: false,
       gateLabel: 'chốt để chấm',
+      allowCancelled: true,
     });
   });
 });

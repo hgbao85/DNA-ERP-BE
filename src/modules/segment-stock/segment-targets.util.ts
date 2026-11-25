@@ -22,6 +22,11 @@ export interface SegmentTargetsInput {
   stepPassedQty: Partial<Record<SegmentSubStep, number>>;
   /** Số cần theo bộ công đoạn (gộp mọi SKU / mảnh của lệnh); '' = trơn. */
   variants: { segmentSteps: string; needQty: number }[];
+  /**
+   * Đoạn DƯ theo phương án cắt sẽ làm đủ bộ công đoạn này (anh Nhân câu 12b, 24/11/2026) - đã cắt mà chưa qua công đoạn thì là đoạn
+   * ĐANG CHỜ công đoạn (wip), không phải dư trơn (nếu không lệnh khác lấy mất như đoạn trơn trước khi kịp uốn / dập).
+   */
+  plannedSurplus?: Partial<Record<string, number>>;
 }
 
 export interface SegmentTargetVariant {
@@ -98,7 +103,13 @@ export function computeSegmentTargets(input: SegmentTargetsInput): SegmentTarget
   const partial = Math.min(Math.max(0, ...SEGMENT_SUB_STEPS.map((t) => remP[t])), remCut);
   const noStep = remCut - partial;
   const wip = stepVariants.reduce(
-    (sum, v) => sum + Math.max(0, v.need - (held.get(v.segmentSteps) ?? 0)),
+    (sum, v) =>
+      sum +
+      Math.max(0, v.need - (held.get(v.segmentSteps) ?? 0)) +
+      Math.max(
+        0,
+        nonNeg(input.plannedSurplus?.[v.segmentSteps] ?? 0) - (surplus.get(v.segmentSteps) ?? 0),
+      ),
     0,
   );
   const tronComplete = Math.max(0, noStep - Math.max(0, wip - partial));

@@ -53,14 +53,6 @@ export function ownSteelDeadlineOf(
   );
 }
 
-// 'en-GB' cho ra đúng "12/11" (Node in 'vi-VN' thành "12-11"); giờ Việt Nam để mốc 0h không lùi sang hôm trước.
-const DAY_MONTH = new Intl.DateTimeFormat('en-GB', {
-  day: '2-digit',
-  month: '2-digit',
-  timeZone: 'Asia/Ho_Chi_Minh',
-});
-const fmtDayMonth = (d: Date) => DAY_MONTH.format(d);
-
 /**
  * `context` đổi chủ ngữ câu báo: 'batch' = đợt đang tính/gộp, 'invoice' = lệnh gộp đang sửa hạn. Số SKU chỉ kiểm khi 'batch' (sửa hạn
  * không đổi số SKU của lệnh).
@@ -82,19 +74,9 @@ export function checkMergeRules(
   if (dated.length >= 2) {
     const first = dated[0];
     const last = dated[dated.length - 1];
+    // 24/11/2026 (anh Nhân, file huỷ lệnh câu 3 "Thêm"): BỎ chặn "chênh tối đa N ngày" khi gộp - không chặn nữa, chỉ ưu tiên gộp
+    // các lệnh có mốc gần nhau (gợi ý gộp xếp theo độ chênh). spanDays vẫn trả để màn hiện độ chênh; luật số SKU tối đa giữ nguyên.
     spanDays = Math.round((last.at.getTime() - first.at.getTime()) / DAY_MS);
-    if (spanDays > maxGapDays(cfg.windowDays)) {
-      const who = context === 'batch' ? 'các SKU trong đợt' : 'các SKU trong lệnh gộp';
-      const fix =
-        context === 'batch'
-          ? 'Bỏ bớt SKU hoặc tách thành đợt khác.'
-          : 'Dời lại mốc hoặc tách SKU ra lệnh riêng.';
-      reasons.push(
-        `Mốc cần sắt của ${who} cách nhau ${spanDays} ngày (sớm nhất ${fmtDayMonth(first.at)} – ${first.label}, muộn nhất ` +
-          `${fmtDayMonth(last.at)} – ${last.label}) - chỉ được gộp trong khung ${cfg.windowDays} ngày (chênh tối đa ` +
-          `${maxGapDays(cfg.windowDays)} ngày, vd ngày 1 gộp được ngày ${cfg.windowDays}). ${fix}`,
-      );
-    }
   }
   return {
     ok: reasons.length === 0,
