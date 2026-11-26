@@ -2246,7 +2246,7 @@ const notificationTypeDefinitions = {
     entityType: 'PRODUCTION_ORDER',
     title: (p: PoCancelledNotificationParams) => `Lệnh ${p.lenhCode} (${p.factoryCode}) đã huỷ`,
     message: (p: PoCancelledNotificationParams) =>
-      `Sếp đã duyệt huỷ SKU ${p.factoryCode}. Lý do: ${p.reason}. Xưởng dừng làm SKU này; hàng đã làm ra giữ nguyên tại kho công đoạn.` +
+      `Sếp đã duyệt huỷ SKU ${p.factoryCode}. Lý do: ${p.reason}. Xưởng dừng làm SKU này; KCS chấm nốt đợt đã báo, đoạn đã cắt vào dư kho Phôi, sắt đã xuất chưa cắt QLSX quyết ở "Sắt SKU đã huỷ", hàng đã đóng gói / khung đã đan Kế hoạch SX chuyển sang đơn khác ở "Hàng SKU đã huỷ", mảnh hàn / sơn giữ tại kho công đoạn.` +
       (p.signedLineCount > 0
         ? ` Có ${p.signedLineCount} dòng mua đã ký NCC chưa về đủ: người mua liên hệ NCC - bớt được thì "Đóng phần thiếu", không bớt được thì nhận về tồn chung.`
         : ''),
