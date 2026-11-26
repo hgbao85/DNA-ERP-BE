@@ -361,12 +361,15 @@ function optimizeOneMaterialAtCap(
       : distToCenter(a.length) - distToCenter(b.length) || a.length - b.length,
   );
   const bestFixed = fixedEvals[0] ?? null;
+  // Review IT 26/11 mục 1.1: kết quả có cây mua cuối mà vượt ngưỡng không được chặn bước dò - vẫn dò, lấy cái tốt hơn.
+  const fixedBlocksScan =
+    !!bestFixed && !(opts.lastBarFill && bestFixed.waste_pct > threshold + 1e-9);
 
   // 2) Chọn
   let scanOpt: Eval | null = null;
   let chosen: Eval;
   let source: 'fixed' | 'scan';
-  if (bestFixed) {
+  if (bestFixed && (fixedBlocksScan || !autoScan || phase === 'fixed')) {
     chosen = bestFixed;
     source = 'fixed';
   } else if (!autoScan || phase === 'fixed') {
@@ -442,7 +445,11 @@ function optimizeOneMaterialAtCap(
         timeouts.push(L);
       }
     }
-    if (scanOpt) {
+    if (bestFixed && (!scanOpt || bestFixed.waste_pct <= scanOpt.waste_pct)) {
+      // Chỉ tới đây khi cố định đạt nhờ cây mua cuối mà vượt ngưỡng (fixedBlocksScan = false): dò không tốt hơn thì giữ cố định.
+      chosen = bestFixed;
+      source = 'fixed';
+    } else if (scanOpt) {
       chosen = scanOpt;
       source = 'scan';
     } else {
@@ -519,7 +526,72 @@ function optimizeOneMaterialAtCap(
   };
 }
 
+/**
+ * Câu 9-11 cây mua cuối, sửa theo review IT 26/11 mục 1.1-1.2: chạy TRỌN quy trình chọn chiều dài (cố định, dò, thang số cỡ) với
+ * cắt thường trước; chỉ khi không ra kết quả nào đạt ngưỡng mới chạy lại cả quy trình với cây mua cuối. Trước đây cây mua cuối đi
+ * theo từng lần giải 1 chiều dài nên kết quả "đạt nhờ cây mua cuối" ở 6000 / chiều dài dò đầu tiên chặn mất chiều dài cắt thường
+ * tốt hơn (mua nhiều sắt hơn, hoặc vượt ngưỡng phải xin đặc cách).
+ */
 export function optimizeOneMaterial(
+  highs: Highs,
+  sizes: number[],
+  demands: number[],
+  stockLengths: number[],
+  trim: number,
+  kerf: number,
+  maxWastePct: number,
+  opts: OneMaterialOptions = {},
+): OneMaterialResult {
+  if (!opts.lastBarFill) {
+    return optimizeOneMaterialPass(
+      highs,
+      sizes,
+      demands,
+      stockLengths,
+      trim,
+      kerf,
+      maxWastePct,
+      opts,
+    );
+  }
+  const plain = optimizeOneMaterialPass(
+    highs,
+    sizes,
+    demands,
+    stockLengths,
+    trim,
+    kerf,
+    maxWastePct,
+    {
+      ...opts,
+      lastBarFill: false,
+    },
+  );
+  if (plain.feasible && !plain.over_waste) return plain;
+  // Hết giờ chưa kết luận ở cắt thường: báo như cũ, không lấy cây mua cuối thay cho phương án chưa giải xong.
+  if (!plain.feasible && plain.timed_out) return plain;
+  // cheapFail: lượt này vô nghiệm thì trả kết quả cắt thường (lý do + gợi ý đã tính), khỏi chạy lại bestAchievable.
+  const filled = optimizeOneMaterialPass(
+    highs,
+    sizes,
+    demands,
+    stockLengths,
+    trim,
+    kerf,
+    maxWastePct,
+    {
+      ...opts,
+      cheapFail: true,
+    },
+  );
+  if (!filled.feasible) return plain;
+  if (!plain.feasible) return filled;
+  // Cả hai khả thi mà vượt ngưỡng: lấy cái hao hụt thấp hơn; cắt thường thắng khi hoà.
+  if (!filled.over_waste) return filled;
+  return filled.waste_pct < plain.waste_pct - 1e-9 ? filled : plain;
+}
+
+function optimizeOneMaterialPass(
   highs: Highs,
   sizes: number[],
   demands: number[],
@@ -580,7 +652,7 @@ export function optimizeOneMaterial(
       ...opts,
       hardMaxSizesPerBar: cap,
       phase,
-      cheapFail,
+      cheapFail: cheapFail || !!opts.cheapFail,
       seedTimeouts,
     });
   const tag = (r: OneMaterialResult, limit: number | null): OneMaterialResult =>
@@ -609,7 +681,9 @@ export function optimizeOneMaterial(
     lastRes = r;
     if (r.feasible) {
       if (!r.over_waste) return tag(r, limitOf(cap, r));
-      fixedFeasibleAt.add(cap); // cố định cắt được nhưng vượt ngưỡng: như cũ, không dò ở mức này
+      // Cố định cắt được nhưng vượt ngưỡng: như cũ, không dò ở mức này - trừ lượt cây mua cuối (review IT 26/11 mục 1.1: kết quả
+      // có cây mua cuối vượt ngưỡng không được chặn bước dò).
+      if (!opts.lastBarFill) fixedFeasibleAt.add(cap);
       consider(cap, r);
     } else if (r.timeout_lengths?.length) {
       fixedTimeouts.set(cap, r.timeout_lengths);

@@ -85,6 +85,55 @@ export function laserTailReason(minTailMm: number): string {
   );
 }
 
+/**
+ * Lấp thêm đoạn vào cây mua cuối (số thêm từng cỡ, ≤ ub[k]) cho cùi nhỏ nhất mà vẫn giữ luật laze (đoạn dài nhất trên cây + cùi >
+ * minTail). Chỉ dựa trên đoạn dài nhất đã có trên cây (đoạn thêm dài hơn chỉ làm luật dễ hơn). Đơn vị đã scale.
+ */
+export function fillTailReserve(
+  counts: number[],
+  costS: number[],
+  lenS: number[],
+  usableS: number,
+  minTailS: number,
+  ub: number[],
+): number[] {
+  const add = counts.map(() => 0);
+  let usedS = 0;
+  let longest = 0;
+  counts.forEach((c, k) => {
+    usedS += c * costS[k];
+    if (c > 0) longest = Math.max(longest, lenS[k]);
+  });
+  if (longest === 0) return add;
+  const cap = usableS - usedS - Math.max(0, minTailS - longest + 1);
+  if (cap <= 0 || cap > 200000) return add;
+  // Ba lô có giới hạn: reach[c] = cỡ cuối thêm vào để đạt đúng c (−1 = chưa đạt), dùng đếm theo từng cỡ.
+  const reach = new Int32Array(cap + 1).fill(-1);
+  const from = new Int32Array(cap + 1).fill(-1);
+  reach[0] = counts.length;
+  for (let k = 0; k < counts.length; k++) {
+    const w = costS[k];
+    const lim = ub[k];
+    if (w <= 0 || lim <= 0 || w > cap) continue;
+    const used = new Int32Array(cap + 1);
+    for (let c = w; c <= cap; c++) {
+      if (reach[c] !== -1 || reach[c - w] === -1) continue;
+      const u = reach[c - w] === k ? used[c - w] + 1 : 1;
+      if (u > lim) continue;
+      reach[c] = k;
+      from[c] = c - w;
+      used[c] = u;
+    }
+  }
+  let c = cap;
+  while (c > 0 && reach[c] === -1) c--;
+  while (c > 0) {
+    add[reach[c]]++;
+    c = from[c];
+  }
+  return add;
+}
+
 function rssMb(): number {
   return process.memoryUsage().rss / 1024 / 1024;
 }
@@ -462,6 +511,26 @@ export function optimizeMaterial(
     });
   }
   let tailManualBars = 0;
+  if (res.tail && tailLength !== null && tailReserveS > 0) {
+    // Review IT 26/11 mục 1.4: chừa cùi tailReserveS là cho trường hợp xấu nhất (đoạn dài nhất trên cây là cỡ ngắn nhất). Cây cuối
+    // đã có đoạn dài thì luật laze chỉ cần (đoạn dài nhất + cùi) > minTail - lấp thêm đoạn vào phần chừa thừa cho cùi nhỏ nhất.
+    const add = fillTailReserve(
+      res.tail.counts,
+      cutLengths.map((c) => scale(c) + kerfS),
+      cutLengths.map(scale),
+      scale(tailLength) - scale(trim),
+      scale(minTail),
+      res.tail.counts.map((c, k) => {
+        if (tailMaxSizes !== null && c === 0) return 0;
+        if (opts.lastBarFill) return Infinity;
+        let prod = c;
+        for (let p = 0; p < allPatterns.length; p++)
+          prod += allPatterns[p].counts[k] * barsPerPattern[p];
+        return Math.max(0, demands[k] + maxSurplus - prod);
+      }),
+    );
+    res.tail = { counts: res.tail.counts.map((c, k) => c + add[k]) };
+  }
   if (res.tail && tailLength !== null) {
     const S_s = scale(tailLength);
     let usedS = 0;

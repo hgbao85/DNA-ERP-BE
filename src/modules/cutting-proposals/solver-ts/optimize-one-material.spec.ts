@@ -727,3 +727,84 @@ describe('optimizeOneMaterial (HiGHS thật)', () => {
     },
   );
 });
+
+describe('cây mua cuối: cắt thường trước, cây mua cuối sau (review IT 26/11 mục 1.1-1.2)', () => {
+  const highs = {} as Highs;
+  const lastBar = (r: MaterialResultOk): MaterialResultOk => ({
+    ...r,
+    stats: { ...r.stats, last_bar_filled: true },
+  });
+  // Cắt thường: 6000 vô nghiệm, chỉ 4750 đạt. Cây mua cuối: mọi chiều dài "đạt" (6000 vượt ngưỡng, 5950 đạt).
+  const fake =
+    (calls: Array<{ L: number; fill: boolean }>): OptimizeMaterialFn =>
+    (_h, _s, _d, stock, _t, _k, o) => {
+      const L = stock[0];
+      const fill = !!o?.lastBarFill;
+      calls.push({ L, fill });
+      if (fill) return lastBar(ok(L, 2, L === 6000 ? 1.5 : 0.5));
+      return L === 4750 ? ok(L, 2, 0.9) : { feasible: false, reason: 'vô nghiệm' };
+    };
+  const base = {
+    autoScan: true,
+    stopOnFirst: true,
+    minLen: 4000,
+    maxLen: 7000,
+    step: 50,
+    lastBarFill: true,
+  };
+
+  it('cắt thường ra nghiệm đạt ngưỡng ở chiều dài dò thì lấy nó, không đụng cây mua cuối', () => {
+    const calls: Array<{ L: number; fill: boolean }> = [];
+    const r = optimizeOneMaterial(highs, [60], [150], [6000], 10, 1, 1.0, {
+      ...base,
+      optimizeMaterialImpl: fake(calls),
+    });
+    expect(r.feasible).toBe(true);
+    if (!r.feasible) return;
+    expect(r.best_length).toBe(4750);
+    expect(r.stats?.last_bar_filled).toBeUndefined();
+    expect(calls.every((c) => !c.fill)).toBe(true);
+  });
+
+  it('cắt thường vô nghiệm mọi chiều dài: lượt cây mua cuối, kết quả vượt ngưỡng ở 6000 KHÔNG chặn bước dò', () => {
+    const calls: Array<{ L: number; fill: boolean }> = [];
+    const noPlain: OptimizeMaterialFn = (h, s, d, st, t, k, o) =>
+      o?.lastBarFill ? fake(calls)(h, s, d, st, t, k, o) : { feasible: false, reason: 'vô nghiệm' };
+    const r = optimizeOneMaterial(highs, [60], [150], [6000], 10, 1, 1.0, {
+      ...base,
+      optimizeMaterialImpl: noPlain,
+    });
+    expect(r.feasible).toBe(true);
+    if (!r.feasible) return;
+    expect(r.best_length).toBe(5950);
+    expect(r.over_waste).toBe(false);
+    expect(r.stats?.last_bar_filled).toBe(true);
+  });
+
+  it('không dò: cắt thường vô nghiệm thì nhận cây mua cuối ở chiều dài cố định (kể cả vượt ngưỡng)', () => {
+    const calls: Array<{ L: number; fill: boolean }> = [];
+    const r = optimizeOneMaterial(highs, [60], [150], [6000], 10, 1, 1.0, {
+      ...base,
+      autoScan: false,
+      optimizeMaterialImpl: fake(calls),
+    });
+    expect(r.feasible).toBe(true);
+    if (!r.feasible) return;
+    expect(r.best_length).toBe(6000);
+    expect(r.over_waste).toBe(true);
+  });
+
+  it('cắt thường hết giờ (chưa kết luận) thì báo hết giờ, không thay bằng cây mua cuối', () => {
+    const r = optimizeOneMaterial(highs, [60], [150], [6000], 10, 1, 1.0, {
+      ...base,
+      autoScan: false,
+      optimizeMaterialImpl: (_h, _s, _d, stock, _t, _k, o) =>
+        o?.lastBarFill
+          ? lastBar(ok(stock[0], 2, 0.5))
+          : { feasible: false, timed_out: true, reason: 'hết giờ' },
+    });
+    expect(r.feasible).toBe(false);
+    if (r.feasible) return;
+    expect(r.timed_out).toBe(true);
+  });
+});
