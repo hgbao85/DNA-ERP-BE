@@ -69,6 +69,11 @@ import { QcReviewsModule } from './modules/qc-reviews/qc-reviews.module';
 import { WeavingIssuesModule } from './modules/weaving-issues/weaving-issues.module';
 import { MaterialIssuesModule } from './modules/material-issues/material-issues.module';
 import { IssueSlipsModule } from './modules/issue-slips/issue-slips.module';
+import { StageHandoverModule } from './modules/stage-handover/stage-handover.module';
+import { PalletsModule } from './modules/pallets/pallets.module';
+import { CkDgQrModule } from './modules/ck-dg-qr/ck-dg-qr.module';
+import { ViTriKhoModule } from './modules/vi-tri-kho/vi-tri-kho.module';
+import { WeavingCoordinationModule } from './modules/weaving-coordination/weaving-coordination.module';
 import { MaterialYieldIssuesModule } from './modules/material-yield-issues/material-yield-issues.module';
 import { MaterialYieldRecipesModule } from './modules/material-yield-recipes/material-yield-recipes.module';
 import { PackagingIssuesModule } from './modules/packaging-issues/packaging-issues.module';
@@ -176,6 +181,14 @@ import { RealtimeModule } from './realtime/realtime.module';
     WeavingIssuesModule,
     MaterialIssuesModule,
     IssueSlipsModule,
+    StageHandoverModule,
+    PalletsModule,
+    // Chuyền kiểm + Đóng gói bằng quét QR (24/11/2026, CK_DG_QR_ENABLED)
+    CkDgQrModule,
+    // Vị trí kho Thành phẩm + soạn hàng theo booking + load cont (25/11/2026, VI_TRI_KHO_ENABLED)
+    ViTriKhoModule,
+    // Điều phối đan: bảng theo dõi điểm đan + ghi chú / lời hẹn có nhắc (25/11/2026, DIEU_PHOI_DAN_ENABLED)
+    WeavingCoordinationModule,
     MaterialYieldIssuesModule,
     MaterialYieldRecipesModule,
     PackagingIssuesModule,

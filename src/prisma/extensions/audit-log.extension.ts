@@ -82,6 +82,8 @@ const AUDITED_MODELS = new Set([
   'MaterialYieldRecipe',
   // XK8 (rà soát 14/11, 18/11/2026): phiếu xuất XK - nhật ký ghi ai tạo / xuất / huỷ (bảng không có cột người huỷ).
   'IssueSlip',
+  // 24/11/2026: giao nhận giữa tổ - QLSX mở chặn (ai mở, bao nhiêu, lý do). Chỉ thêm.
+  'StageHandoverOverride',
 ]);
 
 /** Minimal shape needed to dynamically call `client[modelKey].findFirst(...)` by model name. */

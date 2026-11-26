@@ -200,9 +200,8 @@ async function main() {
   // 7. Warehouses (Phase 2) — 6 vật lý + 3 ảo, seed cố định, không bao giờ xoá. Đặt trước
   // bước 8 (admin user) có chủ đích: danh mục/role không được phép phụ thuộc vào việc có
   // set SEED_ADMIN_EMAIL/PASSWORD hay không - 2 việc độc lập nhau.
-  if (SEED_WAREHOUSES.length !== PROTECTED_WAREHOUSE_CODES.length) {
-    throw new Error('SEED_WAREHOUSES phải khớp 1-1 với PROTECTED_WAREHOUSE_CODES');
-  }
+  // 4 kho tách xưởng (phoi-son-han-*-pa/pha) do migration 20261107090000 tạo kèm kind +
+  // workshopId, nên seed KHÔNG tạo lại; chỉ kiểm sau vòng lặp là DB đã có đủ mọi mã bảo vệ.
   for (const wh of SEED_WAREHOUSES) {
     if (!(PROTECTED_WAREHOUSE_CODES as readonly string[]).includes(wh.code)) {
       throw new Error(
@@ -214,6 +213,20 @@ async function main() {
       update: { name: wh.name, isVirtual: wh.isVirtual, note: wh.note },
       create: wh,
     });
+  }
+  const presentCodes = new Set(
+    (
+      await prisma.warehouse.findMany({
+        where: { code: { in: [...PROTECTED_WAREHOUSE_CODES] } },
+        select: { code: true },
+      })
+    ).map((w) => w.code),
+  );
+  const missingCodes = PROTECTED_WAREHOUSE_CODES.filter((c) => !presentCodes.has(c));
+  if (missingCodes.length > 0) {
+    throw new Error(
+      `Thiếu kho bảo vệ sau seed (seed hoặc migration phải tạo): ${missingCodes.join(', ')}`,
+    );
   }
 
   // 7.5. Material groups hệ thống - cùng lý do đặt trước bước 8 như warehouses. KHÔNG dùng

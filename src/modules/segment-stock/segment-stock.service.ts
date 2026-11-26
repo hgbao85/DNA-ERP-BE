@@ -1,5 +1,16 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { SegmentReservationLogKind, StockLedgerRefType } from '../../generated/prisma/client';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import {
+  SegmentReservationLogKind,
+  StockLedgerRefType,
+  WarehouseKind,
+} from '../../generated/prisma/client';
+import { isStageHandoverEnabled } from '../stage-handover/stage-handover.config';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import {
   compareSegmentCodes,
@@ -24,6 +35,9 @@ import type {
   AllocateSurplusResult,
   ConsumeForOrderInput,
   ConsumeForOrderResult,
+  HandoverOrderHoldingsInput,
+  HandoverOrderHoldingsResult,
+  OrderCellState,
   ReleaseOrderHoldingsInput,
   ReleaseOrderHoldingsResult,
   SegmentSyncChange,
@@ -538,6 +552,134 @@ export class SegmentStockService {
   }
 
   // ---------------------------------------------------------------------------
+  // Giao nhận giữa tổ (24/11/2026)
+  // ---------------------------------------------------------------------------
+
+  /** Khoá ô rồi đọc phần của 1 lệnh (tồn, còn giữ của lệnh trong giới hạn tồn thật, dư dùng được) - cho phép giao lúc lập phiếu. */
+  async lockAndReadOrderCell(
+    tx: PrismaTx,
+    cell: { warehouseId: bigint; segmentSpecId: bigint; segmentSteps: string },
+    productionInvoiceId: bigint,
+  ): Promise<OrderCellState> {
+    assertSegmentSteps(cell.segmentSteps);
+    const { state, ownRemaining } = await this.lockAndReadCell(tx, cell);
+    return {
+      onHandQty: state.q,
+      ownRemainingQty: round4(
+        Math.max(0, Math.min(ownRemaining(productionInvoiceId), Math.max(0, state.q))),
+      ),
+      surplusQty: state.surplus,
+    };
+  }
+
+  /**
+   * Giao nhận giữa tổ (24/11/2026, docs THIET-KE-GIAO-NHAN-GIUA-TO mục 3.2): kho Phôi giao `qty` đoạn của lệnh cho tổ nhận -
+   * bút toán SEGMENT_HANDOVER kho Phôi -> kho tổ nhận, phần giữ của lệnh chuyển theo (kho Phôi giảm, kho nhận tăng) để Hàn / Sơn
+   * trừ đoạn ở kho của mình (consumeForOrder). Lấy trước phần lệnh còn giữ, thiếu thì lấy dư của kho Phôi (ghi SURPLUS_IN như
+   * consumeForOrder) - vẫn thiếu thì 409, KHÔNG ghi gì (giao là việc thủ kho đếm tay, không cho tồn âm).
+   * Thứ tự khoá: khoá lệnh (segmentProductionLockKey, cùng phía cộng / đổi xưởng) rồi 2 ô theo compareCells. Chạy TRONG transaction
+   * xác nhận phiếu (caller đã khoá phiếu + dòng lệnh). Idempotent theo idempotencyKey của bút toán.
+   */
+  async handoverOrderHoldings(
+    tx: PrismaTx,
+    input: HandoverOrderHoldingsInput,
+  ): Promise<HandoverOrderHoldingsResult> {
+    assertSegmentSteps(input.segmentSteps);
+    assertQty(input.qty, 'qty', false);
+    if (input.fromWarehouseId === input.toWarehouseId) {
+      throw new BadRequestException('Kho giao và kho nhận đoạn không được trùng nhau');
+    }
+    const dup = await tx.stockLedger.findUnique({
+      where: { idempotencyKey: input.idempotencyKey },
+      select: { id: true },
+    });
+    if (dup) return { movedQty: 0, fromHeldQty: 0, fromSurplusQty: 0, duplicate: true };
+
+    const { productionInvoiceId } = input;
+    await lockBusinessKey(tx, segmentProductionLockKey(productionInvoiceId));
+    const from: CellRef = {
+      warehouseId: input.fromWarehouseId,
+      segmentSpecId: input.segmentSpecId,
+      segmentSteps: input.segmentSteps,
+    };
+    const to: CellRef = { ...from, warehouseId: input.toWarehouseId };
+    const [first, second] = compareCells(from, to) <= 0 ? [from, to] : [to, from];
+    await lockBusinessKey(
+      tx,
+      segmentBucketLockKey(first.warehouseId, first.segmentSpecId, first.segmentSteps),
+    );
+    await lockBusinessKey(
+      tx,
+      segmentBucketLockKey(second.warehouseId, second.segmentSpecId, second.segmentSteps),
+    );
+    const { state, ownRemaining } = await this.lockAndReadCell(tx, from);
+    const qty = round4(input.qty);
+    const fromHeldQty = round4(
+      Math.max(0, Math.min(qty, ownRemaining(productionInvoiceId), Math.max(0, state.q))),
+    );
+    const fromSurplusQty = round4(Math.min(qty - fromHeldQty, state.surplus));
+    if (round4(fromHeldQty + fromSurplusQty) + EPS < qty) {
+      throw new ConflictException(
+        `Kho Phôi chỉ còn ${round4(fromHeldQty + fromSurplusQty)} đoạn ${segmentStepsLabel(input.segmentSteps)} cho lệnh này (phần giữ của lệnh + dư) - không đủ giao ${qty}. Kiểm lại tồn đoạn rồi sửa số trên phiếu.`,
+      );
+    }
+    const refType = StockLedgerRefType.SEGMENT_HANDOVER;
+    const logs: ReservationLogInput[] = [];
+    if (fromSurplusQty > 0) {
+      logs.push({
+        kind: SegmentReservationLogKind.SURPLUS_IN,
+        qty: fromSurplusQty,
+        refType,
+        refId: input.refId,
+        note: input.note,
+        actorId: input.actorId,
+      });
+    }
+    logs.push({
+      kind: SegmentReservationLogKind.HANDOVER,
+      qty: -qty,
+      refType,
+      refId: input.refId,
+      note: input.note,
+      actorId: input.actorId,
+    });
+    // Kho Phôi: phần dư lấy thêm vào giữ rồi giao cả số -> phần giữ giảm đúng fromHeldQty.
+    await this.bumpReservation(
+      tx,
+      from,
+      productionInvoiceId,
+      { reserved: round4(fromSurplusQty - qty) },
+      logs,
+    );
+    await this.stockLedgerService.postEntry(
+      {
+        fromWarehouseId: input.fromWarehouseId,
+        toWarehouseId: input.toWarehouseId,
+        segmentSpecId: input.segmentSpecId,
+        segmentSteps: input.segmentSteps,
+        qty,
+        refType,
+        refId: input.refId,
+        idempotencyKey: input.idempotencyKey,
+        note: input.note ?? 'Giao đoạn cho tổ nhận theo phiếu XK',
+        createdById: input.actorId ?? undefined,
+      },
+      tx,
+    );
+    await this.bumpReservation(tx, to, productionInvoiceId, { reserved: qty }, [
+      {
+        kind: SegmentReservationLogKind.HANDOVER,
+        qty,
+        refType,
+        refId: input.refId,
+        note: input.note,
+        actorId: input.actorId,
+      },
+    ]);
+    return { movedQty: qty, fromHeldQty, fromSurplusQty, duplicate: false };
+  }
+
+  // ---------------------------------------------------------------------------
   // Chia dư / nhả
   // ---------------------------------------------------------------------------
 
@@ -876,7 +1018,13 @@ export class SegmentStockService {
       }
     }
     const rows = await tx.segmentReservation.findMany({
-      where: { productionInvoiceId, warehouseId: { not: toWarehouseId } },
+      where: {
+        productionInvoiceId,
+        warehouseId: { not: toWarehouseId },
+        // Giao nhận giữa tổ (24/11/2026): đoạn đã giao nằm ở kho Hàn / Sơn của tổ nhận - đổi xưởng chỉ chuyển phần còn giữ ở kho
+        // PHÔI cũ, không kéo đoạn đã giao (đang nằm thật ở kho tổ nhận) về kho Phôi mới. Tắt công tắc: như cũ.
+        ...(isStageHandoverEnabled() ? { warehouse: { kind: WarehouseKind.PHOI } } : {}),
+      },
       select: {
         id: true,
         warehouseId: true,

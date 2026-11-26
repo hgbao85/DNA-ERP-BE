@@ -12,6 +12,7 @@ import { memoryStorage } from 'multer';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
+import { isCkDgQrEnabled } from '../ck-dg-qr/ck-dg-qr.config';
 import { CloudinaryService } from './cloudinary.service';
 import { contentMatchesDeclaredType } from './file-signature.util';
 
@@ -20,8 +21,14 @@ import { contentMatchesDeclaredType } from './file-signature.util';
  * dùng chung trên xưởng không đẩy được file lên kho lưu trữ. Mọi vai trò nghiệp vụ khác giữ nguyên (KCS, kho, mua hàng,
  * Sales, định mức, KHSX, Admin... đều có màn upload).
  */
+/** CK_DG_QR (24/11/2026): công nhân chuyền kiểm / KCS chuyền kiểm chụp ảnh lỗi bằng điện thoại (C1) - chỉ khi bật công tắc. */
+const PHOTO_FLOOR_MFG_ROLES: readonly string[] = ['CHUYEN_KIEM', 'KCS_CHUYEN_KIEM'];
+
 function assertMayUpload(user: AuthenticatedUser | undefined): void {
   const roles = user?.roles ?? [];
+  if (isCkDgQrEnabled() && user?.mfgRole != null && PHOTO_FLOOR_MFG_ROLES.includes(user.mfgRole)) {
+    return;
+  }
   if (roles.length > 0 && roles.every((r) => r === BUSINESS_ROLES.FLOOR_WORKER)) {
     throw new ForbiddenException('Tài khoản công nhân xưởng không tải file lên được');
   }

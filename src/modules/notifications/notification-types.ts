@@ -81,6 +81,52 @@ export interface SegmentOverageNotificationParams {
   rework: boolean;
 }
 
+/** QLSX mở chặn giao nhận giữa tổ (STAGE_HANDOVER_OVERRIDE, 24/11/2026). */
+export interface StageHandoverOverrideNotificationParams {
+  piCode: string;
+  stageLabel: string;
+  /** Mảnh (SKU) hoặc loại sắt được mở. */
+  target: string;
+  qty: number;
+  /** 'mảnh' | 'mm' */
+  unit: string;
+  reason: string;
+}
+
+/** Đợt chuyền kiểm công nhân báo qua QR chờ KCS chuyền kiểm (TRANSFER_CHECK_BATCH_TO_KCS, 24/11/2026). */
+export interface TransferCheckBatchNotificationParams {
+  lenhCode: string;
+  sku: string;
+  pieceName: string;
+  passedQty: number;
+  defectQty: number;
+}
+
+/** Thủ kho Thành phẩm huỷ lần báo đóng gói (PACKING_REPORT_CANCELLED, 24/11/2026). */
+export interface PackingReportCancelledNotificationParams {
+  lenhCode: string;
+  sku: string;
+  qty: number;
+  workerId: string;
+  workerName: string;
+  reason: string;
+}
+
+/** Công nhân Sơn báo thiếu 1 pallet (PALLET_SHORT_REPORTED, 24/11/2026). */
+export interface PalletShortNotificationParams {
+  palletCode: string;
+  lenhCode: string;
+  sku: string;
+  pieceName: string;
+  /** Số thủ kho Sơn đã xếp. */
+  loadQty: number;
+  /** Số công nhân báo Sơn xong. */
+  paintedQty: number;
+  reason: string;
+  /** Kho Sơn của pallet (người nhận, không hiển thị). */
+  warehouseCode: string;
+}
+
 /** Params cho type cắt sắt duy nhất còn lại - chỉ
  *  CuttingProposalsService.notifyProductionManagers() gọi tới. `entityId` truyền riêng ở lệnh gọi
  *  emit() (không phải field render). */
@@ -524,6 +570,22 @@ export interface PackagingCompleteNotificationParams {
  *  tính lại mỗi lần xuất đan mới - giữ nguyên hạn chế đã chấp nhận ở mục 16.2 (không giảm số hiển
  *  thị khi nhận MỘT PHẦN, chỉ tự đóng khi nhận ĐỦ về 0). `warehouseCodes` không phải field hiển thị
  *  (dùng cho `recipients`) - xem lý do ở doc comment `WEAVING_ISSUE_TO_POINT` bên dưới. */
+/** Điều phối đan (Đ2, 25/11/2026): tới ngày hẹn mà điểm đan chưa trả đủ (WEAVING_PROMISE_DUE). */
+export interface WeavingPromiseDueParams {
+  followUpId: string;
+  weavingPointId: string;
+  weavingPointName: string;
+  poNumber: string;
+  pieceName: string;
+  promisedQty: number;
+  /** dd/mm/yyyy */
+  promisedDate: string;
+  returnedSince: number;
+  heldQty: number;
+  /** Người ghi lời hẹn - người nhận nhắc. */
+  createdById: string;
+}
+
 export interface WeavingIssueNotificationParams {
   poNumber: string;
   pieceName: string;
@@ -1527,6 +1589,82 @@ const notificationTypeDefinitions = {
     recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_MANAGER] }),
   } satisfies NotificationTypeDef<SegmentOverageNotificationParams>,
 
+  /** QLSX mở chặn giao nhận giữa tổ (24/11/2026, 3.3b: "QLSX mở chặn có lý do, ghi nhật ký, báo Sếp"): báo Sếp + QLSX.
+   *  RESULT - chỉ để biết, không có việc phải làm tiếp. Không dedupe: mỗi lần mở chặn là 1 tin. */
+  STAGE_HANDOVER_OVERRIDE: {
+    category: 'RESULT',
+    severity: 'WARNING',
+    entityType: 'PRODUCTION_INVOICE',
+    title: (p: StageHandoverOverrideNotificationParams) =>
+      `${p.piCode}: QLSX mở chặn tổ ${p.stageLabel} (${p.target})`,
+    message: (p: StageHandoverOverrideNotificationParams) =>
+      `Cho báo thêm ${p.qty} ${p.unit} ngoài số hàng đã nhận - lý do: ${p.reason}`,
+    // Màn theo dõi giao nhận của QLSX (FE làm ở đợt 2/4 của docs THIET-KE-GIAO-NHAN-GIUA-TO), mở đúng lệnh theo mã PI.
+    link: (p: StageHandoverOverrideNotificationParams) => ({
+      module: 'production',
+      page: 'giao-nhan-giua-to',
+      params: { focus: `PI_CODE:${p.piCode}` },
+    }),
+    recipients: () => ({ roles: [BUSINESS_ROLES.BOSS, BUSINESS_ROLES.PRODUCTION_MANAGER] }),
+  } satisfies NotificationTypeDef<StageHandoverOverrideNotificationParams>,
+
+  /** Pallet Sơn (24/11/2026, docs THIET-KE-PALLET-SON - "Báo thiếu + lý do bắt buộc -> báo QLSX, thống kê kho Sơn"): công
+   *  nhân Sơn báo xong pallet ít hơn số thủ kho đã xếp. Báo QLSX + thủ kho của đúng kho Sơn. RESULT - để biết / kiểm lại, không tự
+   *  đóng. Không dedupe: mỗi lần báo thiếu là 1 tin. */
+  /** Công nhân chuyền kiểm báo 1 đợt qua QR (CK_DG_QR, 24/11/2026) - chờ KCS chuyền kiểm chấm. ACTION_REQUIRED, entityId = id đợt,
+   *  tự đóng khi KCS chuyền kiểm chấm (CkDgQrService.gradeBatch). Người nhận: tài khoản mfgRole KCS_CHUYEN_KIEM (màn /floor). */
+  TRANSFER_CHECK_BATCH_TO_KCS: {
+    category: 'ACTION_REQUIRED',
+    severity: 'INFO',
+    entityType: 'TRANSFER_CHECK_BATCH',
+    // KCS chuyền kiểm làm ở màn /floor (không có trung tâm thông báo, không thuộc phân hệ nào) - không có trang để trỏ.
+    link: () => null,
+    title: (p: TransferCheckBatchNotificationParams) =>
+      `${p.lenhCode}: chuyền kiểm báo ${p.pieceName}`,
+    message: (p: TransferCheckBatchNotificationParams) =>
+      `${p.sku} · báo đạt ${p.passedQty}${p.defectQty > 0 ? `, lỗi ${p.defectQty}` : ''} - chờ KCS chuyền kiểm chấm.`,
+    recipients: () => ({ mfgRoles: [MfgRole.KCS_CHUYEN_KIEM] }),
+  } satisfies NotificationTypeDef<TransferCheckBatchNotificationParams>,
+
+  /** Thủ kho Thành phẩm huỷ 1 lần công nhân đóng gói báo (D4, 24/11/2026) - báo QLSX + chính công nhân đã báo. */
+  PACKING_REPORT_CANCELLED: {
+    category: 'INFO',
+    severity: 'WARNING',
+    entityType: 'PACKING_REPORT',
+    link: () => ({ module: 'production', page: 'ke-hoach' }),
+    title: (p: PackingReportCancelledNotificationParams) =>
+      `${p.lenhCode}: huỷ lần báo đóng gói ${p.qty} bộ`,
+    message: (p: PackingReportCancelledNotificationParams) =>
+      `${p.sku} · ${p.workerName} báo ${p.qty} bộ - thủ kho huỷ, lý do: ${p.reason}`,
+    recipients: (p: PackingReportCancelledNotificationParams) => ({
+      roles: [BUSINESS_ROLES.PRODUCTION_MANAGER],
+      userIds: [p.workerId],
+    }),
+  } satisfies NotificationTypeDef<PackingReportCancelledNotificationParams>,
+
+  PALLET_SHORT_REPORTED: {
+    category: 'RESULT',
+    severity: 'WARNING',
+    entityType: 'PALLET',
+    title: (p: PalletShortNotificationParams) =>
+      `Pallet ${p.palletCode}: Sơn báo thiếu ${p.loadQty - p.paintedQty} mảnh`,
+    message: (p: PalletShortNotificationParams) =>
+      `${p.lenhCode} · ${p.sku} · ${p.pieceName}: xếp ${p.loadQty}, sơn xong ${p.paintedQty} - lý do: ${p.reason}`,
+    // Thủ kho Sơn: Phân phối nội bộ (tab Pallet nằm trong đó); QLSX: Tổng hợp lệnh SX.
+    link: () => ({
+      module: 'inbound_warehouse',
+      page: 'xuat-sat',
+      params: { sub: 'pallet' },
+      alternatives: [{ module: 'production', page: 'ke-hoach' }],
+    }),
+    recipients: (p: PalletShortNotificationParams) => ({
+      roles: [BUSINESS_ROLES.PRODUCTION_MANAGER],
+      warehouseIds: [p.warehouseCode],
+      warehouseScopeRoles: [BUSINESS_ROLES.WAREHOUSE_STAFF],
+      warehouseScopeExcludeRoles: [BUSINESS_ROLES.PURCHASER],
+    }),
+  } satisfies NotificationTypeDef<PalletShortNotificationParams>,
+
   /** KCS chấm có lỗi (failedQty > 0) - báo tổ gửi (Phôi/Hàn/Sơn tuỳ nguồn) + QLSX. Không tự đóng
    *  (RESULT, không có hành động tiếp theo nào khoá bởi type này).
    *  VẪN KHÔNG `link` dù `?p=` đã sẵn (mục 22.2, khác STEEL_ISSUE_TO_PHOI/CUT_BUNDLE_TO_KCS/
@@ -1823,6 +1961,26 @@ const notificationTypeDefinitions = {
    *  weavingPointId, xem schema.prisma) nên phải báo CẢ GIA ĐÌNH kho 'thanh-pham' (mọi thủ kho
    *  thuộc gia đình đó, dù có nhiều kho vật lý - `warehouseCodes` do call site tự liệt kê qua
    *  `resolveThanhPhamWarehouseCodes()`, không phải field hiển thị). */
+  /**
+   * Điều phối đan (Đ2, 25/11/2026): tới ngày hẹn mà hàng về (kể từ lúc hẹn) chưa đủ số hẹn - nhắc đúng người đã ghi lời hẹn. Tự đóng
+   * khi về đủ / điểm đan hết giữ hàng / có lời hẹn mới (WeavingFollowUpReminderService, WeavingCoordinationService.createFollowUp).
+   */
+  WEAVING_PROMISE_DUE: {
+    category: 'ACTION_REQUIRED',
+    severity: 'WARNING',
+    entityType: 'WEAVING_FOLLOW_UP',
+    title: (p: WeavingPromiseDueParams) =>
+      `Điểm đan ${p.weavingPointName} chưa trả đủ hẹn: ${p.pieceName} - ${p.poNumber}`,
+    message: (p: WeavingPromiseDueParams) =>
+      `Hẹn trả ${p.promisedQty} mảnh ngày ${p.promisedDate}, từ lúc hẹn mới về ${p.returnedSince}. Điểm đan đang giữ ${p.heldQty}.`,
+    link: (p: WeavingPromiseDueParams) => ({
+      module: 'weaving_coordination',
+      page: 'theo-doi',
+      params: { point: p.weavingPointId ?? null },
+    }),
+    recipients: (p: WeavingPromiseDueParams) => ({ userIds: [p.createdById] }),
+    notifyActor: true,
+  } satisfies NotificationTypeDef<WeavingPromiseDueParams>,
   WEAVING_ISSUE_TO_POINT: {
     category: 'ACTION_REQUIRED',
     severity: 'INFO',

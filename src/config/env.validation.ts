@@ -40,6 +40,22 @@ export const envValidationSchema = Joi.object({
   // Tồn đoạn kho Phôi theo lệnh (13/11/2026): true = sau KCS tự ghi đoạn đủ công đoạn vào kho Phôi, giữ cho lệnh, phần vượt vào
   // cột dư. Mặc định TẮT cho tới khi phía trừ (Hàn/Sơn trừ phần giữ của lệnh) xong - xem src/modules/segment-stock/.
   SEGMENT_STOCK_ENABLED: Joi.boolean().default(false),
+  // Giao nhận giữa tổ (24/11/2026): phiếu giao đoạn Phôi -> Hàn, mảnh Hàn -> Sơn + chặn báo theo số đã nhận. Mặc định TẮT; cần
+  // SEGMENT_STOCK_ENABLED - xem src/modules/stage-handover/stage-handover.config.ts.
+  STAGE_HANDOVER_ENABLED: Joi.boolean().default(false),
+  // Pallet Sơn (24/11/2026): thủ kho Sơn xếp pallet, công nhân Sơn quét pallet báo "Sơn xong", xuất đan quét pallet. Mặc định
+  // TẮT - xem src/modules/pallets/pallet-son.config.ts.
+  PALLET_SON_ENABLED: Joi.boolean().default(false),
+  // Chuyền kiểm + Đóng gói bằng quét QR (24/11/2026): công nhân tự báo, KCS chuyền kiểm chấm, đóng gói chặn theo số đã qua KCS chuyền
+  // kiểm. Mặc định TẮT - xem src/modules/ck-dg-qr/ck-dg-qr.config.ts.
+  CK_DG_QR_ENABLED: Joi.boolean().default(false),
+  // Vị trí kho Thành phẩm có QR + soạn hàng theo booking + load từng cont (25/11/2026): công nhân đóng gói quét ô khi cất, tồn theo
+  // ô (SKU - LSX - PO), chuyển ô, lấy hàng theo booking vào cont, đóng cont (số cont, seal, ảnh). Mặc định TẮT - xem
+  // src/modules/vi-tri-kho/vi-tri-kho.config.ts.
+  VI_TRI_KHO_ENABLED: Joi.boolean().default(false),
+  // Điều phối đan (25/11/2026): bảng theo dõi điểm đan, ghi chú + lời hẹn trả có nhắc, chỉ Điều phối đan (và Admin) thêm / sửa / ngừng
+  // điểm đan. Mặc định TẮT - xem src/modules/weaving-coordination/weaving-coordination.config.ts.
+  DIEU_PHOI_DAN_ENABLED: Joi.boolean().default(false),
 
   LOG_LEVEL: Joi.string()
     .valid('fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent')

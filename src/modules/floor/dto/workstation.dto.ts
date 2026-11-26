@@ -65,6 +65,16 @@ export class CreateWorkstationDto {
   @IsOptional()
   @IsEnum(SolverMachine)
   cutMachineType?: SolverMachine;
+
+  @ApiPropertyOptional({
+    description:
+      'Kho Thành phẩm (id kho, chuỗi số) - BẮT BUỘC với điểm chuyền kiểm / khu đóng gói (24/11/2026), loại khác bỏ trống.',
+    example: '12',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[1-9]\d*$/, { message: 'Mã kho phải là số nguyên dương' })
+  warehouseId?: string;
 }
 
 /**

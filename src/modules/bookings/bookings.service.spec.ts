@@ -108,6 +108,7 @@ describe('BookingsService (Phần A – Đợt 10a)', () => {
       findMany: jest.fn().mockResolvedValue([{ id: 7n, totalQty: 100, shippedQty: 0 }]),
     },
     packagingRecord: { groupBy: jest.fn().mockResolvedValue([]) },
+    bookingContainerLine: { groupBy: jest.fn().mockResolvedValue([]) },
     auditLog: { create: jest.fn().mockResolvedValue({}) },
     $queryRaw: jest.fn().mockResolvedValue([]),
     $executeRaw: jest.fn().mockResolvedValue(0),
@@ -455,6 +456,15 @@ describe('BookingsService (Phần A – Đợt 10a)', () => {
         bookingRow({ lines: [{ ...bookingRow().lines[0], shippedQty: 5 }] }),
       );
       await expect(service.cancel('100', { reason: 'x' })).rejects.toThrow(ConflictException);
+    });
+
+    it('vị trí kho: đã lấy hàng vào cont -> 409 (trả về ô trước), không ghi huỷ', async () => {
+      prisma.booking.findUnique.mockResolvedValue(bookingRow({ status: 'CONFIRMED' }));
+      prisma.bookingContainerLine.groupBy.mockResolvedValue([
+        { bookingLineId: 1n, _sum: { qty: 3 } },
+      ]);
+      await expect(service.cancel('100', { reason: 'x' })).rejects.toThrow(/trả hàng về ô/);
+      expect(prisma.booking.update).not.toHaveBeenCalled();
     });
 
     it('lỗi khi đóng thông báo không làm hỏng việc huỷ', async () => {

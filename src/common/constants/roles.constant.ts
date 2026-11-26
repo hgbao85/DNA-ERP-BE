@@ -32,6 +32,10 @@ export const BUSINESS_ROLES = {
   // nằm ở User.mfgRole (PHOI/HAN/SON). CHỈ quét mã tại máy để báo sản lượng / nhận sắt - KHÔNG có
   // STEEL_ISSUE:UPDATE hay PRODUCTION_BATCH:CREATE nên không gọi thẳng được các route của màn thống kê cũ.
   FLOOR_WORKER: 'FLOOR_WORKER',
+  // Điều phối đan (25/11/2026, docs THIET-KE-DIEU-PHOI-DAN) - tài khoản văn phòng (đăng nhập web, không PIN) theo dõi các điểm đan
+  // gia công bên ngoài: xem số đang giữ, ghi trao đổi + lời hẹn trả, quản lý danh sách điểm đan. KHÔNG xuất mảnh / cấp vật tư /
+  // nhập mảnh về kho. Quyền sửa điểm đan chỉ có hiệu lực khi DIEU_PHOI_DAN_ENABLED bật (weaving-points.service.ts).
+  WEAVING_COORDINATOR: 'WEAVING_COORDINATOR',
 } as const;
 
 export type BusinessRole = (typeof BUSINESS_ROLES)[keyof typeof BUSINESS_ROLES];

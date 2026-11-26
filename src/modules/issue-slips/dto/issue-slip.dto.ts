@@ -37,22 +37,42 @@ export class IssueSlipLineDto {
   @IsString()
   recipeId?: string;
 
-  @ApiPropertyOptional({ description: 'WEAVING_PIECE / WEAVING_MATERIAL: mảnh' })
+  @ApiPropertyOptional({ description: 'WEAVING_PIECE / WEAVING_MATERIAL / FRAME_HANDOVER: mảnh' })
   @IsOptional()
   @IsString()
   pieceId?: string;
 
-  @ApiPropertyOptional({ description: 'STEEL: lệnh (PI)' })
+  @ApiPropertyOptional({
+    description: 'SEGMENT_HANDOVER: cỡ đoạn (mã đoạn = cỡ đoạn + bộ công đoạn)',
+  })
+  @IsOptional()
+  @IsString()
+  segmentSpecId?: string;
+
+  @ApiPropertyOptional({
+    description: "SEGMENT_HANDOVER: bộ công đoạn đã chuẩn hoá ('' = trơn, vd 'UON,DAP')",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  segmentSteps?: string;
+
+  @ApiPropertyOptional({ description: 'STEEL / SEGMENT_HANDOVER: lệnh (PI)' })
   @IsOptional()
   @IsString()
   productionInvoiceId?: string;
 
-  @ApiPropertyOptional({ description: 'CONSUMABLE / WEAVING_*: SKU (lệnh sản xuất)' })
+  @ApiPropertyOptional({
+    description: 'CONSUMABLE / WEAVING_* / FRAME_HANDOVER: SKU (lệnh sản xuất)',
+  })
   @IsOptional()
   @IsString()
   productionOrderId?: string;
 
-  @ApiPropertyOptional({ enum: MfgStage, description: 'CONSUMABLE: HAN / SON' })
+  @ApiPropertyOptional({
+    enum: MfgStage,
+    description: 'CONSUMABLE: HAN / SON. SEGMENT_HANDOVER: tổ nhận HAN / SON',
+  })
   @IsOptional()
   @IsEnum(MfgStage)
   stage?: MfgStage;
@@ -77,6 +97,18 @@ export class IssueSlipLineDto {
   @IsString()
   @MaxLength(500)
   note?: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'WEAVING_PIECE (pallet Sơn, 24/11/2026): pallet Sơn xong quét vào dòng - cùng SKU + mảnh; qty ≤ tổng số đã sơn của các pallet',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  palletIds?: string[];
 }
 
 /** Tạo phiếu xuất XK (bước 1): cấp số, chưa trừ tồn. */

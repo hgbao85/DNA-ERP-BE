@@ -7,6 +7,7 @@ export class WeavingPointResponseDto {
   @Expose() @ApiProperty() code!: string;
   @Expose() @ApiPropertyOptional({ nullable: true }) fullName!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) aliasNote!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) contactPerson!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) phone!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) address!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) dayDaiPercent!: number | null;

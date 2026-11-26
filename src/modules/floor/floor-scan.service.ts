@@ -6,6 +6,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   CutBundleStatus,
@@ -32,6 +33,10 @@ import {
 } from './floor-queue-workshop.util';
 import { pieceMaxNow } from './floor-review.service';
 import { FloorStageService, type StagePi } from './floor-stage.service';
+import { StageHandoverService } from '../stage-handover/stage-handover.service';
+import { PalletsService } from '../pallets/pallets.service';
+import { PALLET_SON_DISABLED_MESSAGE } from '../pallets/pallet-son.config';
+import type { PaintPalletDto } from '../pallets/dto/pallet.dto';
 
 const STAGE_LABEL: Record<string, string> = { PHOI: 'Phôi', HAN: 'Hàn', SON: 'Sơn' };
 
@@ -66,6 +71,10 @@ export class FloorScanService {
     private readonly productionBatches: ProductionBatchesService,
     private readonly cutAllocation: CutAllocationService,
     private readonly stages: FloorStageService,
+    // Giao nhận giữa tổ (24/11/2026): "Đã nhận / Đã làm / Còn" theo mảnh cho màn Hàn / Sơn (chỉ khi bật công tắc).
+    @Optional() private readonly stageHandover?: StageHandoverService,
+    // Pallet Sơn (24/11/2026): công nhân Sơn quét tem pallet -> "Sơn xong". @Optional - chỉ dùng khi bật PALLET_SON_ENABLED.
+    @Optional() private readonly pallets?: PalletsService,
   ) {}
 
   /**
@@ -183,6 +192,65 @@ export class FloorScanService {
       ctx,
     );
     return { kind: ws.kind, cutBundle };
+  }
+
+  // ─── Pallet Sơn (24/11/2026, docs THIET-KE-PALLET-SON) ────────────────────────────────────
+
+  /** Công nhân Sơn vừa quét tem pallet: pallet + lệnh + mảnh + số. Tắt công tắc: { enabled: false }. */
+  async palletView(palletToken: string, user: AuthenticatedUser) {
+    if (user.mfgRole !== MfgStage.SON) {
+      throw new ForbiddenException('Tem pallet chỉ dành cho công nhân tổ Sơn');
+    }
+    if (!this.pallets) return { enabled: false, pallet: null };
+    return this.pallets.workerView(palletToken);
+  }
+
+  /**
+   * "Sơn xong pallet này" / "Báo thiếu": 1 lần báo Sơn BÌNH THƯỜNG qua máy (điểm sơn) công nhân đã quét gần nhất - cùng đường
+   * report() của máy PIECE: kiểm lệnh làm được ở xưởng của máy, rồi recordProductionBatch (chặn kế hoạch + chặn số Sơn đã nhận,
+   * Idempotency-Key bắt buộc). Lệnh / mảnh / số lấy từ pallet; pallet chuyển Sơn xong TRONG cùng transaction báo.
+   */
+  async paintPallet(
+    qrToken: string,
+    palletToken: string,
+    user: AuthenticatedUser,
+    dto: PaintPalletDto,
+    idempotencyKey: string | undefined,
+  ) {
+    if (!idempotencyKey) throw new BadRequestException('Header Idempotency-Key là bắt buộc');
+    const pallets = this.pallets;
+    if (!pallets) throw new BadRequestException(PALLET_SON_DISABLED_MESSAGE);
+    pallets.assertEnabled();
+    const ws = await this.resolveWorkstation(qrToken, user);
+    if (ws.stage !== MfgStage.SON || ws.kind !== WorkstationKind.PIECE) {
+      throw new BadRequestException(
+        'Mã máy đang nhớ không phải điểm báo mảnh của tổ Sơn - quét tem điểm sơn trước rồi quét lại pallet',
+      );
+    }
+    const prep = await pallets.preparePaint(palletToken, dto, idempotencyKey);
+    if (prep.replay) {
+      return { ...(await pallets.workerView(palletToken)), productionBatch: null, short: false };
+    }
+    const p = prep.prepared;
+    const workshopId = await workstationQueueWorkshopId(this.prisma, ws.workshopId);
+    const stagePis = await this.stages.listReportablePis(MfgStage.SON, workshopId, [
+      p.productionInvoiceId,
+    ]);
+    this.assertPiReportable(MfgStage.SON, p.productionInvoiceId.toString(), [], stagePis);
+    const batch = await this.productionBatches.recordProductionBatch(
+      p.productionOrderId.toString(),
+      { pieceId: p.pieceId.toString(), qty: p.qty, stage: MfgStage.SON },
+      user.id,
+      user.mfgRole,
+      idempotencyKey,
+      {
+        workstationId: ws.id,
+        afterWriteInTx: (tx, written) =>
+          pallets.markPaintedInTx(tx, p, { ...written, userId: user.id }),
+      },
+    );
+    await pallets.notifyShort(p, user.id);
+    return { ...(await pallets.workerView(palletToken)), productionBatch: batch, short: p.short };
   }
 
   /** Mã khu nhận sắt: người nhận đếm rồi tự điền số cây (Sếp chốt, mục 17) - dùng đúng receive() cũ. */
@@ -596,6 +664,10 @@ export class FloorScanService {
       const openQty = new Map(
         open.map((r) => [`${r.productionOrderId}:${r.pieceId}`, r._sum.reportedQty ?? 0]),
       );
+      // Giao nhận giữa tổ: tắt công tắc -> null, kết quả giữ nguyên như cũ (không thêm trường).
+      const caps = this.stageHandover
+        ? await this.stageHandover.receivedCapsForWorker(piId, ws.stage)
+        : null;
       const piecePlans = Object.fromEntries(
         Object.entries(plans).map(([orderId, plan]) => [
           orderId,
@@ -603,10 +675,28 @@ export class FloorScanService {
             ...plan,
             items: plan.items.map((it) => {
               const open = openQty.get(`${orderId}:${it.pieceId}`) ?? 0;
+              if (!caps) {
+                return {
+                  ...it,
+                  openQty: open,
+                  maxNow: pieceMaxNow({ ...it, openQty: open }),
+                };
+              }
+              // maxNow = min(còn theo kế hoạch, còn theo hàng đã nhận) - cùng số BE chặn lúc báo.
+              const cap = caps.get(`${orderId}:${it.pieceId}`) ?? null;
               return {
                 ...it,
                 openQty: open,
-                maxNow: pieceMaxNow({ ...it, openQty: open }),
+                maxNow: pieceMaxNow({ ...it, openQty: open, receivedLeft: cap?.receivedLeft }),
+                handover: cap
+                  ? {
+                      mode: cap.mode,
+                      receivedQty: cap.receivedQty,
+                      usedQty: cap.usedQty,
+                      receivedLeft: cap.receivedLeft,
+                      overrideQty: cap.overrideQty,
+                    }
+                  : null,
               };
             }),
           },

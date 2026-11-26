@@ -16,6 +16,7 @@ import {
   CutBundleStatus,
   CuttingProposalStatus,
   FloorReportKind,
+  MfgStage,
   Prisma,
   ProcessStep,
   ProductionOrderFloorStage,
@@ -93,6 +94,11 @@ import { SteelIssuePlanItemResponseDto } from './dto/steel-issue-plan-item-respo
 import { SteelIssueResponseDto } from './dto/steel-issue-response.dto';
 import { StepBatchResponseDto, StepBatchSegmentResponseDto } from './dto/step-batch-response.dto';
 import { barsByStockLength } from '../cutting-proposals/pattern-stock-length.util';
+import {
+  isStageHandoverEnabled,
+  PHOI_STEEL_TOLERANCE,
+} from '../stage-handover/stage-handover.config';
+import { loadSteelUsage, steelReportLimitMm, steelUsage } from './steel-usage.util';
 import {
   StepBundleResponseDto,
   StepBundleSegmentResponseDto,
@@ -1067,6 +1073,20 @@ export class SteelIssuesService {
               mm: specById.get(parseBigIntId(seg.segmentSpecId).toString())!.cutLengthMm.toString(),
             })),
           });
+          // Giao nhận giữa tổ (3.3b, chốt 24/11/2026): bật công tắc thì CHẶN báo cắt làm mm đoạn đã báo vượt 102% mm sắt
+          // đã nhận của (lệnh, loại sắt) - trước chỉ cảnh báo (steelBalance.overMm). Tắt công tắc: không đọc gì thêm.
+          if (isStageHandoverEnabled()) {
+            await this.assertCutWithinSteelInTx(tx, {
+              piId: issue.productionInvoiceId,
+              materialId: issue.materialId,
+              lines: dto.segments.map((seg) => ({
+                qty: seg.qty,
+                cutLengthMm: specById
+                  .get(parseBigIntId(seg.segmentSpecId).toString())!
+                  .cutLengthMm.toNumber(),
+              })),
+            });
+          }
           // Khoá mọi đợt ứng viên (không LIMIT: LIMIT + FOR UPDATE có thể trả thiếu dòng khi Postgres
           // kiểm lại dòng vừa bị đổi). Sau khi khoá, đợt vừa sang AWAITING_QC / vừa bị xoá tự bị loại.
           const candidates = await tx.$queryRaw<{ id: bigint; openedById: string | null }[]>`
@@ -1336,6 +1356,41 @@ export class SteelIssuesService {
           : [],
       ),
     });
+  }
+
+  /**
+   * Giao nhận giữa tổ (3.3b, chốt 24/11/2026, dung sai Q2b = 2%): Σ mm đoạn đã báo của (lệnh, loại sắt) - mọi SKU, mọi lô
+   * sắt, CẢ lần đang báo - không được quá (1 + PHOI_STEEL_TOLERANCE) × mm sắt đã nhận dùng được + phần QLSX mở chặn (mm). Cùng công
+   * thức steelBalance (steelUsage). Khoá cut-steel:{lệnh}:{sắt} gom mọi SKU (khoá cut-cap chỉ theo SKU) - 2 SKU cùng loại sắt báo cùng
+   * lúc không cùng lọt. Thứ tự khoá: cut-cap -> cut-report -> cut-steel.
+   */
+  private async assertCutWithinSteelInTx(
+    tx: PrismaTx,
+    p: { piId: bigint; materialId: bigint; lines: { qty: number; cutLengthMm: number }[] },
+  ): Promise<void> {
+    await lockBusinessKey(tx, `cut-steel:${p.piId}:${p.materialId}`);
+    const [usage, override] = await Promise.all([
+      loadSteelUsage(tx, p.piId, p.materialId),
+      tx.stageHandoverOverride.aggregate({
+        where: { productionInvoiceId: p.piId, stage: MfgStage.PHOI, materialId: p.materialId },
+        _sum: { qty: true },
+      }),
+    ]);
+    const overrideMm = override._sum.qty?.toNumber() ?? 0;
+    const addMm = p.lines.reduce((t, l) => t + l.qty * (l.cutLengthMm + usage.kerfMm), 0);
+    const limitMm = steelReportLimitMm(usage.usableMm, PHOI_STEEL_TOLERANCE, overrideMm);
+    if (usage.reportedMm + addMm <= limitMm + 1e-6) return;
+    const material = await tx.material.findUnique({
+      where: { id: p.materialId },
+      select: { code: true },
+    });
+    const r = Math.round;
+    this.logger.warn(
+      `Chặn báo cắt vượt sắt đã nhận: PI ${p.piId}, sắt ${p.materialId}, dùng được ${r(usage.usableMm)}mm, đã báo ${r(usage.reportedMm)}mm, lần này ${r(addMm)}mm, giới hạn ${r(limitMm)}mm`,
+    );
+    throw new BadRequestException(
+      `Sắt ${material?.code ?? p.materialId}: đã nhận ${usage.receivedBarCount} cây (dùng được ${r(usage.usableMm)} mm), đoạn đã báo ${r(usage.reportedMm)} mm + lần này ${r(addMm)} mm = ${r(usage.reportedMm + addMm)} mm - vượt ${Math.round(PHOI_STEEL_TOLERANCE * 100)}% sắt đã nhận (tối đa ${r(limitMm)} mm). Đếm lại số đoạn. Sắt thừa / cây lẻ dưới xưởng phải nhập lại kho rồi xuất qua phiếu; số sắt nhận sai thì báo QLSX mở chặn.`,
+    );
   }
 
   /** Chặn báo CẮT vượt số cần (hợp đồng v2 mục 11): lần báo > maxNow của (SKU, cỡ) -> 400 + ghi log cảnh báo. */
@@ -2737,20 +2792,23 @@ export class SteelIssuesService {
         (i) => i.materialId.toString() === item.materialId && i.status !== SteelIssueStatus.ISSUED,
       );
       if (received.length === 0) continue;
-      let receivedBarCount = 0;
-      let usableMm = 0;
-      for (const i of received) {
-        const bars = i.receivedBarCount ?? i.barCount;
-        receivedBarCount += bars;
-        usableMm += bars * Math.max(i.barLengthMm - trimMm, 0);
-      }
-      // Q3: cây đã nhập trả kho không còn ở tổ cắt.
-      usableMm = Math.max(0, usableMm - (returnedMmByMaterial.get(item.materialId) ?? 0));
       // `done` mới = đã báo - thiếu: đoạn KCS ghi thiếu không có thật nên không tốn sắt.
       // Cộng theo byOrder (gồm cả SKU đã huỷ - sg.done không gồm): đoạn của SKU huỷ cũng đã tốn sắt.
-      const reportedMm = item.segments.reduce(
-        (t, sg) => t + sg.byOrder.reduce((s, o) => s + o.done, 0) * (sg.cutLengthMm + kerfMm),
+      // Công thức tách ra steelUsage (24/11/2026) - cổng báo cắt khi bật giao nhận giữa tổ dùng lại đúng công thức này.
+      const usage = steelUsage({
+        bars: received,
+        segments: item.segments.map((sg) => ({
+          cutLengthMm: sg.cutLengthMm,
+          doneQty: sg.byOrder.reduce((s, o) => s + o.done, 0),
+        })),
+        trimMm,
+        kerfMm,
+      });
+      const { receivedBarCount, reportedMm } = usage;
+      // Q3: cây đã nhập trả kho không còn ở tổ cắt.
+      const usableMm = Math.max(
         0,
+        usage.usableMm - (returnedMmByMaterial.get(item.materialId) ?? 0),
       );
       // Gợi ý cho P1b (chỉ đọc): còn phải cắt bao nhiêu đoạn (theo từng SKU, SKU đã dư không bù cho SKU còn thiếu),
       // trong đó bao nhiêu là cắt LẠI, cần bao nhiêu sắt, sắt đã nhận chưa cắt và sắt còn xuất được theo giữ chỗ.

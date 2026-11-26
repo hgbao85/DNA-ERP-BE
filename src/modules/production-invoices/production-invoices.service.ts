@@ -30,6 +30,13 @@ import { nextProductionInvoiceCode } from '../../common/utils/production-invoice
 import { assertPiHasActiveFloor, assertItemNotCancelled } from '../../common/utils/floor-gate.util';
 import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
+import { isCkDgQrEnabled } from '../ck-dg-qr/ck-dg-qr.config';
+import {
+  loadBatchReservations,
+  loadSetsPassed,
+  packagingLockKey,
+  packingAvailable,
+} from '../ck-dg-qr/ck-dg-caps.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import { checkMergeRules, skuLabel } from '../../common/utils/merge-rules.util';
 import { vnDayKey } from '../../common/utils/floor-stats.util';
@@ -3433,7 +3440,13 @@ export class ProductionInvoicesService {
           _sum: { checkedQty: true },
         }),
       ]);
-      const available = received - (checked._sum.checkedQty ?? 0);
+      // CK_DG_QR (24/11/2026): bật công tắc thì đợt công nhân báo còn chờ KCS chuyền kiểm + phần KCS chấm bỏ cũng chiếm "Hiện có"
+      // (cùng khoá) - nhập tay không vượt được phần công nhân đã báo. Tắt: như cũ.
+      const reserved = isCkDgQrEnabled()
+        ? await loadBatchReservations(tx, item.id, pieceBigId)
+        : { pendingQty: 0, scrapQty: 0 };
+      const available =
+        received - (checked._sum.checkedQty ?? 0) - reserved.pendingQty - reserved.scrapQty;
       if (dto.checkedQty > available) {
         throw new BadRequestException(
           `Số lượng kiểm (${dto.checkedQty}) vượt quá số hiện có (${Math.max(0, available)}) - chỉ kiểm được phần đã nhập về kho`,
@@ -3637,36 +3650,76 @@ export class ProductionInvoicesService {
     dto: RecordPackagingDto,
     actorUserId: string,
   ): Promise<PackagingResponseDto> {
+    const { response } = await this.recordPackagingEntry({
+      piId,
+      itemId,
+      boxesPacked: dto.boxesPacked,
+      note: dto.note,
+      actorUserId,
+    });
+    return response;
+  }
+
+  /**
+   * Lõi ghi 1 lần đóng gói - dùng chung nhập tay (recordPackaging) và công nhân đóng gói quét QR (CkDgQrService, 24/11/2026).
+   * Bật CK_DG_QR_ENABLED thì chặn thêm theo số bộ đã qua (KCS) chuyền kiểm (D2) - đọc trong cùng transaction dưới khoá SKU.
+   * `afterWriteInTx`: người gọi ghi thêm trong CÙNG transaction (vd dòng PackingReport + khoá chống gửi lại).
+   */
+  async recordPackagingEntry(params: {
+    piId: string;
+    itemId: string;
+    boxesPacked: number;
+    note?: string;
+    actorUserId: string;
+    afterWriteInTx?: (tx: PrismaTx, record: { id: bigint }) => Promise<void>;
+  }): Promise<{ response: PackagingResponseDto; packagingRecordId: bigint | null }> {
+    const { piId, itemId, actorUserId } = params;
     const pi = await this.findOneOrThrow(piId);
     const item = await this.findItemOrThrow(pi.id, itemId);
     const productionOrder = await this.findProductionOrderOrThrow(item.id, itemId);
     await assertPiHasActiveFloor(this.prisma, pi.id, 'ghi nhận đóng gói');
     await assertItemNotCancelled(this.prisma, item.id, 'ghi nhận đóng gói');
+    const capBySets = isCkDgQrEnabled();
     // L4 16/11: đọc "đã đóng" + ghi trong 1 transaction dưới khoá theo SKU - 2 lần báo cùng lúc không vượt trần.
-    const packedSoFar = await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(tx, `packaging:${item.id}`);
+    const { soFar: packedSoFar, recordId } = await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, packagingLockKey(item.id));
       const soFar = await this.sumPacked(item.id, tx);
-      if (soFar + dto.boxesPacked > productionOrder.quantity) {
+      if (soFar + params.boxesPacked > productionOrder.quantity) {
         throw new BadRequestException(
-          `Số thùng đóng (${dto.boxesPacked}) vượt quá số còn có thể đóng cho SKU ${itemId} ` +
+          `Số thùng đóng (${params.boxesPacked}) vượt quá số còn có thể đóng cho SKU ${itemId} ` +
             `(tổng ${productionOrder.quantity}, đã đóng ${soFar}, còn ${productionOrder.quantity - soFar})`,
         );
       }
-      await tx.packagingRecord.create({
+      if (capBySets) {
+        const sets = await loadSetsPassed(tx, productionOrder.bomRevisionId, item.id);
+        if (soFar + params.boxesPacked > sets) {
+          throw new BadRequestException(
+            `Chỉ ${sets}/${productionOrder.quantity} bộ đã qua KCS chuyền kiểm (đã đóng ${soFar}, còn đóng được ` +
+              `${packingAvailable({ orderQty: productionOrder.quantity, setsPassed: sets, packedQty: soFar })}) - ` +
+              `không đóng ${params.boxesPacked} bộ vượt số đã qua chuyền kiểm`,
+          );
+        }
+      }
+      const record = await tx.packagingRecord.create({
         data: {
           productionInvoiceItemId: item.id,
-          boxesPacked: dto.boxesPacked,
-          note: dto.note,
+          boxesPacked: params.boxesPacked,
+          note: params.note,
           packedById: actorUserId,
         },
       });
-      return soFar;
+      // `record` có thể rỗng ở test giả lập transaction (bản cũ không đọc kết quả create) - chỉ đọc id khi cần.
+      const createdId = (record as { id: bigint } | undefined)?.id ?? null;
+      if (params.afterWriteInTx && createdId != null) {
+        await params.afterWriteInTx(tx, { id: createdId });
+      }
+      return { soFar, recordId: createdId };
     });
 
     // Chỉ báo khi vừa đóng ĐỦ (không phải mỗi lần ghi) VÀ item có gắn đơn hàng (SalesOrder không có
     // cột "người phụ trách"/người tạo - báo cả role Sales, cùng lý do mục 15.2). Tự nhiên chỉ bắn
     // đúng 1 lần: gọi lại sau khi đã đủ luôn bị chặn 400 ở guard phía trên, không cần dedupe thêm.
-    const justFull = packedSoFar + dto.boxesPacked === productionOrder.quantity;
+    const justFull = packedSoFar + params.boxesPacked === productionOrder.quantity;
     if (justFull && item.salesOrder) {
       await this.notifyPackagingComplete(item.id, {
         piCode: pi.code,
@@ -3689,7 +3742,7 @@ export class ProductionInvoicesService {
       });
     }
 
-    return this.getPackaging(piId, itemId);
+    return { response: await this.getPackaging(piId, itemId), packagingRecordId: recordId };
   }
 
   private async sumPacked(

@@ -6,10 +6,12 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   IssueSlipLineKind,
   IssueSlipStatus,
+  MfgStage,
   Prisma,
   StockLedgerRefType,
 } from '../../generated/prisma/client';
@@ -57,6 +59,15 @@ import {
   SteelIssuesService,
 } from '../steel-issues/steel-issues.service';
 import { CreateIssueSlipDto, IssueSlipLineDto, ListIssueSlipsQueryDto } from './dto/issue-slip.dto';
+import {
+  PreparedFrameHandover,
+  PreparedSegmentHandover,
+  STAGE_HANDOVER_DISABLED_MESSAGE,
+  StageHandoverService,
+} from '../stage-handover/stage-handover.service';
+import { segmentCodeLabel } from '../../common/utils/segment-code.util';
+import { PalletsService, PreparedSlipPallets } from '../pallets/pallets.service';
+import { PALLET_SON_DISABLED_MESSAGE } from '../pallets/pallet-son.config';
 import { allocateSlipCode } from './slip-code.util';
 import {
   assertWorkshopUnchanged,
@@ -80,6 +91,8 @@ const SLIP_INCLUDE = {
     include: {
       material: { select: { code: true, name: true, unit: true } },
       piece: { select: { code: true, name: true } },
+      // Pallet Sơn (24/11/2026): pallet nguồn của dòng xuất đan - in / tra cứu.
+      palletLoads: { select: { pallet: { select: { code: true } } }, orderBy: { palletId: 'asc' } },
     },
   },
 } satisfies Prisma.IssueSlipInclude;
@@ -100,7 +113,9 @@ type PreparedLine =
   | { lineId: bigint; kind: 'WEAVING_MATERIAL'; prepared: PreparedWeavingMaterial }
   | { lineId: bigint; kind: 'PACKAGING'; prepared: PreparedPackagingIssue }
   | { lineId: bigint; kind: 'MATERIAL_YIELD'; prepared: PreparedMaterialYieldIssue }
-  | { lineId: bigint; kind: 'MATERIAL_YIELD_RECIPE'; prepared: PreparedMaterialYieldRecipeIssue };
+  | { lineId: bigint; kind: 'MATERIAL_YIELD_RECIPE'; prepared: PreparedMaterialYieldRecipeIssue }
+  | { lineId: bigint; kind: 'SEGMENT_HANDOVER'; prepared: PreparedSegmentHandover }
+  | { lineId: bigint; kind: 'FRAME_HANDOVER'; prepared: PreparedFrameHandover };
 
 /** Dòng phiếu sau khi kiểm (lúc tạo phiếu) - kèm kho thật của dòng để bắt "mỗi phiếu chỉ 1 kho". */
 interface CheckedLine {
@@ -116,6 +131,11 @@ interface CheckedLine {
   /** Dòng đóng gói / vật tư kèm đan - kiểm tồn khả dụng ngay lúc lập phiếu (RPK.2). */
   packaging?: PreparedPackagingIssue;
   weavingMaterial?: PreparedWeavingMaterial;
+  /** Giao nhận giữa tổ - kiểm trần trong transaction tạo phiếu. */
+  segmentHandover?: PreparedSegmentHandover;
+  frameHandover?: PreparedFrameHandover;
+  /** Pallet Sơn: pallet Sơn xong của dòng xuất đan - gắn vào dòng trong transaction tạo phiếu. */
+  slipPallets?: PreparedSlipPallets;
 }
 
 /** Phiếu xuất đan: điểm đan + (phiếu vật tư) phiếu mảnh cùng chuyến. */
@@ -155,6 +175,10 @@ export class IssueSlipsService {
     private readonly materialYield: MaterialYieldIssuesService,
     private readonly materialYieldRecipe: MaterialYieldRecipeIssuesService,
     private readonly floorAlerts: FloorAlertsService,
+    // Giao nhận giữa tổ (24/11/2026) - dòng SEGMENT_HANDOVER / FRAME_HANDOVER. @Optional: tắt công tắc thì không dùng tới.
+    @Optional() private readonly stageHandover?: StageHandoverService,
+    // Pallet Sơn (24/11/2026) - dòng xuất đan quét pallet. @Optional: tắt công tắc thì không gắn pallet nào.
+    @Optional() private readonly pallets?: PalletsService,
   ) {}
 
   async create(dto: CreateIssueSlipDto, userId: string, scope: string | null) {
@@ -162,6 +186,7 @@ export class IssueSlipsService {
     const checked: CheckedLine[] = [];
     for (const line of dto.lines) checked.push(await this.checkLine(line, scope, header));
     if (header) this.assertNoDuplicateWeavingLines(checked);
+    this.assertNoDuplicateHandoverLines(checked);
     const warehouseIds = new Set(checked.map((c) => c.warehouseId.toString()));
     if (warehouseIds.size > 1) {
       throw new BadRequestException(
@@ -173,6 +198,16 @@ export class IssueSlipsService {
       async (tx) => {
         // Phiếu mảnh xuất đan: chặn vượt định mức / số mảnh còn ở kho ngay lúc cấp số (tính cả
         // phiếu chờ ký khác).
+        // Giao nhận giữa tổ: trần giao (tồn kho Phôi / Hàn trừ phiếu chờ ký khác) - khoá ô / dòng tồn theo thứ
+        // tự cố định giữa các dòng để 2 phiếu lập cùng lúc không khoá chéo.
+        for (const c of [...checked].sort((a, b) =>
+          this.handoverSortKey(a).localeCompare(this.handoverSortKey(b)),
+        )) {
+          if (c.segmentHandover) {
+            await this.handover().assertSegmentCapInTx(tx, c.segmentHandover, null);
+          }
+          if (c.frameHandover) await this.handover().assertFrameCapInTx(tx, c.frameHandover, null);
+        }
         for (const c of checked) {
           if (c.weavingPiece) await this.weaving.assertPieceCapInTx(tx, c.weavingPiece, null);
           // RPK.2: đóng gói + vật tư kèm đan kiểm tồn cả lúc lập (trước đây chỉ lúc xác nhận - lập
@@ -205,10 +240,37 @@ export class IssueSlipsService {
                 barLengthMm: c.dto.kind === IssueSlipLineKind.STEEL ? c.dto.barLengthMm : null,
                 qty: c.dto.qty,
                 note: c.dto.note?.trim() || null,
+                ...(c.segmentHandover
+                  ? {
+                      stage: c.segmentHandover.stage,
+                      segmentSpecId: c.segmentHandover.segmentSpecId,
+                      segmentSteps: c.segmentHandover.segmentSteps,
+                    }
+                  : {}),
+                ...(c.frameHandover ? { stage: MfgStage.SON } : {}),
               })),
             },
           },
         });
+        // Pallet Sơn: gắn pallet vào dòng xuất đan (1 dòng / SKU + mảnh trên phiếu - assertNoDuplicateWeavingLines) - khoá dòng
+        // pallet SAU các khoá trần ở trên.
+        const palletLines = checked.filter((c) => c.slipPallets);
+        if (palletLines.length > 0) {
+          const lines = await tx.issueSlipLine.findMany({
+            where: { slipId: slip.id, kind: IssueSlipLineKind.WEAVING_PIECE },
+            select: { id: true, productionOrderId: true, pieceId: true },
+          });
+          await this.palletsOrThrow().attachToLinesInTx(
+            tx,
+            palletLines.map((c) => {
+              const line = lines.find(
+                (l) => l.productionOrderId === c.productionOrderId && l.pieceId === c.pieceId,
+              );
+              if (!line) throw new ConflictException('Không tìm thấy dòng xuất đan vừa tạo');
+              return { prepared: c.slipPallets!, lineId: line.id };
+            }),
+          );
+        }
         return slip.id;
       },
       { timeout: 20_000 },
@@ -610,6 +672,11 @@ export class IssueSlipsService {
             workshopsAtPrepare.get(id.toString()) ?? null,
           );
         }
+        // Giao nhận giữa tổ: khoá phía cộng của lệnh + mọi ô đoạn của phiếu theo thứ tự cố định TRƯỚC khi ghi dòng nào.
+        const segmentLines = order.flatMap((p) =>
+          p.kind === 'SEGMENT_HANDOVER' ? [p.prepared] : [],
+        );
+        if (segmentLines.length > 0) await this.handover().lockForConfirmInTx(tx, segmentLines);
         const steel: SteelIssueRow[] = [];
         const consumables: MaterialIssueRow[] = [];
         const weavingPieces: WeavingIssueRow[] = [];
@@ -618,6 +685,21 @@ export class IssueSlipsService {
         const recipeIssues: MaterialYieldRecipeIssueRow[] = [];
         for (const p of order) {
           const key = `issue-slip:${slip.id}:line:${p.lineId}`;
+          if (p.kind === 'SEGMENT_HANDOVER') {
+            await this.handover().confirmSegmentInTx(
+              tx,
+              p.prepared,
+              p.lineId,
+              slip.id,
+              userId,
+              key,
+            );
+            continue;
+          }
+          if (p.kind === 'FRAME_HANDOVER') {
+            await this.handover().confirmFrameInTx(tx, p.prepared, p.lineId, slip.id, userId, key);
+            continue;
+          }
           if (p.kind === 'PACKAGING') {
             const issue = await this.packaging.createInTx(tx, p.prepared, userId, key);
             await tx.issueSlipLine.update({
@@ -687,6 +769,8 @@ export class IssueSlipsService {
             await this.issueShared(tx, p, userId, slip.code);
           }
         }
+        // Pallet Sơn (P5): hàng đã rời pallet -> pallet về Trống, lượt xếp giữ lịch sử (gắn dòng phiếu).
+        if (this.pallets) await this.pallets.releaseForSlipInTx(tx, slip.id, 'ISSUED', userId);
         await tx.issueSlip.update({
           where: { id: slip.id },
           data: {
@@ -741,15 +825,28 @@ export class IssueSlipsService {
     this.assertSlipScope(slip, scope);
     // XK8 (rà soát 14/11): update có điều kiện - IssueSlip nay trong danh sách audit-log nên nhật ký ghi được AI huỷ (bảng không
     // có cột người huỷ); updateMany trước đây không được ghi.
+    const data = {
+      status: IssueSlipStatus.CANCELLED,
+      cancelledAt: new Date(),
+      cancelReason: reason.trim(),
+    };
     try {
-      await this.prisma.issueSlip.update({
-        where: { id: slip.id, status: IssueSlipStatus.DRAFT },
-        data: {
-          status: IssueSlipStatus.CANCELLED,
-          cancelledAt: new Date(),
-          cancelReason: reason.trim(),
-        },
-      });
+      const pallets = this.pallets;
+      if (pallets && slip.lines.some((l) => l.kind === IssueSlipLineKind.WEAVING_PIECE)) {
+        // Pallet Sơn: huỷ phiếu chờ ký -> pallet trên phiếu về Sơn xong (quét được vào phiếu khác), cùng transaction với huỷ.
+        await this.prisma.$transaction(async (tx) => {
+          await tx.issueSlip.update({
+            where: { id: slip.id, status: IssueSlipStatus.DRAFT },
+            data,
+          });
+          await pallets.releaseForSlipInTx(tx, slip.id, 'CANCELLED', userId);
+        });
+      } else {
+        await this.prisma.issueSlip.update({
+          where: { id: slip.id, status: IssueSlipStatus.DRAFT },
+          data,
+        });
+      }
     } catch (e) {
       // Không còn dòng đúng trạng thái (P2025) = 1 yêu cầu khác vừa xử lý.
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
@@ -814,6 +911,33 @@ export class IssueSlipsService {
     scope: string | null,
     header: WeavingHeader | null,
   ): Promise<CheckedLine> {
+    if (line.kind === IssueSlipLineKind.SEGMENT_HANDOVER) {
+      const prepared = await this.handover().prepareSegmentHandover(line, scope);
+      return {
+        dto: line,
+        materialId: null,
+        pieceId: null,
+        warehouseId: prepared.warehouse.id,
+        productionInvoiceId: prepared.productionInvoiceId,
+        productionOrderId: null,
+        segmentHandover: prepared,
+      };
+    }
+    if (line.kind === IssueSlipLineKind.FRAME_HANDOVER) {
+      const prepared = await this.handover().prepareFrameHandover(line, scope);
+      return {
+        dto: line,
+        materialId: null,
+        pieceId: prepared.pieceId,
+        warehouseId: prepared.warehouse.id,
+        productionInvoiceId: prepared.productionInvoiceId,
+        productionOrderId: prepared.productionOrderId,
+        frameHandover: prepared,
+      };
+    }
+    if (line.palletIds?.length && line.kind !== IssueSlipLineKind.WEAVING_PIECE) {
+      throw new BadRequestException('Chỉ dòng mảnh xuất đan mới quét pallet');
+    }
     if (line.kind === IssueSlipLineKind.WEAVING_PIECE) {
       if (!line.productionOrderId || !line.pieceId) {
         throw new BadRequestException('Dòng mảnh xuất đan cần SKU (lệnh sản xuất) và mảnh');
@@ -825,6 +949,15 @@ export class IssueSlipsService {
         line.qty,
         scope,
       );
+      // Pallet Sơn (P4): dòng quét từ pallet Sơn xong - số mặc định = số trên pallet, chỉ sửa giảm. Trần xuất đan cũ giữ nguyên.
+      const slipPallets = line.palletIds?.length
+        ? await this.palletsOrThrow().prepareSlipPallets(line.palletIds, {
+            productionOrderId: prepared.order.id,
+            pieceId: prepared.pieceId,
+            qty: line.qty,
+            warehouseId: prepared.warehouse.id,
+          })
+        : undefined;
       return {
         dto: line,
         materialId: null,
@@ -833,6 +966,7 @@ export class IssueSlipsService {
         productionInvoiceId: null,
         productionOrderId: prepared.order.id,
         weavingPiece: prepared,
+        ...(slipPallets ? { slipPallets } : {}),
       };
     }
     if (line.kind === IssueSlipLineKind.MATERIAL_YIELD_RECIPE) {
@@ -974,6 +1108,30 @@ export class IssueSlipsService {
     weavingPointId: bigint | null,
   ): Promise<PreparedLine> {
     const qty = line.qty.toNumber();
+    if (line.kind === IssueSlipLineKind.SEGMENT_HANDOVER) {
+      const prepared = await this.handover().prepareSegmentHandover(
+        {
+          productionInvoiceId: line.productionInvoiceId?.toString(),
+          segmentSpecId: line.segmentSpecId?.toString(),
+          segmentSteps: line.segmentSteps,
+          stage: line.stage ?? undefined,
+          qty,
+        },
+        scope,
+      );
+      return { lineId: line.id, kind: 'SEGMENT_HANDOVER', prepared };
+    }
+    if (line.kind === IssueSlipLineKind.FRAME_HANDOVER) {
+      const prepared = await this.handover().prepareFrameHandover(
+        {
+          productionOrderId: line.productionOrderId?.toString(),
+          pieceId: line.pieceId?.toString(),
+          qty,
+        },
+        scope,
+      );
+      return { lineId: line.id, kind: 'FRAME_HANDOVER', prepared };
+    }
     if (line.kind === IssueSlipLineKind.WEAVING_PIECE) {
       const prepared = await this.weaving.prepareWeavingPiece(
         line.productionOrderId!.toString(),
@@ -1206,11 +1364,13 @@ export class IssueSlipsService {
   private assertLineInSlipWarehouse(p: PreparedLine, slip: SlipRow): void {
     if (this.warehouseIdOfPrepared(p) === slip.warehouseId) return;
     const what =
-      p.kind === 'WEAVING_PIECE'
+      p.kind === 'WEAVING_PIECE' || p.kind === 'FRAME_HANDOVER'
         ? `Mảnh ${p.prepared.pieceName}`
         : p.kind === 'MATERIAL_YIELD_RECIPE'
           ? 'Nguyên liệu theo công thức'
-          : 'Vật tư';
+          : p.kind === 'SEGMENT_HANDOVER'
+            ? `Đoạn ${p.prepared.label}`
+            : 'Vật tư';
     throw new ConflictException(
       `${what} trên phiếu ${slip.code} nay xuất từ kho khác kho ${slip.warehouse.code} của phiếu - huỷ phiếu và lập lại`,
     );
@@ -1246,6 +1406,13 @@ export class IssueSlipsService {
     if (p.kind === 'WEAVING_PIECE') {
       return `p:${pad(p.prepared.order.id)}:${pad(p.prepared.pieceId)}`;
     }
+    if (p.kind === 'FRAME_HANDOVER') {
+      return `p:${pad(p.prepared.productionOrderId)}:${pad(p.prepared.pieceId)}`;
+    }
+    if (p.kind === 'SEGMENT_HANDOVER') {
+      const h = p.prepared;
+      return `s:${pad(h.warehouse.id)}:${pad(h.segmentSpecId)}:${h.segmentSteps}`;
+    }
     if (p.kind === 'STEEL') return `m:${pad(p.prepared.materialId)}`;
     if (p.kind === 'CONSUMABLE') return `m:${pad(p.prepared.materialBigId)}`;
     if (p.kind === 'WEAVING_MATERIAL') return `m:${pad(p.prepared.materialId)}`;
@@ -1254,6 +1421,53 @@ export class IssueSlipsService {
     }
     if (p.kind === 'MATERIAL_YIELD_RECIPE') return `m:${pad(p.prepared.inputMaterial.id)}`;
     return `m:${pad(p.materialId)}`;
+  }
+
+  /** Giao nhận giữa tổ: service giao nhận (chỉ có khi module nạp - luôn có trong app; test cũ dựng service không có). */
+  /** Pallet Sơn - chỉ gọi khi dòng có palletIds. Tắt công tắc / thiếu service -> 400. */
+  private palletsOrThrow(): PalletsService {
+    if (!this.pallets) throw new BadRequestException(PALLET_SON_DISABLED_MESSAGE);
+    this.pallets.assertEnabled();
+    return this.pallets;
+  }
+
+  private handover(): StageHandoverService {
+    if (!this.stageHandover) throw new BadRequestException(STAGE_HANDOVER_DISABLED_MESSAGE);
+    return this.stageHandover;
+  }
+
+  /** Thứ tự kiểm trần các dòng giao lúc lập phiếu (cùng khoá sắp xếp lúc xác nhận); dòng khác ra sau. */
+  private handoverSortKey(c: CheckedLine): string {
+    const pad = (n: bigint) => n.toString().padStart(20, '0');
+    if (c.segmentHandover) {
+      const h = c.segmentHandover;
+      return `0s:${pad(h.warehouse.id)}:${pad(h.segmentSpecId)}:${h.segmentSteps}`;
+    }
+    if (c.frameHandover) {
+      return `0p:${pad(c.frameHandover.productionOrderId)}:${pad(c.frameHandover.pieceId)}`;
+    }
+    return '1';
+  }
+
+  /** Phiếu giao: 1 phiếu không 2 dòng cùng (lệnh, mã đoạn) / cùng (SKU, mảnh) - trần kiểm theo từng dòng, trùng dòng sẽ lọt. */
+  private assertNoDuplicateHandoverLines(checked: CheckedLine[]): void {
+    const seen = new Set<string>();
+    for (const c of checked) {
+      const h = c.segmentHandover;
+      const f = c.frameHandover;
+      const key = h
+        ? `s:${h.productionInvoiceId}:${h.segmentSpecId}:${h.segmentSteps}`
+        : f
+          ? `f:${f.productionOrderId}:${f.pieceId}`
+          : null;
+      if (!key) continue;
+      if (seen.has(key)) {
+        throw new BadRequestException(
+          'Phiếu có 2 dòng giao trùng cùng mã đoạn của 1 lệnh / cùng mảnh của 1 SKU - gộp lại',
+        );
+      }
+      seen.add(key);
+    }
   }
 
   private async orderIdsOfPi(piId: bigint): Promise<bigint[]> {
@@ -1300,6 +1514,25 @@ export class IssueSlipsService {
           })
         : Promise.resolve([]),
     ]);
+    // Giao nhận giữa tổ: nhãn mã đoạn của dòng giao đoạn (chỉ đọc khi phiếu có dòng đó).
+    const specIds = [
+      ...new Set(
+        lines.flatMap((l) => (l.segmentSpecId != null ? [l.segmentSpecId.toString()] : [])),
+      ),
+    ].map((id) => BigInt(id));
+    const specs =
+      specIds.length > 0
+        ? await this.prisma.segmentSpec.findMany({
+            where: { id: { in: specIds } },
+            select: { id: true, cutLengthMm: true, material: { select: { code: true } } },
+          })
+        : [];
+    const segmentSpecs = new Map(
+      specs.map((sp) => [
+        sp.id.toString(),
+        { materialCode: sp.material.code, cutLengthMm: sp.cutLengthMm.toNumber() },
+      ]),
+    );
     const byOrder = new Map(
       orders.map((o) => [
         o.id.toString(),
@@ -1313,7 +1546,7 @@ export class IssueSlipsService {
         },
       ]),
     );
-    return { byPi, byOrder };
+    return { byPi, byOrder, segmentSpecs };
   }
 
   private toDto(slip: SlipRow, codes: Awaited<ReturnType<IssueSlipsService['lenhCodesOf']>>) {
@@ -1342,21 +1575,33 @@ export class IssueSlipsService {
         const order = l.productionOrderId
           ? codes.byOrder.get(l.productionOrderId.toString())
           : null;
+        const spec =
+          l.kind === IssueSlipLineKind.SEGMENT_HANDOVER && l.segmentSpecId != null
+            ? codes.segmentSpecs.get(l.segmentSpecId.toString())
+            : undefined;
+        const segmentLabel = spec
+          ? segmentCodeLabel(spec.materialCode, spec.cutLengthMm, l.segmentSteps)
+          : null;
         return {
           id: l.id.toString(),
           kind: l.kind,
           materialId: l.materialId?.toString() ?? null,
           // Dòng mảnh: mã/tên hàng là mã/tên mảnh (phiếu in cùng cột "Mã vật tư").
-          materialCode: l.material?.code ?? l.piece?.code ?? '',
-          materialName: l.material?.name ?? l.piece?.name ?? '',
+          materialCode: l.material?.code ?? l.piece?.code ?? spec?.materialCode ?? '',
+          materialName: l.material?.name ?? l.piece?.name ?? segmentLabel ?? '',
           unit:
             l.kind === IssueSlipLineKind.STEEL
               ? 'cây'
-              : l.kind === IssueSlipLineKind.WEAVING_PIECE
+              : l.kind === IssueSlipLineKind.WEAVING_PIECE ||
+                  l.kind === IssueSlipLineKind.FRAME_HANDOVER
                 ? 'mảnh'
-                : (l.material?.unit ?? ''),
+                : l.kind === IssueSlipLineKind.SEGMENT_HANDOVER
+                  ? 'đoạn'
+                  : (l.material?.unit ?? ''),
           pieceId: l.pieceId?.toString() ?? null,
           pieceName: l.piece?.name ?? null,
+          // Pallet Sơn: pallet nguồn của dòng xuất đan (rỗng = không theo pallet).
+          palletCodes: (l.palletLoads ?? []).map((x) => x.pallet.code),
           recipeId: l.recipeId?.toString() ?? null,
           productionInvoiceId:
             l.productionInvoiceId?.toString() ?? order?.productionInvoiceId ?? null,
@@ -1369,6 +1614,15 @@ export class IssueSlipsService {
           barLengthMm: l.barLengthMm,
           qty: l.qty.toNumber(),
           note: l.note,
+          // Giao nhận giữa tổ: mã đoạn của dòng giao đoạn (phiếu in cột "Mã đoạn / Mảnh").
+          ...(l.kind === IssueSlipLineKind.SEGMENT_HANDOVER
+            ? {
+                segmentSpecId: l.segmentSpecId?.toString() ?? null,
+                segmentSteps: l.segmentSteps,
+                segmentLabel,
+                cutLengthMm: spec?.cutLengthMm ?? null,
+              }
+            : {}),
         };
       }),
     };

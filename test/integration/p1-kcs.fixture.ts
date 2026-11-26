@@ -394,6 +394,10 @@ export interface WorkshopRef {
   phoiWhId: bigint;
   phoiWhCode: string;
   hanWhId: bigint;
+  hanWhCode: string;
+  /** Có khi makeWorkshop(tag, { son: true }) - kho Sơn gắn xưởng (giao nhận giữa tổ, 24/11/2026). */
+  sonWhId?: bigint;
+  sonWhCode?: string;
 }
 
 interface Ids {
@@ -510,7 +514,7 @@ export class P1World {
     return this.prisma.role.findUniqueOrThrow({ where: { id } });
   }
 
-  async makeWorkshop(tag: string): Promise<WorkshopRef> {
+  async makeWorkshop(tag: string, opts: { son?: boolean } = {}): Promise<WorkshopRef> {
     const ws = await this.prisma.workshop.create({
       data: {
         code: this.code(`WS${tag}`),
@@ -536,7 +540,28 @@ export class P1World {
       },
     });
     this.ids.warehouses.push(phoi.id, han.id);
-    return { id: ws.id, name: ws.name, phoiWhId: phoi.id, phoiWhCode: phoi.code, hanWhId: han.id };
+    const ref: WorkshopRef = {
+      id: ws.id,
+      name: ws.name,
+      phoiWhId: phoi.id,
+      phoiWhCode: phoi.code,
+      hanWhId: han.id,
+      hanWhCode: han.code,
+    };
+    if (opts.son) {
+      const son = await this.prisma.warehouse.create({
+        data: {
+          code: this.code(`SON${tag}`),
+          name: `Kho Son ${tag}`,
+          kind: WarehouseKind.SON,
+          workshopId: ws.id,
+        },
+      });
+      this.ids.warehouses.push(son.id);
+      ref.sonWhId = son.id;
+      ref.sonWhCode = son.code;
+    }
+    return ref;
   }
 
   private async virtualWarehouse(code: string): Promise<bigint> {
