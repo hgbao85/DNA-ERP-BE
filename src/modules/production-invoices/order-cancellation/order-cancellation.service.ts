@@ -207,6 +207,9 @@ const fullName = (u: { firstName: string; lastName: string } | null | undefined)
  *  - câu 5: huỷ được bất kỳ lúc nào trước khi giao hàng (chưa có booking nào xuất SKU này).
  *  - câu 6/7: hàng đã làm ra GIỮ NGUYÊN tại kho công đoạn, chụp số lượng vào wipSnapshot - đợt 2 mới cho lệnh khác dùng lại.
  */
+/** Khoá theo lệnh (PI) của luồng duyệt huỷ - mọi lượt duyệt huỷ SKU của cùng lệnh xếp hàng (lỗi Cao 1, review Sang 23/11). */
+export const orderCancelPiLockKey = (piId: bigint) => `order-cancel:pi:${piId}`;
+
 @Injectable()
 export class OrderCancellationService {
   private readonly logger = new Logger(OrderCancellationService.name);
@@ -886,6 +889,15 @@ export class OrderCancellationService {
     orderId: bigint,
     note: string | undefined,
   ): Promise<ApproveOutcome> {
+    // Lỗi Cao 1 (review Sang 23/11, còn ở 02016a3): khoá theo CẢ LỆNH (PI) trước - 2 lượt duyệt huỷ 2 SKU của cùng lệnh gộp gần như
+    // cùng lúc trước đây mỗi lượt chỉ khoá dòng SKU của mình, đếm "SKU còn chạy" đều thấy SKU kia nên không lượt nào chuyển lệnh
+    // sang CANCELLED (lệnh thành DONE, dòng mua vẫn mở, phương án cũ vẫn APPROVED). Thứ tự khoá: PI -> dòng lệnh.
+    const head = await tx.productionOrder.findUniqueOrThrow({
+      where: { id: orderId },
+      select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+    });
+    const lockPiId = head.productionInvoiceItem.productionInvoiceId;
+    if (lockPiId != null) await lockBusinessKey(tx, orderCancelPiLockKey(lockPiId));
     // Khoá dòng lệnh: chặn 2 lượt duyệt / Kết thúc / Bắt đầu chen giữa lúc đang huỷ.
     await tx.$queryRaw`SELECT "id" FROM "production_orders" WHERE "id" = ${orderId} FOR UPDATE`;
     const order = await tx.productionOrder.findUniqueOrThrow({
@@ -1049,6 +1061,11 @@ export class OrderCancellationService {
   private async afterApproved(outcome: ApproveOutcome, actorId: string): Promise<void> {
     const piId = outcome.productionInvoiceId;
     if (piId == null) return;
+    // Lỗi Cao 1: lượt duyệt huỷ SKU khác của cùng lệnh có thể đã chuyển cả lệnh sang CANCELLED sau khi lượt này commit - đọc lại để
+    // đi đúng nhánh "cả lệnh huỷ" (idempotent), không tính lại phương án / mua cho lệnh đã huỷ hẳn.
+    if (!outcome.invoiceCancelled && (await this.isInvoiceCancelled(piId))) {
+      outcome.invoiceCancelled = true;
+    }
 
     // Mọi lệnh SX còn lại của PI đã Kết thúc (hoặc cả lệnh huỷ) -> nhả giữ chỗ vật tư + giữ đoạn như luồng Kết thúc.
     await this.productionOrders.releaseReservationsIfPiFinished(outcome.itemId);
@@ -1057,6 +1074,9 @@ export class OrderCancellationService {
     await this.segmentProduction.recomputeAfterQc(piId, actorId, `PO_CANCELLED:${outcome.orderId}`);
 
     if (outcome.invoiceCancelled) {
+      // Lỗi Cao 1: báo rõ cho KHSX - tin của lượt duyệt trước (SKU khác) có thể ghi "đang tính lại phương án".
+      outcome.replanNote =
+        'Lệnh không còn SKU nào chạy nên cả lệnh đã huỷ; phương án cắt đang tính lại (nếu có) đã bỏ, dòng mua của lệnh đã đóng';
       await this.step('gỡ phương án cắt chưa duyệt', () =>
         this.prisma.$transaction((tx) => this.cuttingProposals.releaseForInvoice(tx, piId)),
       );
@@ -1066,19 +1086,37 @@ export class OrderCancellationService {
       return;
     }
 
+    // Lỗi Cao 2 (review Sang 23/11): mọi SKU còn lại đã Kết thúc (xưởng làm xong) -> giữ chỗ vừa nhả ở trên, KHÔNG tính lại phương
+    // án / dòng mua (trước đây tính lại tạo lại giữ chỗ, có thể sinh dòng mua mới cho lệnh đã xong, không còn lần Kết thúc nào để nhả).
+    if (!(await this.hasUnfinishedLiveOrder(piId))) {
+      outcome.replanNote =
+        'Các SKU còn lại của lệnh đã Kết thúc nên không tính lại phương án cắt / dòng mua';
+      await this.step('đếm dòng mua đã ký', async () => {
+        outcome.signedLineCount = await this.prisma.purchaseProposalItem.count({
+          where: {
+            proposal: { productionInvoiceId: piId },
+            status: PurchaseProposalStatus.PURCHASING,
+          },
+        });
+      });
+      return;
+    }
+
     // Còn SKU chạy tiếp: tính lại phương án cắt (lệnh gộp, chưa xuất sắt) rồi mới tính lại 3 nguồn mua ngoài sắt - cùng thứ tự
     // với lúc duyệt (sắt trước, ngoài sắt trong onComplete).
     const replan = await this.replanSteelIfPossible(piId, actorId, outcome);
     if (!replan) {
-      await this.step('tính lại dòng mua ngoài sắt', () =>
-        this.productionInvoices.computeNonSteelPurchaseProposals(
+      await this.step('tính lại dòng mua ngoài sắt', async () => {
+        // Lỗi Cao 1: kiểm lại ngay trước khi ghi - lượt duyệt huỷ SKU cuối có thể vừa huỷ cả lệnh (nhánh đó tự đóng dòng mua).
+        if (await this.isInvoiceCancelled(piId)) return;
+        await this.productionInvoices.computeNonSteelPurchaseProposals(
           piId,
           `huỷ lệnh ${outcome.orderId}`,
           {
             lowerSignedOnDrop: true,
           },
-        ),
-      );
+        );
+      });
     }
     await this.step('đếm dòng mua đã ký', async () => {
       outcome.signedLineCount = await this.prisma.purchaseProposalItem.count({
@@ -1124,6 +1162,11 @@ export class OrderCancellationService {
       const created = await this.cuttingProposals.requestForInvoice(piId, {
         requestedById: actorId,
         onComplete: async () => {
+          // Lỗi Cao 1: trong lúc tính, lượt duyệt huỷ SKU cuối của lệnh có thể đã huỷ cả lệnh - không duyệt thay, không tính mua.
+          if (await this.isInvoiceCancelled(piId)) {
+            this.logger.warn(`Bỏ duyệt thay phương án sau ${context}: lệnh ${piId} đã huỷ hẳn`);
+            return;
+          }
           if (proposalId != null) {
             // Duyệt thay lỗi (vd xung đột chiều dài cây) cũng coi như "giữ phương án cũ" - vẫn báo KHSX và vẫn tính lại mua
             // ngoài sắt bên dưới (lỗi ném ra ở đây trước kia bỏ qua cả 2, thử sống 23/11).
@@ -1153,6 +1196,26 @@ export class OrderCancellationService {
       outcome.replanNote = `Chưa tính lại được phương án cắt (${(error as Error).message}) - giữ phương án cũ`;
       return false;
     }
+  }
+
+  private async isInvoiceCancelled(piId: bigint): Promise<boolean> {
+    const pi = await this.prisma.productionInvoice.findUnique({
+      where: { id: piId },
+      select: { status: true },
+    });
+    return pi?.status === ProductionInvoiceStatus.CANCELLED;
+  }
+
+  /** Còn lệnh SX chưa huỷ, chưa Kết thúc trong PI không. */
+  private async hasUnfinishedLiveOrder(piId: bigint): Promise<boolean> {
+    const n = await this.prisma.productionOrder.count({
+      where: {
+        productionInvoiceItem: { productionInvoiceId: piId },
+        status: { not: ProductionOrderStatus.CANCELLED },
+        floorStage: { not: 'FINISHED' },
+      },
+    });
+    return n > 0;
   }
 
   /** Phương án mới không sạch (vượt ngưỡng / vô nghiệm / lỗi) -> giữ phương án cũ, báo KHSX tự quyết "Tính lại" hay giữ. */
