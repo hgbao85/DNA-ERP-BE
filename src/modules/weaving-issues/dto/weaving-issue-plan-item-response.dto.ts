@@ -13,8 +13,11 @@ export class WeavingIssuePlanItemResponseDto {
   @Expose() @ApiProperty() totalQty!: number;
   /** Σ WeavingIssue.qty mọi điểm đan cho mảnh này. */
   @Expose() @ApiProperty() issuedQty!: number;
-  /** totalQty - issuedQty. Cap dùng bởi WeavingIssuesService.create(). */
+  /** totalQty - issuedQty - fromStockQty. */
   @Expose() @ApiProperty() remainingToIssue!: number;
+  /** Khung đan đã tự lấy từ tồn kho thành phẩm (khung của SKU đã huỷ, cùng mảnh + màu dây - Q6 huỷ lệnh 26/11/2026): không phải
+   *  xuất đan phần này, Chuyền kiểm đếm như đã nhận đan. */
+  @Expose() @ApiProperty() fromStockQty!: number;
   /** Số mảnh đang nằm trên phiếu xuất đan chờ ký (chưa trừ). */
   @Expose() @ApiProperty() onDraftQty!: number;
   /** Trần thật để lập phiếu xuất đan (09/11/2026): min(định mức còn lại, mảnh đã qua KCS công đoạn cuối còn ở kho giữ mảnh) - đã

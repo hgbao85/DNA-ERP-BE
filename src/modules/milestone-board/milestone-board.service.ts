@@ -338,7 +338,8 @@ export class MilestoneBoardService {
           (a, w) =>
             a +
             Math.min(
-              w.allocations.reduce((s, x) => s + x.receivedQty, 0),
+              // + khung lấy từ tồn khung đan kho thành phẩm (Q6 huỷ lệnh 26/11/2026) - coi như đã nhận đan
+              w.allocations.reduce((s, x) => s + x.receivedQty, 0) + (w.fromStockQty ?? 0),
               w.totalQty,
             ),
           0,

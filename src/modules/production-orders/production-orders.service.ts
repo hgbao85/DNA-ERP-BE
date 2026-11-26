@@ -1,4 +1,11 @@
-import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import {
   AuditAction,
@@ -24,6 +31,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { SegmentStockService } from '../segment-stock/segment-stock.service';
 import { StockReservationsService } from '../stock/stock-reservations.service';
+import { WovenStockService } from '../woven-stock/woven-stock.service';
 import { ProductionOrderResponseDto } from './dto/production-order-response.dto';
 import { ResyncBomDto } from './dto/resync-bom.dto';
 
@@ -74,6 +82,7 @@ export class ProductionOrdersService {
     private readonly workshopScope: WorkshopScopeService,
     private readonly segmentStockService: SegmentStockService,
     private readonly realtime: RealtimeService,
+    @Optional() private readonly wovenStock?: WovenStockService,
   ) {}
 
   /**
@@ -405,6 +414,8 @@ export class ProductionOrdersService {
         ? 'PRODUCTION_ORDER_FLOOR_STARTED'
         : 'PRODUCTION_ORDER_FLOOR_RESUMED',
     );
+    // Q6 huỷ lệnh (26/11/2026): lệnh vừa chạy cần khung đan đúng mảnh + màu dây đang tồn ở kho thành phẩm -> lấy tồn trước.
+    await this.wovenStock?.allocateForOrder(bigId, userId ?? 'system');
     return dto;
   }
 

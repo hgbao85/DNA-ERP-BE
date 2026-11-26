@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import {
@@ -43,6 +44,7 @@ import { supplierOrderCode } from '../../purchase-proposals/supplier-order-code.
 import { ProductionInvoicesService } from '../production-invoices.service';
 import { SegmentProductionService } from '../../segment-stock/segment-production.service';
 import { StockLedgerService } from '../../stock/stock-ledger.service';
+import { WovenStockService } from '../../woven-stock/woven-stock.service';
 import { WorkshopWarehouseResolver } from '../../stock/workshop-warehouse.util';
 import { DecideCutDto } from './order-cancellation.dto';
 
@@ -224,6 +226,7 @@ export class OrderCancellationService {
     private readonly productionInvoices: ProductionInvoicesService,
     private readonly segmentProduction: SegmentProductionService,
     private readonly stockLedger: StockLedgerService,
+    @Optional() private readonly wovenStock?: WovenStockService,
   ) {}
 
   // ─── Đọc ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -840,6 +843,9 @@ export class OrderCancellationService {
 
     // Sau commit, best-effort (cùng kiểu Kết thúc lệnh): lỗi ở đây chỉ log, không làm hỏng việc huỷ đã ghi.
     await this.afterApproved(outcome, actor.id);
+    // Q6 (anh Nhân 26/11/2026): khung đã đan của SKU vừa huỷ thành tồn khung đan kho thành phẩm - cấp ngay cho lệnh đang chạy cần
+    // đúng mảnh + màu dây (best-effort, lỗi chỉ log).
+    await this.wovenStock?.allocateAll(actor.id);
 
     await this.resolvePending(row.productionOrderId, id);
     for (const batchId of outcome.closedDeadlineBatchIds) {

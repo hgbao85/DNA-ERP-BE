@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment -- expect.objectContaining trả any */
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { CancelledGoodsService } from './cancelled-goods.service';
 
 /**
@@ -39,12 +39,8 @@ describe('CancelledGoodsService.transfer (Q5/Q6)', () => {
       target?: ReturnType<typeof target> | null;
       packed?: number;
       shipped?: number;
-      receipts?: { pieceId: bigint; qty: number }[];
       transfersOut?: { kind: string; pieceId: bigint | null; qty: number }[];
       targetPacked?: number;
-      bomPiece?: { qtyPerUnit: number; isWoven: boolean } | null;
-      targetReceived?: number;
-      targetIn?: number;
     } = {},
   ) {
     const tx = {
@@ -63,25 +59,9 @@ describe('CancelledGoodsService.transfer (Q5/Q6)', () => {
       bookingLine: {
         aggregate: jest.fn().mockResolvedValue({ _sum: { shippedQty: opts.shipped ?? 0 } }),
       },
-      weavingReceipt: {
-        groupBy: jest
-          .fn()
-          .mockResolvedValue(
-            (opts.receipts ?? []).map((r) => ({ pieceId: r.pieceId, _sum: { qty: r.qty } })),
-          ),
-        aggregate: jest.fn().mockResolvedValue({ _sum: { qty: opts.targetReceived ?? 0 } }),
-      },
       cancelledGoodsTransfer: {
         findMany: jest.fn().mockResolvedValue(opts.transfersOut ?? []),
-        aggregate: jest.fn().mockResolvedValue({ _sum: { qty: opts.targetIn ?? 0 } }),
         create: jest.fn().mockResolvedValue({ id: 900n }),
-      },
-      bomPiece: {
-        findFirst: jest
-          .fn()
-          .mockResolvedValue(
-            opts.bomPiece === undefined ? { qtyPerUnit: 1, isWoven: true } : opts.bomPiece,
-          ),
       },
     };
     const prisma = {
@@ -95,7 +75,8 @@ describe('CancelledGoodsService.transfer (Q5/Q6)', () => {
       $transaction: jest.fn((fn: (t: typeof tx) => Promise<unknown>) => fn(tx)),
     };
     const realtime = { publishEntityChanged: jest.fn() };
-    const svc = new CancelledGoodsService(prisma as never, realtime as never);
+    const wovenStock = { loadStock: jest.fn().mockResolvedValue([]) };
+    const svc = new CancelledGoodsService(prisma as never, realtime as never, wovenStock as never);
     // Phần đọc lại sau khi chuyển không phải đối tượng test.
     (svc as unknown as { buildRow: jest.Mock }).buildRow = jest
       .fn()
@@ -114,11 +95,12 @@ describe('CancelledGoodsService.transfer (Q5/Q6)', () => {
     await expect(svc.transfer('u1', '7', packed(1))).rejects.toThrow(ConflictException);
   });
 
-  it('khung đan phải chọn mảnh', async () => {
-    const { svc } = setup();
+  it('Q6 1b (26/11): khung đã đan không chuyển tay - đã vào tồn khung đan kho thành phẩm', async () => {
+    const { svc, tx } = setup();
     await expect(
-      svc.transfer('u1', '7', { kind: 'WOVEN', targetItemId: '106', qty: 1 }),
-    ).rejects.toThrow('phải chọn mảnh');
+      svc.transfer('u1', '7', { kind: 'WOVEN', targetItemId: '106', pieceId: '20', qty: 1 }),
+    ).rejects.toThrow('tồn khung đan');
+    expect(tx.cancelledGoodsTransfer.create).not.toHaveBeenCalled();
   });
 
   it('đích không tồn tại / chính là nguồn -> 404', async () => {
@@ -155,18 +137,6 @@ describe('CancelledGoodsService.transfer (Q5/Q6)', () => {
         packed(1),
       ),
     ).rejects.toThrow('Khác vải nệm');
-  });
-
-  it('khung đan: khác vải nệm vẫn chuyển được (chỉ cần cùng sản phẩm + màu dây)', async () => {
-    const { svc, tx } = setup({
-      target: target({ cushionMaterialId: null }),
-      receipts: [{ pieceId: 20n, qty: 4 }],
-    });
-    await svc.transfer('u1', '7', { kind: 'WOVEN', targetItemId: '106', pieceId: '20', qty: 3 });
-    expect(tx.cancelledGoodsTransfer.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ kind: 'WOVEN', pieceId: 20n, qty: 3, targetItemId: 106n }),
-    });
-    expect(tx.packagingRecord.create).not.toHaveBeenCalled();
   });
 
   it('đã đóng gói: còn = đã đóng − đã giao − đã chuyển; vượt -> 400', async () => {
@@ -208,28 +178,5 @@ describe('CancelledGoodsService.transfer (Q5/Q6)', () => {
     expect(realtime.publishEntityChanged).toHaveBeenCalledWith(
       expect.objectContaining({ entity: 'PRODUCTION_ORDER', entityId: 66n }),
     );
-  });
-
-  it('khung đan: mảnh không phải khung đan trong định mức đích -> 400', async () => {
-    const { svc } = setup({ receipts: [{ pieceId: 20n, qty: 4 }], bomPiece: null });
-    await expect(
-      svc.transfer('u1', '7', { kind: 'WOVEN', targetItemId: '106', pieceId: '20', qty: 1 }),
-    ).rejects.toThrow('không phải khung đan');
-  });
-
-  it('khung đan: vượt số đã nhận còn lại / vượt số đích cần -> 400', async () => {
-    await expect(
-      setup({
-        receipts: [{ pieceId: 20n, qty: 4 }],
-        transfersOut: [{ kind: 'WOVEN', pieceId: 20n, qty: 3 }],
-      }).svc.transfer('u1', '7', { kind: 'WOVEN', targetItemId: '106', pieceId: '20', qty: 2 }),
-    ).rejects.toThrow('Chỉ còn 1 khung');
-    await expect(
-      setup({ receipts: [{ pieceId: 20n, qty: 4 }], targetReceived: 8, targetIn: 1 }).svc.transfer(
-        'u1',
-        '7',
-        { kind: 'WOVEN', targetItemId: '106', pieceId: '20', qty: 2 },
-      ),
-    ).rejects.toThrow(BadRequestException);
   });
 });
