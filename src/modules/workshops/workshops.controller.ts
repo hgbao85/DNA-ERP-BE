@@ -1,8 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { PermissionAction } from '../../generated/prisma/client';
-import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
-import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { WorkshopsService } from './workshops.service';
 
 @ApiTags('Workshops')
@@ -11,11 +8,12 @@ import { WorkshopsService } from './workshops.service';
 export class WorkshopsController {
   constructor(private readonly workshopsService: WorkshopsService) {}
 
+  /**
+   * Danh mục xưởng đang dùng (id, tên, thứ tự) - dữ liệu tham chiếu ít nhạy cảm, MỌI người dùng đã đăng nhập đều đọc được
+   * (JwtAuthGuard toàn cục vẫn bắt đăng nhập). 26/11/2026: trước đây đòi PRODUCTION_INVOICE:VIEW nên tổ trưởng Hàn / Sơn
+   * (han, son) bị 403 mỗi lần mở khung Sản xuất. Quyền xem / sửa LỆNH sản xuất không đổi - chỉ danh mục xưởng được mở.
+   */
   @Get()
-  @RequirePermissions({
-    module: PERMISSION_MODULES.PRODUCTION_INVOICE,
-    action: PermissionAction.VIEW,
-  })
   findAll() {
     return this.workshopsService.findActive();
   }

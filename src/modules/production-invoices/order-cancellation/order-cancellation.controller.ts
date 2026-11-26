@@ -47,10 +47,14 @@ export class OrderCancellationController {
     return this.service.list(query);
   }
 
-  /** Q5/Q6 (anh Nhân 24/11/2026): hàng đã đóng gói / khung đã đan của SKU đã huỷ còn chuyển được + dòng SKU nhận được. */
+  /**
+   * Q5/Q6 (quản lý trả lời 24/11/2026): hàng đã đóng gói / khung đã đan của SKU đã huỷ còn chuyển được + dòng SKU nhận được.
+   * 26/11/2026: Sếp (BOSS) được XEM danh sách (giám sát, chỉ đọc) - trước đây sếp mở màn "Hàng SKU đã huỷ" trong Kế hoạch SX bị
+   * 403. Việc CHUYỂN hàng (transfer-goods bên dưới) vẫn chỉ KHSX và Admin.
+   */
   @Get('goods')
   @RequirePermissions(VIEW)
-  @RequireRole(BUSINESS_ROLES.PRODUCTION_PLANNER, DEFAULT_ROLES.ADMIN)
+  @RequireRole(BUSINESS_ROLES.PRODUCTION_PLANNER, BUSINESS_ROLES.BOSS, DEFAULT_ROLES.ADMIN)
   listGoods() {
     return this.goods.list();
   }

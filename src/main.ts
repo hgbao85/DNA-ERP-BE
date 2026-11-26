@@ -27,7 +27,9 @@ async function bootstrap(): Promise<void> {
   app.use(helmet());
   const allowedOrigins: boolean | string[] =
     corsOrigin === '*' ? true : corsOrigin.split(',').map((origin) => origin.trim());
-  app.enableCors({ origin: allowedOrigins, credentials: true });
+  // exposedHeaders: FE (khác origin) phải ĐỌC được `Retry-After` của ThrottlerGuard (429) để biết chờ bao lâu rồi tự thử lại
+  // (26/11/2026) - mặc định trình duyệt giấu mọi header ngoài danh sách CORS-safelisted.
+  app.enableCors({ origin: allowedOrigins, credentials: true, exposedHeaders: ['Retry-After'] });
   // Socket.IO dùng cùng danh sách origin với REST - xem realtime-io.adapter.ts.
   const redisUrl = configService.get('realtime.redisUrl', { infer: true });
   app.useWebSocketAdapter(new RealtimeIoAdapter(app, allowedOrigins, redisUrl));
