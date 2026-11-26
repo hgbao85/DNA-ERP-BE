@@ -185,7 +185,67 @@ interface SolverBomRow {
   qty_per_part: number;
 }
 
-interface SolverProposeResponse {
+/** Mục 3.5: kết quả rỗng khi đoạn dư trong kho phủ hết nhu cầu (không có gì để cắt). */
+export function emptySolverResponse(): SolverProposeResponse {
+  return {
+    status: 'success',
+    summary: {
+      total_bars_all: 0,
+      total_waste_mm: 0,
+      waste_percentage: 0,
+      any_over_threshold: false,
+      total_solve_seconds: 0,
+    },
+    purchase_plan: [],
+  };
+}
+
+/**
+ * Mục 3.5 (review IT 26/11): loại sắt mà đoạn dư lấy từ kho phủ HẾT (không còn trong bom gửi bộ giải) vẫn có 1 dòng feasible 0 cây,
+ * pieces = các cỡ lấy từ kho (demand 0 - buildPieceSummary ghép "có sẵn"). 0 cây nên không mua / không xuất sắt.
+ */
+export function withStockOnlyLines(
+  response: SolverProposeResponse,
+  use: readonly SegmentStockUse[],
+  segmentSpecLookup: Map<string, bigint>,
+  opts: { machine: 'laser' | 'tu_dong'; thresholdPct: number },
+): SolverProposeResponse {
+  if (use.length === 0) return response;
+  const keyOfSpec = new Map<string, string>();
+  for (const [key, spec] of segmentSpecLookup) keyOfSpec.set(spec.toString(), key);
+  const solvedMaterials = new Set(response.purchase_plan.map((p) => String(p.material)));
+  const sizesByMaterial = new Map<string, Set<number>>();
+  for (const u of use) {
+    const key = keyOfSpec.get(u.segment_spec_id);
+    if (!key || u.qty <= 0) continue;
+    const [material, size] = key.split(':');
+    if (solvedMaterials.has(material)) continue;
+    const set = sizesByMaterial.get(material) ?? new Set<number>();
+    set.add(Number(size));
+    sizesByMaterial.set(material, set);
+  }
+  if (sizesByMaterial.size === 0) return response;
+  const extra: SolverProposeResponse['purchase_plan'] = [...sizesByMaterial].map(
+    ([material, sizes]) => ({
+      material,
+      feasible: true,
+      total_bars: 0,
+      total_waste_mm: 0,
+      waste_percentage: 0,
+      over_threshold: false,
+      max_waste_pct_threshold: opts.thresholdPct,
+      timeout_count: 0,
+      solve_seconds: 0,
+      length_comparison: [],
+      pieces: [...sizes].map((size) => ({ size, demand: 0, produced: 0, surplus: 0 })),
+      cutting_patterns: [],
+      machine: opts.machine,
+    }),
+  );
+  return { ...response, purchase_plan: [...response.purchase_plan, ...extra] };
+}
+
+export interface SolverProposeResponse {
   status: string;
   summary: {
     total_bars_all: number;
@@ -349,7 +409,7 @@ const DETAIL_INCLUDE = {
  * buildInvoiceJob) nhưng phần gọi solver + lưu kết quả dùng chung hoàn toàn.
  */
 /** Câu 14a: 1 ô đoạn dư phương án lấy từ kho Phôi (lưu trong requestParams.segment_stock_use, approve() giữ thật). */
-type SegmentStockUse = {
+export type SegmentStockUse = {
   warehouse_id: string;
   segment_spec_id: string;
   segment_steps: string;
@@ -3565,7 +3625,14 @@ export class CuttingProposalsService {
         ...baseRequestBody,
         auto_scan: allowCustomLength,
       };
-      const response = await callSolver(requestBody);
+      // Mục 3.5 (review IT 26/11): đoạn dư phủ hết mọi cỡ -> không gọi bộ giải (không nhận bom rỗng). Loại sắt được phủ hết vẫn có
+      // dòng "chỉ dùng kho" (0 cây) để Hướng dẫn cắt ghi "cần N, có sẵn N, cắt 0" và lúc duyệt giữ đoạn như thường.
+      const solved: SolverProposeResponse =
+        bomRows.length === 0 ? emptySolverResponse() : await callSolver(requestBody);
+      const response = withStockOnlyLines(solved, segmentStockUse, segmentSpecLookup, {
+        machine: (requestBody as { machine?: 'laser' | 'tu_dong' }).machine ?? 'laser',
+        thresholdPct: requestBody.max_waste_percentage,
+      });
 
       const saved = await this.saveSuccess(
         proposalId,
@@ -4761,10 +4828,35 @@ export class CuttingProposalsService {
           ? await resolver.phoiWarehouseOf(job.stockDemand.workshopId)
           : null;
     if (!warehouse) return null;
+    // Review IT 26/11 mục 3.2: "có sẵn" chỉ cộng phần đoạn dư mà các phương án SẼ BỊ THAY lúc duyệt phương án này (cùng neo SKU /
+    // PI, như bước supersede của approve) đang giữ. Cộng cả phần của phương án SKU khác cùng PI thì lúc duyệt không nhả ra được, báo
+    // "bấm Tính lại" mãi.
+    const self = await this.prisma.cuttingProposal.findUnique({
+      where: { id: proposalId },
+      select: { productionOrderId: true, productionInvoiceId: true },
+    });
+    const anchor = self?.productionOrderId
+      ? { productionOrderId: self.productionOrderId }
+      : self?.productionInvoiceId
+        ? { productionInvoiceId: self.productionInvoiceId }
+        : null;
+    const siblingIds =
+      piId != null && anchor
+        ? (
+            await this.prisma.cuttingProposal.findMany({
+              where: {
+                ...anchor,
+                id: { not: proposalId },
+                status: { in: [CuttingProposalStatus.DRAFT, CuttingProposalStatus.APPROVED] },
+              },
+              select: { id: true },
+            })
+          ).map((p) => p.id)
+        : [];
     const [surplus, own] = await Promise.all([
       this.segmentStock.readSurplusMany(this.prisma, warehouse.id, specIds),
-      piId != null
-        ? this.segmentStock.allocatedFromStockByPi(this.prisma, piId)
+      piId != null && siblingIds.length > 0
+        ? this.segmentStock.allocatedFromStockByPi(this.prisma, piId, siblingIds)
         : Promise.resolve(new Map<string, { warehouseId: bigint; qty: number }>()),
     ]);
     const use: SegmentStockUse[] = [];
@@ -4799,8 +4891,8 @@ export class CuttingProposalsService {
       }
       if (qty > 0) rows.push({ ...row, qty_per_set: 1, qty_per_part: qty });
     }
-    // Đoạn dư phủ hết mọi cỡ: không còn gì để giải - bộ giải không nhận bom rỗng, tính như thường (cắt đủ, không lấy dư).
-    if (rows.length === 0) return null;
+    // Đoạn dư phủ hết mọi cỡ: bom rỗng - nơi gọi không gọi bộ giải, lưu phương án "chỉ dùng kho" (review IT 26/11 mục 3.5; trước
+    // đây trả null rồi cắt + mua đủ, trái quyết định "bắt buộc trừ đoạn tồn").
     this.logger.log(
       `Cutting proposal ${proposalId}: dùng ${use.reduce((t, u) => t + u.qty, 0)} đoạn dư kho Phôi ${warehouse.id} trước khi tính cắt`,
     );
@@ -4818,17 +4910,54 @@ export class CuttingProposalsService {
     const use = (requestParams as { segment_stock_use?: SegmentStockUse[] } | null)
       ?.segment_stock_use;
     if (!use || use.length === 0) return;
+    // Review IT 26/11 mục 3.6: phương án tính TRƯỚC PI không được "Tính lại" (luật 23/11) - thiếu đoạn dư lúc duyệt thì giữ phần còn
+    // lại, phần thiếu thành số cần cắt thêm ở tổ Phôi (số cần đọc theo nhật ký giữ đoạn thật), ghi lại số đã giữ vào requestParams.
+    // Phương án thường vẫn báo "Tính lại" để ra phương án cắt đủ.
+    const precomputed =
+      (await tx.cuttingProposalItem.count({ where: { cuttingProposalId: proposalId } })) > 0;
+    const fail = (msg: string) => new ConflictException(msg);
     if (!this.segmentStock || !piId) {
-      throw new ConflictException(
+      throw fail(
         `Phương án cắt ${proposalId} đã trừ đoạn dư trong kho nhưng không giữ được đoạn (chưa có lệnh sản xuất). Bấm "Tính lại".`,
       );
     }
+    // Mục 3.7: tồn đoạn đã tắt, hoặc kho đã tính khác kho Phôi thật của lệnh -> không giữ được đúng.
+    let skipAll = false;
+    if (!isSegmentStockEnabled()) {
+      if (!precomputed) {
+        throw fail(
+          `Tồn đoạn theo lệnh đang tắt nhưng phương án cắt ${proposalId} đã trừ đoạn dư trong kho - bấm "Tính lại".`,
+        );
+      }
+      skipAll = true;
+    }
+    const phoi = skipAll
+      ? null
+      : await new WorkshopWarehouseResolver(tx).phoiWarehouseOfPi(piId).catch(() => null);
+    const kept: SegmentStockUse[] = [];
+    let short = 0;
+    // Cùng thứ tự khoá ô với SegmentStockService (compareCells: kho rồi cỡ đoạn theo SỐ, rồi bộ công đoạn) - sắp theo chữ thì
+    // id khác số chữ số (9 / 10) khoá ngược chiều, có thể deadlock (review IT 26/11 mục 3.7).
+    const cmpId = (x: string, y: string) => {
+      const a = BigInt(x);
+      const b = BigInt(y);
+      return a < b ? -1 : a > b ? 1 : 0;
+    };
     for (const u of [...use].sort(
       (a, b) =>
-        a.warehouse_id.localeCompare(b.warehouse_id) ||
-        a.segment_spec_id.localeCompare(b.segment_spec_id) ||
-        a.segment_steps.localeCompare(b.segment_steps),
+        cmpId(a.warehouse_id, b.warehouse_id) ||
+        cmpId(a.segment_spec_id, b.segment_spec_id) ||
+        (a.segment_steps < b.segment_steps ? -1 : a.segment_steps > b.segment_steps ? 1 : 0),
     )) {
+      if (skipAll || !phoi || phoi.id.toString() !== u.warehouse_id) {
+        if (!precomputed) {
+          throw fail(
+            `Phương án cắt ${proposalId} trừ đoạn dư ở kho khác kho Phôi của lệnh - bấm "Tính lại" để tính với kho đúng.`,
+          );
+        }
+        short += u.qty;
+        continue;
+      }
       const r = await this.segmentStock.allocateSurplusToOrder(tx, {
         warehouseId: BigInt(u.warehouse_id),
         segmentSpecId: BigInt(u.segment_spec_id),
@@ -4841,10 +4970,30 @@ export class CuttingProposalsService {
         actorId: actorUserId ?? undefined,
       });
       if (r.allocatedQty + 1e-9 < u.qty) {
-        throw new ConflictException(
-          `Đoạn dư trong kho Phôi đã bị lệnh khác dùng (cần ${u.qty}, còn ${r.allocatedQty}) - bấm "Tính lại" để tính với số dư mới.`,
-        );
+        if (!precomputed) {
+          throw fail(
+            `Đoạn dư trong kho Phôi đã bị lệnh khác dùng (cần ${u.qty}, còn ${r.allocatedQty}) - bấm "Tính lại" để tính với số dư mới.`,
+          );
+        }
+        short += u.qty - r.allocatedQty;
       }
+      if (r.allocatedQty > 0) kept.push({ ...u, qty: r.allocatedQty });
+    }
+    if (short > 0) {
+      // Hướng dẫn cắt đọc segment_stock_use: ghi đúng số đã giữ để "có sẵn" khớp thật.
+      await tx.cuttingProposal.update({
+        where: { id: proposalId },
+        data: {
+          requestParams: {
+            ...(requestParams as Record<string, unknown>),
+            segment_stock_use: kept,
+            segment_stock_short: short,
+          } as Prisma.InputJsonValue,
+        },
+      });
+      this.logger.warn(
+        `Phương án cắt tính trước ${proposalId}: thiếu ${short} đoạn dư lúc duyệt - giữ phần còn lại, phần thiếu thành số cần cắt thêm`,
+      );
     }
   }
 

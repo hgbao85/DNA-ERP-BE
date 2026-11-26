@@ -47,7 +47,8 @@ export interface SegmentTargetsResult {
 const nonNeg = (n: number): number => (Number.isFinite(n) && n > 0 ? n : 0);
 
 export function computeSegmentTargets(input: SegmentTargetsInput): SegmentTargetsResult {
-  // 0. Kẹp về >= 0, gộp mã trùng, bỏ số cần <= 0.
+  // 0. Kẹp về >= 0, gộp mã trùng. Mã số cần 0 (vd chỉ SKU đã huỷ dùng) vẫn giữ: đoạn đã qua công đoạn của mã đó thành DƯ đúng mã,
+  //    không bị coi là đoạn dở rồi trừ khỏi kho (review IT 26/11 mục 3.1).
   const cutQty = nonNeg(input.cutPassedQty);
   const remP: Record<string, number> = {};
   for (const t of SEGMENT_SUB_STEPS) remP[t] = nonNeg(input.stepPassedQty[t] ?? 0);
@@ -58,7 +59,6 @@ export function computeSegmentTargets(input: SegmentTargetsInput): SegmentTarget
       throw new Error(`Bộ công đoạn '${v.segmentSteps}' không đúng dạng mã đoạn`);
     }
     const need = nonNeg(v.needQty);
-    if (need <= 0) continue;
     needByCode.set(v.segmentSteps, (needByCode.get(v.segmentSteps) ?? 0) + need);
   }
 
@@ -102,28 +102,37 @@ export function computeSegmentTargets(input: SegmentTargetsInput): SegmentTarget
   // 5-7. Đoạn đang mang công đoạn dở (cận dưới), đoạn còn phải chờ công đoạn của lệnh, đoạn trơn thật.
   const partial = Math.min(Math.max(0, ...SEGMENT_SUB_STEPS.map((t) => remP[t])), remCut);
   const noStep = remCut - partial;
-  const wip = stepVariants.reduce(
+  // Đoạn còn chờ công đoạn của lệnh = phần số cần chưa đủ công đoạn. Đoạn dư theo phương án chỉ tính là đang chờ công đoạn khi đã
+  // CẮT RA thật - tức phần cắt vượt số cần của mọi mã (kể cả trơn); chưa cắt thì không được giữ mất đoạn trơn của lệnh (mục 3.4).
+  const needWip = stepVariants.reduce(
+    (sum, v) => sum + Math.max(0, v.need - (held.get(v.segmentSteps) ?? 0)),
+    0,
+  );
+  const plannedLeft = stepVariants.reduce(
     (sum, v) =>
       sum +
-      Math.max(0, v.need - (held.get(v.segmentSteps) ?? 0)) +
       Math.max(
         0,
         nonNeg(input.plannedSurplus?.[v.segmentSteps] ?? 0) - (surplus.get(v.segmentSteps) ?? 0),
       ),
     0,
   );
+  const wip = needWip + Math.min(plannedLeft, Math.max(0, remCut - needWip - needTron));
   const tronComplete = Math.max(0, noStep - Math.max(0, wip - partial));
 
   // 8. Trơn.
   const tronHeld = Math.min(needTron, tronComplete);
   const tronSurplus = tronComplete - tronHeld;
 
-  const variants: SegmentTargetVariant[] = stepVariants.map((v) => ({
-    segmentSteps: v.segmentSteps,
-    needQty: v.need,
-    heldQty: held.get(v.segmentSteps) ?? 0,
-    surplusQty: surplus.get(v.segmentSteps) ?? 0,
-  }));
+  const variants: SegmentTargetVariant[] = stepVariants
+    .map((v) => ({
+      segmentSteps: v.segmentSteps,
+      needQty: v.need,
+      heldQty: held.get(v.segmentSteps) ?? 0,
+      surplusQty: surplus.get(v.segmentSteps) ?? 0,
+    }))
+    // Mã số cần 0 mà không có dư thì không có gì để ghi.
+    .filter((v) => v.needQty > 0 || v.surplusQty > 0);
   if (needTron > 0 || tronSurplus > 0) {
     variants.push({
       segmentSteps: TRON_SEGMENT_STEPS,

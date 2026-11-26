@@ -119,4 +119,29 @@ describe('loadPlanSurplus', () => {
     });
     expect(await loadPlanSurplus(d as never, [76n])).toEqual([]);
   });
+
+  it('review IT 26/11 mục 3.3: lệnh gộp 2 SKU mỗi SKU cần 8 đoạn 420, kho có 10 -> chia 8 + 2 theo số cần, không dồn 1 SKU', async () => {
+    // mỗi bộ 4 đoạn 420; 2 bộ / SKU -> cần 8 / SKU
+    const d = db({
+      coverage: [order(78n), order(77n)],
+      segments: [],
+      stockLogs: [{ kind: 'SURPLUS_IN', qty: 10, spec: 538n, steps: '' }],
+    });
+    const rows = await loadPlanSurplus(d as never, [77n, 78n]);
+    expect(rows).toEqual([
+      { productionOrderId: 77n, segmentSpecId: 538n, qty: 8, fromStockSteps: '' },
+      { productionOrderId: 78n, segmentSpecId: 538n, qty: 2, fromStockSteps: '' },
+    ]);
+  });
+
+  it('mục 3.3: SKU đã huỷ không nhận phần lấy từ kho', async () => {
+    const d = db({
+      coverage: [order(77n, 'CANCELLED'), order(78n)],
+      segments: [],
+      stockLogs: [{ kind: 'SURPLUS_IN', qty: 5, spec: 538n, steps: '' }],
+    });
+    expect(await loadPlanSurplus(d as never, [77n, 78n])).toEqual([
+      { productionOrderId: 78n, segmentSpecId: 538n, qty: 5, fromStockSteps: '' },
+    ]);
+  });
 });
