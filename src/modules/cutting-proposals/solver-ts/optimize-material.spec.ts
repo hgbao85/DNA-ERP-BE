@@ -177,12 +177,14 @@ describe('optimizeMaterial', () => {
     // 41 cây 0,17 %. Nay gộp thêm tập ĐẦY ĐỦ ở ngưỡng thấp nhất còn liệt kê hết.
     const sizes = [470, 445, 20, 430, 425, 460, 190];
     const demands = [120, 120, 120, 120, 60, 60, 120];
-    const base = { timeLimit: 20, maxSurplus: 10 };
+    // timeLimit 60 (CI 26/11): máy rảnh giải ~5 s, CI chạy song song nhiều file nặng thì vượt 20 s -> "hết giờ chưa có nghiệm"
+    // làm test đỏ dù code đúng. Test kiểm việc gộp tập kiểu cắt, không kiểm tốc độ.
+    const base = { timeLimit: 60, maxSurplus: 10 };
     const wide = optimizeMaterial(highs, sizes, demands, [6000], TRIM, KERF, {
       ...base,
       maxWasteRatio: 1.0,
     });
-    expect(wide.feasible).toBe(true);
+    expect(wide.feasible ? 'ok' : wide.reason).toBe('ok');
     if (!wide.feasible) return;
     expect(wide.patterns_truncated).toBe(true); // vẫn báo thật: ở 100 % chưa liệt kê hết
     expect(wide.stats.enum_ratio_used).toBeDefined();
@@ -374,6 +376,23 @@ describe('optimizeMaterial', () => {
       expect(r.waste_pct).toBeLessThan(1);
       const p = r.plan[0];
       expect(1500 + p.waste_per_bar).toBeGreaterThan(100);
+    });
+
+    it('lastBarOnly (lượt cây mua cuối): bỏ lần giải cắt thường, ra đúng nghiệm như lastBarFill', () => {
+      const on = optimizeMaterial(highs, [60], [150], [6000], TRIM, KERF, {
+        ...opts,
+        lastBarFill: true,
+      });
+      const only = optimizeMaterial(highs, [60], [150], [6000], TRIM, KERF, {
+        ...opts,
+        lastBarFill: true,
+        lastBarOnly: true,
+      });
+      expect(on.feasible && only.feasible).toBe(true);
+      if (!on.feasible || !only.feasible) return;
+      expect(only.total_bars).toBe(on.total_bars);
+      expect(only.produced).toEqual(on.produced);
+      expect(only.stats?.last_bar_filled).toBe(true);
     });
 
     it('cắt thường đã ra nghiệm thì giữ nguyên (không thêm cây mua cuối)', () => {

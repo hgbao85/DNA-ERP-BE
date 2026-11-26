@@ -33,10 +33,12 @@ export interface ProposeRequest {
   >;
   max_surplus?: number | string;
   /**
-   * Anh Nhân câu 9-11 (24/11/2026): cây mua cuối cắt khúc thừa thành đoạn dư, không giới hạn max_surplus (xem
-   * OptimizeMaterialOptions.lastBarFill). ERP luôn gửi true; thiếu = tắt (giữ hành vi cũ cho test đối chiếu).
+   * Câu 9-11 (24/11/2026): cây mua cuối cắt khúc thừa thành đoạn dư, không giới hạn max_surplus (xem
+   * OptimizeMaterialOptions.lastBarFill). ERP gửi theo công tắc tồn đoạn; thiếu = tắt (giữ hành vi cũ cho test đối chiếu).
    */
   last_bar_fill?: boolean;
+  /** Hạn chót tuyệt đối (Date.now() ms) cho lượt cây mua cuối - xem OneMaterialOptions.deadlineAtMs. Thiếu = không giới hạn thêm. */
+  deadline_at_ms?: number;
   auto_scan?: boolean;
   stop_on_first?: boolean;
   min_length?: number | string;

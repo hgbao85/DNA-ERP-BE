@@ -33,7 +33,7 @@ import {
   assertOrderNotCancelled,
   isOrderCancelledById,
   isCutContinuedForOrder,
-  piHasCancelledSku,
+  piSteelReceiveExempt,
   assertPiHasActiveFloor,
   assertPiHasActiveFloorLocked,
 } from '../../common/utils/floor-gate.util';
@@ -53,7 +53,7 @@ import {
   writeFloorReport,
 } from '../../common/utils/floor-report.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
-import { NOT_CANCELLED_ORDER } from '../../common/utils/cancelled-order.util';
+import { CUT_CONTINUED_ORDER, NOT_CANCELLED_ORDER } from '../../common/utils/cancelled-order.util';
 import { paginate } from '../../common/utils/paginate.util';
 import { isFamilyScope } from '../../common/utils/warehouse-family.util';
 import { WorkshopWarehouseResolver } from '../stock/workshop-warehouse.util';
@@ -248,6 +248,9 @@ type OrderForBom = {
   floorStage: ProductionOrderFloorStage;
   /** Huỷ lệnh theo SKU (23/11/2026). Mock cũ có thể thiếu -> coi như chưa huỷ. */
   status?: ProductionOrderStatus;
+  /** Q3: SKU đã huỷ mà QLSX cho cắt tiếp - có số cần cũ trong tiến độ Cắt (màn quét báo được), không cộng vào số của cỡ đoạn,
+   *  không có ở công đoạn phụ (review IT 26/11 mục 2.1). */
+  cutContinued?: boolean;
 };
 
 /// Kho vật lý duy nhất liên quan (cat_sat_iea chỉ tính vật tư sắt) - cùng giá trị
@@ -883,8 +886,8 @@ export class SteelIssuesService {
         `Phiếu xuất sắt ${id} đang ở trạng thái ${issue.status} - chỉ ISSUED mới xác nhận nhận được`,
       );
     }
-    // Q3 (24/11/2026): PI có SKU đã huỷ thì tổ cắt vẫn xác nhận nhận được (lệnh có thể không còn SKU chạy).
-    if (!(await piHasCancelledSku(this.prisma, issue.productionInvoiceId))) {
+    // Q3 (24/11/2026): PI có SKU huỷ được cắt tiếp, hoặc đã huỷ hết SKU - tổ cắt vẫn xác nhận nhận được (mục 2.4 review IT 26/11).
+    if (!(await piSteelReceiveExempt(this.prisma, issue.productionInvoiceId))) {
       await assertPiHasActiveFloor(this.prisma, issue.productionInvoiceId, 'xác nhận nhận sắt');
     }
     const receivedBarCount = receivedBarCountInput ?? issue.barCount;
@@ -2213,16 +2216,18 @@ export class SteelIssuesService {
     });
     // Huỷ lệnh theo SKU (23/11/2026): bỏ lệnh đã huỷ khỏi số cần. Đoạn đã làm của SKU huỷ vẫn nạp (dòng theo PI) - thành
     // nhóm riêng trong byOrder, không cộng vào số của cỡ đoạn (xem buildPhoiProgress).
+    // Q3 (review IT 26/11 mục 2.1): SKU đã huỷ mà QLSX cho cắt tiếp cũng nạp (cutContinued) - màn quét lấy cỡ đoạn từ đây.
     const orderRows = await this.prisma.productionOrder.findMany({
       where: {
         productionInvoiceItem: { productionInvoiceId: { in: invoiceIds } },
-        ...NOT_CANCELLED_ORDER,
+        OR: [NOT_CANCELLED_ORDER, CUT_CONTINUED_ORDER],
       },
       select: {
         id: true,
         bomRevisionId: true,
         quantity: true,
         floorStage: true,
+        status: true,
         productionInvoiceItem: { select: { productionInvoiceId: true } },
       },
     });
@@ -2235,6 +2240,7 @@ export class SteelIssuesService {
         bomRevisionId: o.bomRevisionId,
         quantity: o.quantity,
         floorStage: o.floorStage,
+        ...(o.status === ProductionOrderStatus.CANCELLED ? { cutContinued: true } : {}),
       });
       ordersByPi.set(key, arr);
     }
@@ -2470,7 +2476,8 @@ export class SteelIssuesService {
           })),
       });
       step.set(piKey, {
-        orders,
+        // Công đoạn phụ: chỉ SKU còn chạy (cắt tiếp SKU huỷ chỉ là Cắt - mục 2.5).
+        orders: orders.filter((o) => !o.cutContinued),
         bomPieces: piBomPieces,
         pieceBoms: piPieceBoms,
         issues: piIssues,
@@ -2550,7 +2557,10 @@ export class SteelIssuesService {
 
     // Khoá (cỡ đoạn, SKU) - SKU 'none' = đợt/đánh giá CŨ chưa gắn SKU ở PI NHIỀU SKU (PI 1 SKU: tính cho SKU duy nhất).
     const orderKey = (id: bigint | null | undefined) => phoiOrderKey(orders, id);
-    const liveOrderKeys = new Set(orders.map((o) => o.id.toString()));
+    const liveOrderKeys = new Set(
+      orders.filter((o) => !o.cutContinued).map((o) => o.id.toString()),
+    );
+    const continuedKeys = new Set(orders.filter((o) => o.cutContinued).map((o) => o.id.toString()));
     const planSurplus = await loadPlanSurplus(
       this.prisma,
       orders.map((o) => o.id),
@@ -2703,6 +2713,7 @@ export class SteelIssuesService {
             physicalLeft: none ? null : n.physicalLeft,
             openQty: openBySpecOrder.get(`${specKey}:${ok}`) ?? 0,
             awaitingQcQty: awaitingBySpecOrder.get(`${specKey}:${ok}`) ?? 0,
+            ...(continuedKeys.has(ok) ? { cutContinued: true } : {}),
           }),
         );
       }
@@ -2818,7 +2829,8 @@ export class SteelIssuesService {
       for (const sg of item.segments) {
         let segRemaining = 0;
         for (const o of sg.byOrder) {
-          if (o.productionOrderId === null) continue;
+          // Cắt tiếp SKU huỷ dùng sắt đã xuất, không phải xin thêm sắt.
+          if (o.productionOrderId === null || o.cutContinued) continue;
           const remaining = Math.max(0, o.required - (o.done - o.failed));
           segRemaining += remaining;
           recutSegments += Math.min(o.extraNeed, remaining);

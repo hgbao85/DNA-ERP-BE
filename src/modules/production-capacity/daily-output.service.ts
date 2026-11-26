@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { MfgStage } from '../../generated/prisma/client';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
+import { orderNotCancelledNullable } from '../../common/utils/cancelled-order.util';
 import { vnDayKey, vnDayStart } from '../../common/utils/floor-stats.util';
 import { addDays, isDayKey } from '../../common/utils/timeline-suggest.util';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
@@ -245,6 +246,8 @@ export class DailyOutputService {
               reversedBy: { is: null },
               createdAt: { lt: endOfDay },
               productionInvoiceId: { in: piBigIds },
+              // Review IT 26/11 mục 2.6: bỏ báo cắt của SKU đã huỷ (cắt tiếp) - số cần chỉ gồm SKU còn chạy. Đợt cũ chưa gắn SKU giữ.
+              OR: [{ cutBundleId: null }, { cutBundle: { is: orderNotCancelledNullable() } }],
             },
             select: {
               createdAt: true,
@@ -261,12 +264,14 @@ export class DailyOutputService {
             vnDayKey(rp.createdAt),
             rp.lines.reduce((a, l) => a + l.qty, 0),
           );
-        // Tổng cần của PI = Σ required mọi đoạn CẮT (không gồm công đoạn phụ sau cắt).
+        // Tổng cần của PI = Σ (required + đoạn dư theo phương án) mọi đoạn CẮT (không gồm công đoạn phụ sau cắt) - báo đoạn dư theo
+        // phương án cũng là sản lượng thật, không cộng vào mẫu thì tỷ lệ vượt 100 % (mục 2.6).
         const totalOfPi = (pi: string): number | null => {
           const mats = progress[pi];
           if (!mats) return null; // hàm batch nuốt lỗi từng PI -> thiếu khoá = nguồn lỗi
           return mats.reduce(
-            (a, m) => a + (m.segments ?? []).reduce((s, g) => s + g.required, 0),
+            (a, m) =>
+              a + (m.segments ?? []).reduce((s, g) => s + g.required + (g.planSurplus ?? 0), 0),
             0,
           );
         };

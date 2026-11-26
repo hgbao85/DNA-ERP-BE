@@ -1,3 +1,4 @@
+import { steelReceiveExemptPiWhere } from '../../common/utils/floor-gate.util';
 import {
   BadRequestException,
   ConflictException,
@@ -767,7 +768,12 @@ describe('FloorScanService', () => {
       });
       expect(firstArg<{ where: unknown }>(prisma.steelIssue.findMany).where).toEqual({
         status: 'ISSUED',
-        productionInvoice: { items: { some: { productionOrder: { floorStage: 'ACTIVE' } } } },
+        productionInvoice: {
+          OR: [
+            { items: { some: { productionOrder: { floorStage: 'ACTIVE' } } } },
+            steelReceiveExemptPiWhere(),
+          ],
+        },
       });
     });
 

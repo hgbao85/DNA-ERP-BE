@@ -239,6 +239,11 @@ export async function propose(body: ProposeRequest): Promise<ProposeResponse> {
   const leftoversByMaterial = parseLeftoversByMaterial(body.leftover_stock_by_material);
   const maxSurplus = Math.max(0, toInt(body.max_surplus ?? 10, 10));
   const lastBarFill = body.last_bar_fill === true;
+  // Hạn chót tuyệt đối (Date.now() ms) cho lượt cây mua cuối - xem OneMaterialOptions.deadlineAtMs.
+  const deadlineAtMs =
+    typeof body.deadline_at_ms === 'number' && Number.isFinite(body.deadline_at_ms)
+      ? body.deadline_at_ms
+      : undefined;
   const autoScan = Boolean(body.auto_scan ?? false);
   const stopOnFirst = Boolean(body.stop_on_first ?? false);
   const timeLimitSec = Math.max(5, toFloat(body.time_limit_seconds ?? 480, 480));
@@ -369,6 +374,7 @@ export async function propose(body: ProposeRequest): Promise<ProposeResponse> {
         ...(!gBundle && laserMinTailMm > 0 ? { laserMinTailMm } : {}),
         ...(leftoversByMaterial[key] ? { leftovers: leftoversByMaterial[key] } : {}),
         ...(lastBarFill ? { lastBarFill: true } : {}),
+        ...(lastBarFill && deadlineAtMs !== undefined ? { deadlineAtMs } : {}),
       },
     );
     const solveSeconds = Math.round(((performance.now() - t0) / 1000) * 100) / 100;

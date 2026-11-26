@@ -15,6 +15,19 @@ import { ExternalApiHttpError } from '../external/external-api.service';
 import { SolverJobPriority, SolverWorkerHost } from './solver-ts/solver-worker-host';
 import { ProposeResponse } from './solver-ts/types';
 
+/** Đệm trước khi hết thời gian chờ: bộ giải trả kết quả kịp, không bị ngắt giữa chừng. */
+export const SOLVER_DEADLINE_MARGIN_MS = 2_000;
+
+/**
+ * Review IT 26/11 mục 2: gắn hạn chót tuyệt đối (`deadline_at_ms`) = lúc hết thời gian chờ − đệm. Lượt cây mua cuối của bộ giải chỉ
+ * dùng phần còn lại tới hạn này (time_limit_seconds là cho TỪNG lần giải, 2 lượt có thể vượt thời gian chờ). Nơi gọi đã đặt hạn thì giữ.
+ */
+export function withDeadline(body: unknown, expiresAtMs: number): unknown {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return body;
+  if ('deadline_at_ms' in body) return body;
+  return { ...body, deadline_at_ms: expiresAtMs - SOLVER_DEADLINE_MARGIN_MS };
+}
+
 /**
  * Lớp gọi bộ giải "Đề xuất thanh sắt" - 1 hàm `propose(body, timeoutMs)`.
  *
@@ -103,7 +116,7 @@ export class SolverClientService implements OnModuleInit, OnModuleDestroy {
     const startedAt = Date.now();
     let res: ProposeResponse;
     try {
-      res = await this.host.run(body, timeoutMs, priority);
+      res = await this.host.run(withDeadline(body, startedAt + timeoutMs), timeoutMs, priority);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       this.logger.error(

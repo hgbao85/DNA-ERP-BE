@@ -89,7 +89,18 @@ export interface OneMaterialOptions {
   leftovers?: Array<{ length: number; count: number }>;
   /** Câu 9-11 (24/11/2026): xem OptimizeMaterialOptions.lastBarFill - đi theo mọi lần giải (chuẩn, dò, bestAchievable). */
   lastBarFill?: boolean;
+  /**
+   * Hạn chót tuyệt đối của cả lời gọi (Date.now() ms, nơi gọi truyền = lúc hết thời gian chờ HTTP trừ phần đệm). Chỉ lượt cây mua
+   * cuối dùng: mỗi lần giải của lượt đó chỉ được phần thời gian còn lại, còn < 1 s thì bỏ lượt (review IT 26/11 mục 2: 2 lượt mỗi
+   * lượt trọn time_limit_seconds có thể vượt thời gian chờ và bị ngắt). Lượt cắt thường giữ nguyên như trước.
+   */
+  deadlineAtMs?: number;
+  /** NỘI BỘ: lượt cây mua cuối - mỗi lần giải bỏ bước cắt thường (lượt trước đã giải), áp `deadlineAtMs`. */
+  lastBarOnly?: boolean;
 }
+
+/** Lượt cây mua cuối cần ít nhất chừng này giây còn lại trước hạn chót mới chạy. */
+export const LAST_BAR_MIN_REMAINING_SEC = 1;
 
 export type OptimizeMaterialFn = typeof optimizeMaterial;
 
@@ -303,7 +314,22 @@ function optimizeOneMaterialAtCap(
   };
   const optimize: OptimizeMaterialFn = (h, cl, dm, sl, t, k, o) => {
     const w = withLeftovers(sl, o);
-    return baseOptimize(h, cl, dm, w.sl, t, k, { ...w.o, ...machineOpts });
+    if (!opts.lastBarOnly) return baseOptimize(h, cl, dm, w.sl, t, k, { ...w.o, ...machineOpts });
+    // Lượt cây mua cuối: giới hạn mỗi lần giải theo phần còn lại của hạn chót chung.
+    let timeLimit = w.o?.timeLimit;
+    if (opts.deadlineAtMs !== undefined) {
+      const left = (opts.deadlineAtMs - Date.now()) / 1000;
+      if (left < LAST_BAR_MIN_REMAINING_SEC) {
+        return { feasible: false, timed_out: true, reason: 'Hết hạn chung của lời gọi bộ giải.' };
+      }
+      timeLimit = Math.min(timeLimit ?? left, left);
+    }
+    return baseOptimize(h, cl, dm, w.sl, t, k, {
+      ...w.o,
+      ...machineOpts,
+      lastBarOnly: true,
+      ...(timeLimit !== undefined ? { timeLimit } : {}),
+    });
   };
   const optimizeNoRule: OptimizeMaterialFn = (h, cl, dm, sl, t, k, o) => {
     const w = withLeftovers(sl, o);
@@ -570,6 +596,12 @@ export function optimizeOneMaterial(
   if (plain.feasible && !plain.over_waste) return plain;
   // Hết giờ chưa kết luận ở cắt thường: báo như cũ, không lấy cây mua cuối thay cho phương án chưa giải xong.
   if (!plain.feasible && plain.timed_out) return plain;
+  // Hạn chót chung (mục 2 review IT 26/11): lượt cắt thường đã dùng gần hết thời gian thì không chạy lượt cây mua cuối.
+  if (
+    opts.deadlineAtMs !== undefined &&
+    (opts.deadlineAtMs - Date.now()) / 1000 < LAST_BAR_MIN_REMAINING_SEC
+  )
+    return plain;
   // cheapFail: lượt này vô nghiệm thì trả kết quả cắt thường (lý do + gợi ý đã tính), khỏi chạy lại bestAchievable.
   const filled = optimizeOneMaterialPass(
     highs,
@@ -582,6 +614,7 @@ export function optimizeOneMaterial(
     {
       ...opts,
       cheapFail: true,
+      lastBarOnly: true,
     },
   );
   if (!filled.feasible) return plain;

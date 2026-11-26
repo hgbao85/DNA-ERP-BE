@@ -1,5 +1,10 @@
 import { ConflictException } from '@nestjs/common';
-import { ProductionOrderFloorStage } from '../../generated/prisma/client';
+import {
+  Prisma,
+  ProductionOrderFloorStage,
+  ProductionOrderStatus,
+} from '../../generated/prisma/client';
+import { CUT_CONTINUED_ORDER, NOT_CANCELLED_ORDER } from './cancelled-order.util';
 import type { PrismaTx } from '../../prisma/prisma.service';
 
 /**
@@ -201,15 +206,30 @@ export async function isCutContinuedForOrder(
 }
 
 /**
- * Q3 theo PI: PI có SKU đã huỷ. Tổ cắt vẫn xác nhận nhận sắt đã xuất được (cắt tiếp hay nhập trả đều cần sắt đã về tổ) - trước đây
- * lệnh huỷ hết thì phiếu xuất chưa nhận kẹt mãi (cổng xưởng chặn).
+ * Q3 theo PI: tổ cắt xác nhận nhận sắt đã xuất được dù PI không có SKU nào đang chạy (chưa Bắt đầu / đã Tạm dừng / đã huỷ hết) khi:
+ * PI có SKU huỷ mà QLSX cho cắt tiếp, hoặc PI đã huỷ hết SKU (cắt tiếp hay nhập trả đều cần sắt đã về tổ). Review IT 26/11 mục 2.4:
+ * trước đây chỉ cần 1 SKU huỷ là bỏ cổng cho cả lệnh, kể cả SKU còn lại đang tạm dừng.
  */
-export async function piHasCancelledSku(
+export function steelReceiveExemptPiWhere() {
+  return {
+    OR: [
+      { items: { some: { productionOrder: CUT_CONTINUED_ORDER } } },
+      {
+        AND: [
+          { items: { some: { productionOrder: { status: ProductionOrderStatus.CANCELLED } } } },
+          { items: { none: { productionOrder: NOT_CANCELLED_ORDER } } },
+        ],
+      },
+    ],
+  } satisfies Prisma.ProductionInvoiceWhereInput;
+}
+
+export async function piSteelReceiveExempt(
   prisma: PrismaTx,
   productionInvoiceId: bigint,
 ): Promise<boolean> {
-  const row = await prisma.productionOrder.findFirst({
-    where: { status: 'CANCELLED', productionInvoiceItem: { productionInvoiceId } },
+  const row = await prisma.productionInvoice.findFirst({
+    where: { id: productionInvoiceId, ...steelReceiveExemptPiWhere() },
     select: { id: true },
   });
   return row != null;
