@@ -808,3 +808,49 @@ describe('cây mua cuối: cắt thường trước, cây mua cuối sau (review
     expect(r.timed_out).toBe(true);
   });
 });
+
+describe('hạn chót chung cho 2 lượt (review IT 26/11 mục 2)', () => {
+  const highs = {} as Highs;
+  const base = { autoScan: false, lastBarFill: true, timeLimitSec: 30 };
+  type Call = { fill: boolean; only: boolean; timeLimit: number | undefined };
+  const fake =
+    (calls: Call[]): OptimizeMaterialFn =>
+    (_h, _s, _d, stock, _t, _k, o) => {
+      calls.push({ fill: !!o?.lastBarFill, only: !!o?.lastBarOnly, timeLimit: o?.timeLimit });
+      return o?.lastBarFill
+        ? {
+            ...ok(stock[0], 2, 0.5),
+            stats: { ...ok(stock[0], 2, 0.5).stats, last_bar_filled: true },
+          }
+        : { feasible: false, reason: 'vô nghiệm' };
+    };
+
+  it('lượt cây mua cuối chỉ được phần thời gian còn lại, bỏ bước cắt thường (lastBarOnly)', () => {
+    const calls: Call[] = [];
+    const r = optimizeOneMaterial(highs, [60], [150], [6000], 10, 1, 1.0, {
+      ...base,
+      deadlineAtMs: Date.now() + 10_000,
+      optimizeMaterialImpl: fake(calls),
+    });
+    expect(r.feasible).toBe(true);
+    const fill = calls.filter((c) => c.fill);
+    expect(fill.length).toBeGreaterThan(0);
+    for (const c of fill) {
+      expect(c.only).toBe(true);
+      expect(c.timeLimit).toBeLessThanOrEqual(10);
+    }
+    // lượt cắt thường giữ nguyên giới hạn mỗi lần giải
+    expect(calls.filter((c) => !c.fill).every((c) => c.timeLimit === 30)).toBe(true);
+  });
+
+  it('hết hạn chung sau lượt cắt thường thì không chạy lượt cây mua cuối, trả kết quả cắt thường', () => {
+    const calls: Call[] = [];
+    const r = optimizeOneMaterial(highs, [60], [150], [6000], 10, 1, 1.0, {
+      ...base,
+      deadlineAtMs: Date.now() + 500,
+      optimizeMaterialImpl: fake(calls),
+    });
+    expect(r.feasible).toBe(false);
+    expect(calls.some((c) => c.fill)).toBe(false);
+  });
+});

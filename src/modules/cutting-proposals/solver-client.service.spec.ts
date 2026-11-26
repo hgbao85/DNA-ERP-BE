@@ -2,7 +2,11 @@ import { ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '../../config/configuration';
 import { ExternalApiHttpError } from '../external/external-api.service';
-import { SolverClientService } from './solver-client.service';
+import {
+  SOLVER_DEADLINE_MARGIN_MS,
+  SolverClientService,
+  withDeadline,
+} from './solver-client.service';
 import {
   SolverWorkerHost,
   SolverWorkerMemoryError,
@@ -82,7 +86,9 @@ describe('SolverClientService', () => {
     it('trả kết quả của worker; timeout chuyển nguyên vẹn', async () => {
       const svc = build(() => Promise.resolve(okResponse));
       await expect(svc.propose({ b: 2 }, 777)).resolves.toBe(okResponse);
-      expect(svc.fakeHost.calls).toEqual([{ body: { b: 2 }, timeoutMs: 777 }]);
+      expect(svc.fakeHost.calls).toEqual([
+        { body: { b: 2, deadline_at_ms: expect.any(Number) as number }, timeoutMs: 777 },
+      ]);
     });
 
     it('propose() trả status=error 400 -> ExternalApiHttpError(400, body Django)', async () => {
@@ -140,5 +146,16 @@ describe('SolverClientService', () => {
       await svc.onModuleDestroy();
       expect(svc.fakeHost.closed).toBe(true);
     });
+  });
+});
+
+describe('withDeadline (review IT 26/11 mục 2)', () => {
+  it('gắn deadline_at_ms = hết thời gian chờ − đệm; nơi gọi đã đặt thì giữ; không phải object thì bỏ qua', () => {
+    expect(withDeadline({ a: 1 }, 10_000)).toEqual({
+      a: 1,
+      deadline_at_ms: 10_000 - SOLVER_DEADLINE_MARGIN_MS,
+    });
+    expect(withDeadline({ deadline_at_ms: 5 }, 10_000)).toEqual({ deadline_at_ms: 5 });
+    expect(withDeadline(null, 10_000)).toBeNull();
   });
 });

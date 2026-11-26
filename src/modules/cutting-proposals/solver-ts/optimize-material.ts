@@ -63,6 +63,11 @@ export interface OptimizeMaterialOptions {
    * ra nghiệm thì giữ nguyên (mọi cây đã ≤ ngưỡng, khúc thừa đã nhỏ).
    */
   lastBarFill?: boolean;
+  /**
+   * Lượt cây mua cuối của optimizeOneMaterial (cắt thường đã giải ở lượt trước): bỏ lần giải cắt thường, giải thẳng với cây mua
+   * cuối. Chỉ có tác dụng khi lastBarFill và không có cây lẻ (có cây lẻ thì cây mua cuối nằm sẵn trong lần giải chính).
+   */
+  lastBarOnly?: boolean;
 }
 
 /** Số kiểu cắt ít phế nhất của MỖI chiều dài cây lẻ luôn được giữ khi lọc bớt kiểu cắt đưa vào IP (CS2). */
@@ -185,6 +190,7 @@ export function optimizeMaterial(
         hardMaxSizesPerBar: opts.hardMaxSizesPerBar,
         laserMinTailMm: opts.laserMinTailMm,
         lastBarFill: opts.lastBarFill,
+        lastBarOnly: opts.lastBarOnly,
       });
       if (!r.feasible) continue;
       const key: [number, number] = [Math.round(r.waste_pct * 1e4) / 1e4, r.total_purchased_mm];
@@ -408,7 +414,11 @@ export function optimizeMaterial(
     bundle,
     allowShortage: opts.allowShortage,
   });
-  let res = allPatterns.length > 0 ? solveTwoStage(highs, solveInput(tailLength, false)) : null;
+  const skipPlain = !!opts.lastBarOnly && canFillLast && tailLength === null;
+  let res =
+    allPatterns.length > 0 && !skipPlain
+      ? solveTwoStage(highs, solveInput(tailLength, false))
+      : null;
   // Câu 9b/11a: cắt thường vô nghiệm (không do hết giờ) -> giải lại với 1 cây mua cuối cắt tự do khúc thừa thành đoạn dư.
   let lastBarFilled = false;
   if (
