@@ -1968,8 +1968,9 @@ export class CuttingProposalsService {
               blade_width: kerfMm,
               max_waste_percentage: thresholdPct,
               max_surplus: config.solverMaxSurplus,
-              // Anh Nhân câu 9-11 (24/11/2026): cây mua cuối cắt khúc thừa thành đoạn dư, không giới hạn số đoạn dư.
-              last_bar_fill: true,
+              // Câu 9-11 (24/11/2026): cây mua cuối cắt khúc thừa thành đoạn dư. Chỉ khi bật tồn đoạn - tắt thì đoạn dư không vào sổ
+              // nào (review IT 26/11 mục 1.3).
+              last_bar_fill: isSegmentStockEnabled(),
               auto_scan: true,
               stop_on_first: true,
               min_length: config.solverMinLengthMm,
@@ -2003,8 +2004,9 @@ export class CuttingProposalsService {
               blade_width: kerfMm,
               max_waste_percentage: 100,
               max_surplus: config.solverMaxSurplus,
-              // Anh Nhân câu 9-11 (24/11/2026): cây mua cuối cắt khúc thừa thành đoạn dư, không giới hạn số đoạn dư.
-              last_bar_fill: true,
+              // Câu 9-11 (24/11/2026): cây mua cuối cắt khúc thừa thành đoạn dư. Chỉ khi bật tồn đoạn - tắt thì đoạn dư không vào sổ
+              // nào (review IT 26/11 mục 1.3).
+              last_bar_fill: isSegmentStockEnabled(),
               auto_scan: false,
               time_limit_seconds: FIX_OPTIONS_SOLVER_TIME_LIMIT_SEC,
             },
@@ -3481,8 +3483,9 @@ export class CuttingProposalsService {
           ? { leftover_stock_by_material: leftoverStockBody }
           : {}),
         max_surplus: config.solverMaxSurplus,
-        // Anh Nhân câu 9-11 (24/11/2026): cây mua cuối cắt khúc thừa thành đoạn dư, không giới hạn số đoạn dư.
-        last_bar_fill: true,
+        // Câu 9-11 (24/11/2026): cây mua cuối cắt khúc thừa thành đoạn dư. Chỉ khi bật tồn đoạn - tắt thì đoạn dư không vào sổ
+        // nào (review IT 26/11 mục 1.3).
+        last_bar_fill: isSegmentStockEnabled(),
         min_length: config.solverMinLengthMm,
         max_length: config.solverMaxLengthMm,
         length_step: config.solverLengthStepMm,
@@ -4620,8 +4623,9 @@ export class CuttingProposalsService {
           ...machineBody,
           max_waste_percentage: thresholdPct,
           max_surplus: maxSurplus,
-          // Anh Nhân câu 9-11 (24/11/2026): cây mua cuối cắt khúc thừa thành đoạn dư, không giới hạn số đoạn dư.
-          last_bar_fill: true,
+          // Câu 9-11 (24/11/2026): cây mua cuối cắt khúc thừa thành đoạn dư. Chỉ khi bật tồn đoạn - tắt thì đoạn dư không vào sổ
+          // nào (review IT 26/11 mục 1.3).
+          last_bar_fill: isSegmentStockEnabled(),
           auto_scan: false,
           // Còn ít thời gian thì bảo solver tự dừng sớm hơn timeout HTTP (trả "tốt nhất đang có" thay vì bị ngắt giữa chừng).
           time_limit_seconds: Math.min(

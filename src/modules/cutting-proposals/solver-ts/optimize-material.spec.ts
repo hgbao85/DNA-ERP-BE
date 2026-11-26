@@ -1,5 +1,5 @@
 import { getHighs, Highs } from './highs-solver';
-import { optimizeMaterial } from './optimize-material';
+import { fillTailReserve, optimizeMaterial } from './optimize-material';
 import { MAX_SIZES_PER_BAR } from './patterns';
 
 describe('optimizeMaterial', () => {
@@ -361,6 +361,21 @@ describe('optimizeMaterial', () => {
       }
     });
 
+    it('luật laze trên cây cuối đã có đoạn dài: không chừa cùi thừa (review IT 26/11 mục 1.4)', () => {
+      // 1500 ×3 + 60 ×2 trên cây 6000: chừa cùi cho ca xấu nhất ra cùi 84 mm (1,40 %); 1500 + cùi 23 mm vẫn > 100 mm.
+      const r = optimizeMaterial(highs, [1500, 60], [3, 2], [6000], TRIM, KERF, {
+        ...opts,
+        lastBarFill: true,
+        laserMinTailMm: 100,
+      });
+      expect(r.feasible).toBe(true);
+      if (!r.feasible) return;
+      expect(r.total_bars).toBe(1);
+      expect(r.waste_pct).toBeLessThan(1);
+      const p = r.plan[0];
+      expect(1500 + p.waste_per_bar).toBeGreaterThan(100);
+    });
+
     it('cắt thường đã ra nghiệm thì giữ nguyên (không thêm cây mua cuối)', () => {
       const base = optimizeMaterial(highs, [497, 355], [160, 320], [6000], TRIM, KERF, opts);
       const on = optimizeMaterial(highs, [497, 355], [160, 320], [6000], TRIM, KERF, {
@@ -372,6 +387,16 @@ describe('optimizeMaterial', () => {
       expect(on.total_bars).toBe(base.total_bars);
       expect(on.produced).toEqual(base.produced);
       expect(on.stats?.last_bar_filled).toBeUndefined();
+    });
+  });
+
+  describe('fillTailReserve', () => {
+    it('lấp phần chừa thừa, giữ (đoạn dài nhất + cùi) > minTail, theo giới hạn từng cỡ', () => {
+      // cây dùng được 100, đã có 1 đoạn 50 (giá 51); minTail 60 -> cùi phải ≥ 11 -> lấp tối đa 38: 3 đoạn 11 (giá 12) = 36
+      expect(fillTailReserve([1, 0], [51, 12], [50, 11], 100, 60, [Infinity, 3])).toEqual([0, 3]);
+      expect(fillTailReserve([1, 0], [51, 12], [50, 11], 100, 60, [Infinity, 2])).toEqual([0, 2]);
+      // cây trống: không lấp
+      expect(fillTailReserve([0, 0], [51, 12], [50, 11], 100, 60, [Infinity, 9])).toEqual([0, 0]);
     });
   });
 });
