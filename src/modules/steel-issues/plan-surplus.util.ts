@@ -12,8 +12,8 @@ import { PlanSurplusRow } from './phoi-need.util';
  * dùng cỡ đó (chỉ để có chỗ ghi; tồn đoạn tính theo cả PI nên SKU nào nhận không đổi số vào kho).
  *
  * Câu 14a (cùng ngày): phương án đã lấy đoạn dư trong kho (nhật ký giữ đoạn SURPLUS_IN refType CUTTING_PROPOSAL, refId = phương
- * án, trừ phần đã nhả) -> dòng `fromStockSteps` GIẢM số cần cắt + công đoạn của SKU (gán cho SKU còn chạy id nhỏ nhất có đúng cỡ +
- * bộ công đoạn đó), và dư theo phương án tính trên số cần đã trừ.
+ * án, trừ phần đã nhả) -> dòng `fromStockSteps` GIẢM số cần cắt + công đoạn của SKU (chia cho các SKU còn chạy có đúng cỡ + bộ
+ * công đoạn đó theo số cần từng SKU - mục 3.3 review IT 26/11), và dư theo phương án tính trên số cần đã trừ.
  *
  * `orderIds`: các SKU đang xét (thường mọi lệnh của 1 PI). Trả các dòng của SKU trong `orderIds`.
  */
@@ -89,12 +89,16 @@ export async function loadPlanSurplus(
   const qpu = new Map(bomPieces.map((b) => [`${b.bomRevisionId}:${b.pieceId}`, b.qtyPerUnit]));
   // Số cần định mức theo (bản định mức, cỡ) cho 1 bộ.
   const perUnit = new Map<string, number>();
-  // (bản định mức, cỡ, bộ công đoạn) có trong định mức - để gán phần lấy từ kho cho SKU dùng đúng bộ công đoạn đó.
-  const hasSteps = new Set(
-    pieceBoms.map(
-      (pb) => `${pb.bomRevisionId}:${pb.segmentSpecId}|${normalizeSegmentSteps(pb.processSteps)}`,
-    ),
-  );
+  // Số cần 1 bộ theo (bản định mức, cỡ, bộ công đoạn) - để chia phần lấy từ kho cho các SKU dùng đúng bộ công đoạn đó.
+  const perUnitSteps = new Map<string, number>();
+  for (const pb of pieceBoms) {
+    const k = `${pb.bomRevisionId}:${pb.segmentSpecId}|${normalizeSegmentSteps(pb.processSteps)}`;
+    perUnitSteps.set(
+      k,
+      (perUnitSteps.get(k) ?? 0) +
+        pb.qtyPerPiece * (qpu.get(`${pb.bomRevisionId}:${pb.pieceId}`) ?? 0),
+    );
+  }
   for (const pb of pieceBoms) {
     const k = `${pb.bomRevisionId}:${pb.segmentSpecId}`;
     perUnit.set(
@@ -123,15 +127,34 @@ export async function loadPlanSurplus(
     const [pid, rest] = k.split(':');
     const [spec, steps] = rest.split('|');
     fromStockBySpec.set(`${pid}:${spec}`, (fromStockBySpec.get(`${pid}:${spec}`) ?? 0) + qty);
-    let owner: bigint | null = null;
-    for (const c of coverage) {
-      if (c.cuttingProposalId.toString() !== pid || c.productionOrder.status === 'CANCELLED')
-        continue;
-      if (!hasSteps.has(`${c.productionOrder.bomRevisionId}:${spec}|${steps}`)) continue;
-      if (owner === null || c.productionOrder.id < owner) owner = c.productionOrder.id;
-    }
-    if (owner === null || !wanted.has(owner.toString())) continue;
-    out.push({ productionOrderId: owner, segmentSpecId: BigInt(spec), qty, fromStockSteps: steps });
+    // Review IT 26/11 mục 3.3: chia cho các SKU còn chạy dùng đúng (cỡ, bộ công đoạn), theo id tăng dần, mỗi SKU tới số cần của nó;
+    // phần vượt (không nên có) dồn cho SKU cuối. Trước đây dồn hết cho SKU id nhỏ nhất, số cần kẹp ≥ 0 nên phần vượt mất.
+    const owners = coverage
+      .filter(
+        (c) =>
+          c.cuttingProposalId.toString() === pid &&
+          c.productionOrder.status !== 'CANCELLED' &&
+          (perUnitSteps.get(`${c.productionOrder.bomRevisionId}:${spec}|${steps}`) ?? 0) > 0,
+      )
+      .map((c) => ({
+        id: c.productionOrder.id,
+        need:
+          (perUnitSteps.get(`${c.productionOrder.bomRevisionId}:${spec}|${steps}`) ?? 0) *
+          c.productionOrder.quantity,
+      }))
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    let left = qty;
+    owners.forEach((o, i) => {
+      const take = i === owners.length - 1 ? left : Math.min(left, Math.floor(o.need));
+      left -= take;
+      if (take <= 0 || !wanted.has(o.id.toString())) return;
+      out.push({
+        productionOrderId: o.id,
+        segmentSpecId: BigInt(spec),
+        qty: take,
+        fromStockSteps: steps,
+      });
+    });
   }
   for (const [k, made] of produced) {
     const [pid, spec] = k.split(':');

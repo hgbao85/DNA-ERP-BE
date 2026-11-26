@@ -727,10 +727,16 @@ export class SegmentStockService {
   async allocatedFromStockByPi(
     db: PrismaTx | PrismaServiceType,
     productionInvoiceId: bigint,
+    /** Chỉ tính phần của các phương án này (review IT 26/11 mục 3.2: phương án sẽ bị thay lúc duyệt). Thiếu = mọi phương án. */
+    cuttingProposalIds?: readonly bigint[],
   ): Promise<Map<string, { warehouseId: bigint; qty: number }>> {
+    if (cuttingProposalIds && cuttingProposalIds.length === 0) return new Map();
     const logs = await db.segmentReservationLog.findMany({
       where: {
         refType: CUTTING_PROPOSAL_SEGMENT_REF,
+        ...(cuttingProposalIds
+          ? { refId: { in: cuttingProposalIds.map((id) => id.toString()) } }
+          : {}),
         kind: { in: [SegmentReservationLogKind.SURPLUS_IN, SegmentReservationLogKind.RELEASE] },
         reservation: { productionInvoiceId },
       },

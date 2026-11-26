@@ -323,7 +323,11 @@ export class SegmentProductionService {
       bomPieces.map((bp) => [`${bp.bomRevisionId}:${bp.pieceId}`, bp.qtyPerUnit]),
     );
     const needBySpec = new Map<string, Map<string, number>>();
-    for (const order of needOrders) {
+    const needOrderIds = new Set(needOrders.map((o) => o.id));
+    // Review IT 26/11 mục 3.1: mã đoạn của MỌI SKU (kể cả SKU đã huỷ, chế độ chỉ-dư) đều có mặt - SKU không còn cần thì số cần 0,
+    // để đoạn đã qua công đoạn của mã đó thành dư đúng mã (không bị coi là đoạn dở rồi trừ khỏi kho).
+    for (const order of orders) {
+      const counts = needOrderIds.has(order.id);
       for (const pb of pieceBoms) {
         if (pb.bomRevisionId !== order.bomRevisionId) continue;
         const qtyPerUnit = qtyPerUnitByKey.get(`${pb.bomRevisionId}:${pb.pieceId}`) ?? 0;
@@ -332,7 +336,7 @@ export class SegmentProductionService {
         const specKey = pb.segmentSpecId.toString();
         const code = normalizeSegmentSteps(pb.processSteps);
         const byCode = needBySpec.get(specKey) ?? new Map<string, number>();
-        byCode.set(code, (byCode.get(code) ?? 0) + need);
+        byCode.set(code, (byCode.get(code) ?? 0) + (counts ? need : 0));
         needBySpec.set(specKey, byCode);
       }
     }
@@ -405,7 +409,7 @@ export class SegmentProductionService {
     }
     // Các dòng định mức (bộ công đoạn) của từng cỡ - để biết dòng nào cần cả 2 công đoạn khi chia phần bỏ.
     const lineStepsBySpec = new Map<string, string[][]>();
-    for (const order of needOrders) {
+    for (const order of orders) {
       for (const pb of pieceBoms) {
         if (pb.bomRevisionId !== order.bomRevisionId) continue;
         const qtyPerUnit = qtyPerUnitByKey.get(`${pb.bomRevisionId}:${pb.pieceId}`) ?? 0;

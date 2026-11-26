@@ -246,3 +246,56 @@ describe('computeSegmentTargets', () => {
     ]);
   });
 });
+
+describe('computeSegmentTargets - review IT 26/11 mục 3.1, 3.4', () => {
+  it('3.1: SKU huỷ (mã DAP số cần 0), đã cắt 30, dập 20 đạt -> dư 20 dập + 10 trơn, không còn đoạn dở', () => {
+    const r = computeSegmentTargets({
+      cutPassedQty: 30,
+      stepPassedQty: { DAP: 20 },
+      variants: [{ segmentSteps: 'DAP', needQty: 0 }],
+    });
+    expect(r.variants).toEqual([
+      { segmentSteps: 'DAP', needQty: 0, heldQty: 0, surplusQty: 20 },
+      { segmentSteps: '', needQty: 0, heldQty: 0, surplusQty: 10 },
+    ]);
+    expect(r.wipQty).toBe(0);
+  });
+
+  it('3.1: mã số cần 0 chưa có đoạn nào qua công đoạn thì không sinh dòng', () => {
+    const r = computeSegmentTargets({
+      cutPassedQty: 5,
+      stepPassedQty: {},
+      variants: [{ segmentSteps: 'DAP', needQty: 0 }],
+    });
+    expect(r.variants).toEqual([{ segmentSteps: '', needQty: 0, heldQty: 0, surplusQty: 5 }]);
+  });
+
+  it('3.4: cần trơn 10 + uốn 12, phương án dư uốn 2 CHƯA cắt, đã cắt 22 -> giữ đủ 10 trơn', () => {
+    const r = computeSegmentTargets({
+      cutPassedQty: 22,
+      stepPassedQty: {},
+      variants: [
+        { segmentSteps: '', needQty: 10 },
+        { segmentSteps: 'UON', needQty: 12 },
+      ],
+      plannedSurplus: { UON: 2 },
+    });
+    expect(r.variants.find((v) => v.segmentSteps === '')?.heldQty).toBe(10);
+    expect(r.wipQty).toBe(12);
+  });
+
+  it('3.4: đã cắt cả 2 đoạn dư theo phương án (24) -> 2 đoạn đó là đoạn chờ uốn, không thành dư trơn', () => {
+    const r = computeSegmentTargets({
+      cutPassedQty: 24,
+      stepPassedQty: {},
+      variants: [
+        { segmentSteps: '', needQty: 10 },
+        { segmentSteps: 'UON', needQty: 12 },
+      ],
+      plannedSurplus: { UON: 2 },
+    });
+    const tron = r.variants.find((v) => v.segmentSteps === '');
+    expect(tron).toEqual({ segmentSteps: '', needQty: 10, heldQty: 10, surplusQty: 0 });
+    expect(r.wipQty).toBe(14);
+  });
+});
