@@ -13,6 +13,8 @@ import { Exclude, Expose, Type } from 'class-transformer';
 export class PhoiProgressOrderSegmentDto {
   /** null = phần đợt cắt CŨ (trước 2026-09-21) không biết thuộc SKU nào - "Chưa phân SKU". */
   @Expose() @ApiPropertyOptional({ nullable: true }) productionOrderId!: string | null;
+  /** Q3: SKU đã huỷ mà QLSX cho cắt tiếp - có số cần cũ, KHÔNG cộng vào số của cỡ đoạn (review IT 26/11 mục 2.1). */
+  @Expose() @ApiPropertyOptional() cutContinued?: boolean;
   /** Số cần của SKU này cho cỡ đoạn này (đoạn) = baseRequired + extraNeed (P1, 18/11/2026: ĐỔI NGHĨA, trước chỉ là
    *  định mức). Luôn 0 với dòng "Chưa phân SKU". */
   @Expose() @ApiProperty() required!: number;

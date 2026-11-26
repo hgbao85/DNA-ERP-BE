@@ -75,7 +75,7 @@ describe('SteelIssuesService', () => {
       groupBy: jest.Mock;
     };
     floorReport: { create: jest.Mock; findUnique: jest.Mock; findFirst: jest.Mock };
-    productionInvoice: { findUnique: jest.Mock; findMany: jest.Mock };
+    productionInvoice: { findUnique: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock };
     auditLog: { create: jest.Mock };
     productionOrder: { findMany: jest.Mock; findFirst: jest.Mock; findUnique: jest.Mock };
     pieceBom: { findMany: jest.Mock };
@@ -218,6 +218,8 @@ describe('SteelIssuesService', () => {
       productionInvoice: {
         findUnique: jest.fn().mockResolvedValue(invoice),
         findMany: jest.fn().mockResolvedValue([invoice]),
+        // piSteelReceiveExempt (floor-gate.util.ts): mặc định PI không được miễn cổng nhận sắt.
+        findFirst: jest.fn().mockResolvedValue(null),
       },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
       // findFirst dùng bởi assertPiHasActiveFloor() (floor-gate.util.ts) - gọi từ receive/

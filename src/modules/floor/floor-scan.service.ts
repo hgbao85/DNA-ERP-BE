@@ -19,7 +19,8 @@ import {
 } from '../../generated/prisma/client';
 import type { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
-import { NOT_CANCELLED_ORDER } from '../../common/utils/cancelled-order.util';
+import { CUT_CONTINUED_ORDER, NOT_CANCELLED_ORDER } from '../../common/utils/cancelled-order.util';
+import { steelReceiveExemptPiWhere } from '../../common/utils/floor-gate.util';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
@@ -517,7 +518,7 @@ export class FloorScanService {
         workshopId,
         productionInvoiceId: { not: null },
         productionOrder: {
-          is: { cancelRequests: { some: { status: 'APPROVED', cutDecision: 'CONTINUE' } } },
+          is: CUT_CONTINUED_ORDER,
         },
       },
       select: { productionInvoice: { select: { id: true, code: true } } },
@@ -604,20 +605,15 @@ export class FloorScanService {
         where: { id: piId },
         select: { id: true, code: true },
       }),
-      // Huỷ lệnh theo SKU (23/11/2026): SKU đã huỷ không còn để chọn báo - trừ tổ Phôi khi QLSX cho cắt tiếp (Q3, 24/11/2026).
+      // Huỷ lệnh theo SKU (23/11/2026): SKU đã huỷ không còn để chọn báo - trừ MÁY CẮT tổ Phôi khi QLSX cho cắt tiếp (Q3,
+      // 24/11/2026). Máy công đoạn phụ / máy báo mảnh không liệt kê (BE từ chối báo SKU huỷ ở đó - review IT 26/11 mục 2.5).
       this.prisma.productionOrder.findMany({
         where: {
           productionInvoiceItem: { productionInvoiceId: piId },
           OR: [
             NOT_CANCELLED_ORDER,
-            ...(ws.stage === 'PHOI'
-              ? [
-                  {
-                    cancelRequests: {
-                      some: { status: 'APPROVED' as const, cutDecision: 'CONTINUE' as const },
-                    },
-                  },
-                ]
+            ...(ws.stage === MfgStage.PHOI && ws.kind === WorkstationKind.CUT
+              ? [CUT_CONTINUED_ORDER]
               : []),
           ],
         },
@@ -743,6 +739,7 @@ export class FloorScanService {
           physicalLeft: s.physicalLeft,
           byOrder: s.byOrder.map((b) => ({
             productionOrderId: b.productionOrderId,
+            ...(b.cutContinued ? { cutContinued: true } : {}),
             required: b.required,
             baseRequired: b.baseRequired,
             extraNeed: b.extraNeed,
@@ -758,15 +755,23 @@ export class FloorScanService {
     };
   }
 
-  /** Đợt kho đã xuất, chưa ai nhận, của PI có SKU đang chạy (receive() cũng chặn PI chưa "Bắt đầu"). */
+  /**
+   * Đợt kho đã xuất, chưa ai nhận, của PI có SKU đang chạy - hoặc PI receive() cho nhận dù không SKU nào chạy (SKU huỷ được cắt tiếp,
+   * PI đã huỷ hết SKU: review IT 26/11 mục 2.3, cùng điều kiện steelReceiveExemptPiWhere).
+   */
   private async listSteelToReceive(machineWorkshopId: bigint | null) {
     const rows = await this.prisma.steelIssue.findMany({
       where: {
         status: SteelIssueStatus.ISSUED,
         productionInvoice: {
-          items: {
-            some: { productionOrder: { floorStage: ProductionOrderFloorStage.ACTIVE } },
-          },
+          OR: [
+            {
+              items: {
+                some: { productionOrder: { floorStage: ProductionOrderFloorStage.ACTIVE } },
+              },
+            },
+            steelReceiveExemptPiWhere(),
+          ],
         },
       },
       orderBy: { issuedAt: 'asc' },

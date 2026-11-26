@@ -9,6 +9,12 @@ export const NOT_CANCELLED_ORDER = {
   status: { not: ProductionOrderStatus.CANCELLED },
 } satisfies Prisma.ProductionOrderWhereInput;
 
+/** Q3 (24/11/2026): SKU đã huỷ mà QLSX cho cắt tiếp (đề nghị huỷ đã duyệt, cutDecision CONTINUE). */
+export const CUT_CONTINUED_ORDER = {
+  status: ProductionOrderStatus.CANCELLED,
+  cancelRequests: { some: { status: 'APPROVED', cutDecision: 'CONTINUE' } },
+} satisfies Prisma.ProductionOrderWhereInput;
+
 /** Cùng điều kiện, dùng ở query đi từ ProductionInvoiceItem (dòng SKU đã huỷ có cancelledAt). */
 export const NOT_CANCELLED_ITEM = {
   cancelledAt: null,
