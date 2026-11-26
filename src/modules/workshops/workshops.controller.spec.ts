@@ -1,12 +1,8 @@
 import 'reflect-metadata';
 import { RequestMethod } from '@nestjs/common';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
-import { PermissionAction } from '../../generated/prisma/client';
-import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
-import {
-  PERMISSIONS_KEY,
-  RequiredPermission,
-} from '../../common/decorators/require-permissions.decorator';
+import { ROLE_KEY } from '../../common/decorators/require-role.decorator';
+import { PERMISSIONS_KEY } from '../../common/decorators/require-permissions.decorator';
 import { WorkshopsController } from './workshops.controller';
 
 describe('WorkshopsController - quyền', () => {
@@ -23,12 +19,13 @@ describe('WorkshopsController - quyền', () => {
     expect(Reflect.getMetadata(PATH_METADATA, WorkshopsController)).toBe('workshops');
   });
 
-  it('cần quyền xem Lệnh sản xuất (PRODUCTION_INVOICE.VIEW)', () => {
-    const perms = Reflect.getMetadata(PERMISSIONS_KEY, proto.findAll as object) as
-      RequiredPermission[] | undefined;
-    expect(perms).toEqual([
-      { module: PERMISSION_MODULES.PRODUCTION_INVOICE, action: PermissionAction.VIEW },
-    ]);
+  // 26/11/2026: danh mục xưởng là dữ liệu tham chiếu - mọi người dùng đã đăng nhập đọc được (JwtAuthGuard toàn cục vẫn bắt
+  // đăng nhập). Không gác theo module / vai nào, để tổ trưởng Hàn / Sơn không còn bị 403.
+  it('KHÔNG đòi quyền module hay vai nào (chỉ cần đăng nhập)', () => {
+    expect(Reflect.getMetadata(PERMISSIONS_KEY, proto.findAll as object)).toBeUndefined();
+    expect(Reflect.getMetadata(PERMISSIONS_KEY, WorkshopsController)).toBeUndefined();
+    expect(Reflect.getMetadata(ROLE_KEY, proto.findAll as object)).toBeUndefined();
+    expect(Reflect.getMetadata(ROLE_KEY, WorkshopsController)).toBeUndefined();
   });
 
   it('findAll trả kết quả của service.findActive', async () => {
