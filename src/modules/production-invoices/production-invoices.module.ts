@@ -1,3 +1,4 @@
+import { WovenStockModule } from '../woven-stock/woven-stock.module';
 import { CancelledGoodsService } from './order-cancellation/cancelled-goods.service';
 import { SegmentStockModule } from '../segment-stock/segment-stock.module';
 import { WarehouseTransfersModule } from '../warehouse-transfers/warehouse-transfers.module';
@@ -36,6 +37,7 @@ import { OrderCancellationService } from './order-cancellation/order-cancellatio
     WorkshopsModule, // Phần A – Đợt 2
     WarehouseTransfersModule, // Người B – đổi xưởng (10/11/2026)
     SegmentStockModule, // Huỷ lệnh đợt 2 - Q2: đoạn của SKU huỷ vào dư
+    WovenStockModule, // Q6 26/11: tồn khung đan của SKU huỷ
   ],
   // Phần A – Đợt 9 (YC2): lõi đổi mốc + Excel kế hoạch
   controllers: [

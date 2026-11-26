@@ -25,6 +25,7 @@ describe('WeavingIssuesService', () => {
       create: jest.Mock;
       aggregate: jest.Mock;
     };
+    cancelledGoodsTransfer: { groupBy: jest.Mock };
     weavingReceipt: {
       findUnique: jest.Mock;
       findMany: jest.Mock;
@@ -117,6 +118,7 @@ describe('WeavingIssuesService', () => {
         create: jest.fn(),
         aggregate: jest.fn().mockResolvedValue({ _sum: { qty: null } }),
       },
+      cancelledGoodsTransfer: { groupBy: jest.fn().mockResolvedValue([]) },
       weavingReceipt: {
         findUnique: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
@@ -210,6 +212,11 @@ describe('WeavingIssuesService', () => {
       notificationsService as never,
       realtimeStub as unknown as RealtimeService,
       { isActive: jest.fn().mockReturnValue(false), get: jest.fn() } as never,
+      {
+        allocateForOrder: jest.fn().mockResolvedValue(undefined),
+        allocateAll: jest.fn().mockResolvedValue(undefined),
+        takenFromStock: jest.fn().mockResolvedValue(0),
+      } as never,
     );
   });
 

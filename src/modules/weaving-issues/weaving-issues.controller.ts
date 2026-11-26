@@ -40,8 +40,10 @@ export class WeavingIssuesController {
 
   @Get('production-orders/:id/weaving-issue-plan')
   @RequirePermissions(VIEW)
-  getIssuePlan(@Param('id') id: string) {
-    return this.weavingIssuesService.getIssuePlan(id);
+  getIssuePlan(@Param('id') id: string, @Query('forReceive') forReceive?: string) {
+    return this.weavingIssuesService.getIssuePlan(id, {
+      forReceive: forReceive === '1' || forReceive === 'true',
+    });
   }
 
   /**
@@ -69,6 +71,13 @@ export class WeavingIssuesController {
   // ─── Quản lý điểm đan - đọc gộp qua mọi PO ──────────────────────────────────
   // Đặt TRƯỚC 'weaving-issues/:id' - route tĩnh phải khai trước route có tham số cùng tiền tố,
   // nếu không Nest sẽ khớp "by-point" vào :id trước (findOne('by-point') sẽ 400/404 sai).
+
+  /** Lệnh SX đã huỷ mà điểm đan còn giữ khung (đã xuất đan, chưa nhận về hết) - màn nhập đan vẫn hiện để nhận về (Q6 câu 2a). */
+  @Get('weaving-issues/cancelled-pending-receipt')
+  @RequirePermissions(VIEW)
+  cancelledPendingReceipt() {
+    return this.weavingIssuesService.cancelledPendingReceipt();
+  }
 
   @Get('weaving-issues/by-point')
   @RequirePermissions(VIEW)

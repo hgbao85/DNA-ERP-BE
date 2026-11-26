@@ -16,6 +16,7 @@ import { parseBigIntId } from '../../../common/utils/parse-bigint-id.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../../prisma/prisma.service';
 import { RealtimeService } from '../../../realtime/realtime.service';
 import { TransferCancelledGoodsDto } from './order-cancellation.dto';
+import { WovenStockService, tpWarehouseOf } from '../../woven-stock/woven-stock.service';
 
 /** 1 dòng SKU đang chạy nhận được hàng của SKU đã huỷ. */
 export interface GoodsTargetDto {
@@ -40,7 +41,10 @@ export interface CancelledGoodsRowDto {
   cushionName: string | null;
   /** Hàng đã đóng gói còn chuyển được (bộ) = đã đóng - đã giao - đã chuyển. */
   packedAvailable: number;
-  /** Khung đã đan đã nhận về còn chuyển được, theo mảnh. */
+  /** Kho thành phẩm của lệnh bị huỷ - nơi khung đan thành tồn (Q6 câu 3a). */
+  warehouseCode: string;
+  warehouseName: string;
+  /** Khung đã đan còn tồn ở kho thành phẩm, theo mảnh (tự cấp cho lệnh sau cùng mảnh + màu dây - Q6 câu 1b). */
   woven: { pieceId: string; pieceCode: string; pieceName: string; available: number }[];
   targets: GoodsTargetDto[];
   transfers: {
@@ -65,6 +69,7 @@ export class CancelledGoodsService {
   constructor(
     @Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType,
     private readonly realtime: RealtimeService,
+    private readonly wovenStock: WovenStockService,
   ) {}
 
   /** Đề nghị huỷ đã duyệt có hàng đã đóng gói / khung đã đan còn chuyển được. */
@@ -100,6 +105,7 @@ export class CancelledGoodsService {
                 mfgProductId: true,
                 wireMaterialId: true,
                 cushionMaterialId: true,
+                warehouseCode: true,
                 mfgProduct: { select: { factoryCode: true } },
                 wireMaterial: { select: { name: true } },
                 cushionMaterial: { select: { name: true } },
@@ -113,9 +119,9 @@ export class CancelledGoodsService {
     return req;
   }
 
-  /** Số còn chuyển được của nguồn: đã đóng gói (bộ) và khung đã đan theo mảnh. */
-  private async availability(db: PrismaTx, orderId: bigint, itemId: bigint) {
-    const [packed, shipped, receipts, transfers] = await Promise.all([
+  /** Số còn chuyển được của nguồn: đã đóng gói (bộ); khung đã đan còn tồn theo mảnh (WovenStockService). */
+  private async availability(db: PrismaTx, itemId: bigint) {
+    const [packed, shipped, stock, transfers] = await Promise.all([
       db.packagingRecord.aggregate({
         where: { productionInvoiceItemId: itemId },
         _sum: { boxesPacked: true },
@@ -124,13 +130,9 @@ export class CancelledGoodsService {
         where: { productionInvoiceItemId: itemId },
         _sum: { shippedQty: true },
       }),
-      db.weavingReceipt.groupBy({
-        by: ['pieceId'],
-        where: { productionOrderId: orderId },
-        _sum: { qty: true },
-      }),
+      this.wovenStock.loadStock(db),
       db.cancelledGoodsTransfer.findMany({
-        where: { sourceItemId: itemId },
+        where: { sourceItemId: itemId, kind: CancelledGoodsKind.PACKED },
         select: { kind: true, pieceId: true, qty: true },
       }),
     ]);
@@ -142,11 +144,12 @@ export class CancelledGoodsService {
       (packed._sum.boxesPacked ?? 0) - (shipped._sum.shippedQty ?? 0) - outPacked,
     );
     const wovenByPiece = new Map<string, number>();
-    for (const r of receipts) wovenByPiece.set(r.pieceId.toString(), r._sum.qty ?? 0);
-    for (const t of transfers) {
-      if (t.kind !== CancelledGoodsKind.WOVEN || t.pieceId == null) continue;
-      const k = t.pieceId.toString();
-      wovenByPiece.set(k, (wovenByPiece.get(k) ?? 0) - t.qty);
+    for (const b of stock) {
+      for (const s of b.sources) {
+        if (s.sourceItemId !== itemId) continue;
+        const k = b.pieceId.toString();
+        wovenByPiece.set(k, (wovenByPiece.get(k) ?? 0) + s.qty);
+      }
     }
     return { packedAvailable, wovenByPiece };
   }
@@ -154,11 +157,7 @@ export class CancelledGoodsService {
   private async buildRow(db: PrismaTx, requestId: bigint): Promise<CancelledGoodsRowDto> {
     const req = await this.loadSource(db, requestId);
     const item = req.productionOrder.productionInvoiceItem;
-    const { packedAvailable, wovenByPiece } = await this.availability(
-      db,
-      req.productionOrder.id,
-      item.id,
-    );
+    const { packedAvailable, wovenByPiece } = await this.availability(db, item.id);
     const wovenIds = [...wovenByPiece.entries()].filter(([, q]) => q > 0).map(([k]) => BigInt(k));
     const [pieces, targetRows, transfers] = await Promise.all([
       wovenIds.length
@@ -233,6 +232,8 @@ export class CancelledGoodsService {
     const packedByItem = new Map(
       packedSums.map((p) => [p.productionInvoiceItemId.toString(), p._sum.boxesPacked ?? 0]),
     );
+    const wc = tpWarehouseOf(item.warehouseCode);
+    const wh = await db.warehouse.findUnique({ where: { code: wc }, select: { name: true } });
     const pieceById = new Map(pieces.map((p) => [p.id.toString(), p]));
     const allPieceIds = transfers.map((t) => t.pieceId).filter((x): x is bigint => x != null);
     const transferPieces = allPieceIds.length
@@ -250,6 +251,8 @@ export class CancelledGoodsService {
       sourceItemId: item.id.toString(),
       wireName: item.wireMaterial?.name ?? null,
       cushionName: item.cushionMaterial?.name ?? null,
+      warehouseCode: wc,
+      warehouseName: wh?.name ?? wc,
       packedAvailable,
       woven: wovenIds
         .map((id) => {
@@ -291,9 +294,12 @@ export class CancelledGoodsService {
   ): Promise<CancelledGoodsRowDto> {
     const id = parseBigIntId(requestId);
     const targetItemId = parseBigIntId(dto.targetItemId);
-    const pieceId = dto.pieceId ? parseBigIntId(dto.pieceId) : null;
-    if (dto.kind === CancelledGoodsKind.WOVEN && pieceId == null) {
-      throw new BadRequestException('Chuyển khung đã đan phải chọn mảnh');
+    // Q6 câu 1b (anh Nhân 26/11/2026): khung đã đan không chuyển tay nữa - thành tồn khung đan kho thành phẩm, lệnh sau cùng mảnh +
+    // màu dây tự lấy (WovenStockService).
+    if (dto.kind === CancelledGoodsKind.WOVEN) {
+      throw new BadRequestException(
+        'Khung đã đan của SKU huỷ đã vào tồn khung đan kho thành phẩm - lệnh sau cùng mảnh + màu dây tự lấy, không chuyển tay',
+      );
     }
     const head = await this.loadSource(this.prisma, id);
     if (head.status !== ProductionOrderCancelStatus.APPROVED) {
@@ -304,9 +310,7 @@ export class CancelledGoodsService {
     await this.prisma.$transaction(async (tx) => {
       // Khoá nguồn rồi khoá đích (cùng khoá với tổ đóng gói / chuyền kiểm của đích) - 2 lần chuyển cùng lúc không vượt số còn.
       await lockBusinessKey(tx, `cancelled-goods:${src.id}`);
-      if (dto.kind === CancelledGoodsKind.PACKED)
-        await lockBusinessKey(tx, `packaging:${targetItemId}`);
-      else await lockBusinessKey(tx, `transfer-check:${targetItemId}:${pieceId}`);
+      await lockBusinessKey(tx, `packaging:${targetItemId}`);
 
       const target = await tx.productionInvoiceItem.findUnique({
         where: { id: targetItemId },
@@ -339,94 +343,42 @@ export class CancelledGoodsService {
       if (!nullableEq(target.wireMaterialId, src.wireMaterialId)) {
         throw new BadRequestException('Khác màu dây - không chuyển được');
       }
-      if (
-        dto.kind === CancelledGoodsKind.PACKED &&
-        !nullableEq(target.cushionMaterialId, src.cushionMaterialId)
-      ) {
+      if (!nullableEq(target.cushionMaterialId, src.cushionMaterialId)) {
         throw new BadRequestException('Khác vải nệm - không chuyển hàng đã đóng gói được');
       }
 
-      const { packedAvailable, wovenByPiece } = await this.availability(
-        tx,
-        head.productionOrder.id,
-        src.id,
-      );
-      if (dto.kind === CancelledGoodsKind.PACKED) {
-        if (dto.qty > packedAvailable) {
-          throw new BadRequestException(`Chỉ còn ${packedAvailable} bộ đã đóng gói chuyển được`);
-        }
-        const packed = await tx.packagingRecord.aggregate({
-          where: { productionInvoiceItemId: target.id },
-          _sum: { boxesPacked: true },
-        });
-        const soFar = packed._sum.boxesPacked ?? 0;
-        if (soFar + dto.qty > order.quantity) {
-          throw new BadRequestException(
-            `Dòng nhận cần ${order.quantity} bộ, đã đóng ${soFar} - nhận thêm tối đa ${Math.max(0, order.quantity - soFar)} bộ`,
-          );
-        }
-        const row = await tx.cancelledGoodsTransfer.create({
-          data: {
-            cancelRequestId: id,
-            kind: dto.kind,
-            sourceItemId: src.id,
-            targetItemId: target.id,
-            qty: dto.qty,
-            note: dto.note?.trim() || null,
-            createdById: actorId,
-          },
-        });
-        await tx.packagingRecord.create({
-          data: {
-            productionInvoiceItemId: target.id,
-            boxesPacked: dto.qty,
-            note: `Chuyển từ SKU đã huỷ (đề nghị ${id})`,
-            packedById: actorId,
-            transferId: row.id,
-          },
-        });
-        return;
+      const { packedAvailable } = await this.availability(tx, src.id);
+      if (dto.qty > packedAvailable) {
+        throw new BadRequestException(`Chỉ còn ${packedAvailable} bộ đã đóng gói chuyển được`);
       }
-
-      // WOVEN
-      const available = wovenByPiece.get(pieceId!.toString()) ?? 0;
-      if (dto.qty > available)
-        throw new BadRequestException(
-          `Chỉ còn ${Math.max(0, available)} khung mảnh này chuyển được`,
-        );
-      const bomPiece = await tx.bomPiece.findFirst({
-        where: { bomRevisionId: order.bomRevisionId, pieceId: pieceId! },
-        select: { qtyPerUnit: true, isWoven: true },
+      const packed = await tx.packagingRecord.aggregate({
+        where: { productionInvoiceItemId: target.id },
+        _sum: { boxesPacked: true },
       });
-      if (!bomPiece?.isWoven)
-        throw new BadRequestException('Mảnh này không phải khung đan trong định mức của SKU nhận');
-      const need = bomPiece.qtyPerUnit * order.quantity;
-      const [received, inSoFar] = await Promise.all([
-        tx.weavingReceipt.aggregate({
-          where: { productionOrderId: order.id, pieceId: pieceId! },
-          _sum: { qty: true },
-        }),
-        tx.cancelledGoodsTransfer.aggregate({
-          where: { targetItemId: target.id, pieceId: pieceId!, kind: CancelledGoodsKind.WOVEN },
-          _sum: { qty: true },
-        }),
-      ]);
-      const have = (received._sum.qty ?? 0) + (inSoFar._sum.qty ?? 0);
-      if (have + dto.qty > need) {
+      const soFar = packed._sum.boxesPacked ?? 0;
+      if (soFar + dto.qty > order.quantity) {
         throw new BadRequestException(
-          `Dòng nhận cần ${need} khung mảnh này, đã có ${have} - nhận thêm tối đa ${Math.max(0, need - have)}`,
+          `Dòng nhận cần ${order.quantity} bộ, đã đóng ${soFar} - nhận thêm tối đa ${Math.max(0, order.quantity - soFar)} bộ`,
         );
       }
-      await tx.cancelledGoodsTransfer.create({
+      const row = await tx.cancelledGoodsTransfer.create({
         data: {
           cancelRequestId: id,
           kind: dto.kind,
           sourceItemId: src.id,
           targetItemId: target.id,
-          pieceId,
           qty: dto.qty,
           note: dto.note?.trim() || null,
           createdById: actorId,
+        },
+      });
+      await tx.packagingRecord.create({
+        data: {
+          productionInvoiceItemId: target.id,
+          boxesPacked: dto.qty,
+          note: `Chuyển từ SKU đã huỷ (đề nghị ${id})`,
+          packedById: actorId,
+          transferId: row.id,
         },
       });
     });

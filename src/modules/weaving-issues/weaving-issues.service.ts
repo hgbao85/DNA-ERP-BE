@@ -12,6 +12,7 @@ import { auditEvent } from '../../common/utils/audit-event.util';
 import { AppClsStore } from '../../common/interfaces/cls-store.interface';
 import {
   AuditAction,
+  CancelledGoodsKind,
   IssueSlipLineKind,
   IssueSlipStatus,
   MfgStage,
@@ -19,6 +20,7 @@ import {
   Prisma,
   ProductionBatchStatus,
   ProductionOrder,
+  ProductionOrderStatus,
   StockLedgerRefType,
   SteelSubGroup,
   TransferStatus,
@@ -56,6 +58,7 @@ import { WeavingPointAssignmentResponseDto } from './dto/weaving-point-assignmen
 import { WeavingPointGroupResponseDto } from './dto/weaving-point-group-response.dto';
 import { WeavingReceiptResponseDto } from './dto/weaving-receipt-response.dto';
 import { PIECE_TRANSFER_LEAVES_FRAME } from '../warehouse-transfers/transfer-routes.constant';
+import { WovenStockService } from '../woven-stock/woven-stock.service';
 
 // Mã đơn Sales gốc (hiển thị cột "PO" cho người dùng) - xem toIssueResponseDto/toReceiptResponseDto.
 const PRODUCTION_ORDER_WITH_SALES_CODE = {
@@ -165,6 +168,7 @@ export class WeavingIssuesService {
     private readonly notifications: NotificationsService,
     private readonly realtime: RealtimeService,
     private readonly cls: ClsService<AppClsStore>,
+    private readonly wovenStock: WovenStockService,
   ) {}
 
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
@@ -209,6 +213,13 @@ export class WeavingIssuesService {
         `Mảnh ${piece.name} không thuộc công đoạn Đan trong định mức của lệnh này - không xuất đan được`,
       );
     }
+    // Q6 huỷ lệnh (26/11/2026): còn tồn khung đan đúng mảnh + màu dây ở kho thành phẩm của lệnh thì lấy tồn trước - định mức
+    // xuất đan còn lại tự giảm theo (pieceCaps trừ phần đã lấy tồn).
+    await this.wovenStock.allocateForOrder(
+      order.id,
+      this.cls.get('userId') ?? 'system',
+      pieceBigId,
+    );
     const source = await this.weavingSourceOf(this.prisma, order, bomPiece);
     if (!source) {
       throw new BadRequestException(
@@ -245,6 +256,7 @@ export class WeavingIssuesService {
     const cap = await this.pieceCaps(
       tx,
       p.order.id,
+      p.order.productionInvoiceItemId,
       p.pieceId,
       p.plannedQty,
       p.finalStage,
@@ -252,7 +264,7 @@ export class WeavingIssuesService {
     );
     if (p.qty > cap.byPlan) {
       throw new BadRequestException(
-        `Mảnh ${p.pieceName}: xuất ${p.qty} vượt định mức còn lại ${Math.max(0, cap.byPlan)} (định mức ${p.plannedQty}, đã xuất ${cap.issued}, đang trên phiếu chờ ký ${cap.onDraft})`,
+        `Mảnh ${p.pieceName}: xuất ${p.qty} vượt định mức còn lại ${Math.max(0, cap.byPlan)} (định mức ${p.plannedQty}, đã xuất ${cap.issued}, đang trên phiếu chờ ký ${cap.onDraft}${cap.fromStock ? `, đã lấy từ tồn khung đan kho thành phẩm ${cap.fromStock}` : ''})`,
       );
     }
     if (p.qty > cap.byStock) {
@@ -314,25 +326,33 @@ export class WeavingIssuesService {
 
   /**
    * Trần xuất đan của 1 (lệnh, mảnh):
-   *  - theo định mức: định mức − đã xuất (mọi lần, kể cả lần cũ trước 09/11) − đang trên phiếu chờ ký;
+   *  - theo định mức: định mức − đã xuất (mọi lần, kể cả lần cũ trước 09/11) − đang trên phiếu chờ ký − đã lấy từ tồn khung
+   *    đan kho thành phẩm (Q6 huỷ lệnh 26/11/2026);
    *  - theo kho: mảnh đã qua KCS công đoạn cuối − đã chuyển ra khỏi nhóm Phôi-Hàn-Sơn bằng phiếu chuyển (luồng cũ qua kho Phụ
    *    kiện, mảnh đó xuất đan từ kho Phụ kiện) − đã/đang nằm trên phiếu xuất đan.
    */
   private async pieceCaps(
     db: PrismaTx | PrismaServiceType,
     orderId: bigint,
+    itemId: bigint,
     pieceId: bigint,
     plannedQty: number,
     finalStage: MfgStage,
     excludeSlipId: bigint | null,
-  ): Promise<{ byPlan: number; byStock: number; issued: number; onDraft: number }> {
+  ): Promise<{
+    byPlan: number;
+    byStock: number;
+    issued: number;
+    onDraft: number;
+    fromStock: number;
+  }> {
     const slipLine = (status: IssueSlipStatus) => ({
       kind: IssueSlipLineKind.WEAVING_PIECE,
       productionOrderId: orderId,
       pieceId,
       slip: { status, ...(excludeSlipId ? { id: { not: excludeSlipId } } : {}) },
     });
-    const [issued, ready, transferredOut, onDraft, onIssued] = await Promise.all([
+    const [issued, ready, transferredOut, onDraft, onIssued, fromStock] = await Promise.all([
       db.weavingIssue.aggregate({
         where: { productionOrderId: orderId, pieceId },
         _sum: { qty: true },
@@ -359,15 +379,17 @@ export class WeavingIssuesService {
       }),
       db.issueSlipLine.aggregate({ where: slipLine(IssueSlipStatus.DRAFT), _sum: { qty: true } }),
       db.issueSlipLine.aggregate({ where: slipLine(IssueSlipStatus.ISSUED), _sum: { qty: true } }),
+      this.wovenStock.takenFromStock(db, itemId, pieceId),
     ]);
     const issuedQty = issued._sum.qty ?? 0;
     const draftQty = onDraft._sum.qty?.toNumber() ?? 0;
     const viaSlips = draftQty + (onIssued._sum.qty?.toNumber() ?? 0);
     return {
-      byPlan: plannedQty - issuedQty - draftQty,
+      byPlan: plannedQty - issuedQty - draftQty - fromStock,
       byStock: (ready._sum.reportedQty ?? 0) - (transferredOut._sum.quantity ?? 0) - viaSlips,
       issued: issuedQty,
       onDraft: draftQty,
+      fromStock,
     };
   }
 
@@ -737,7 +759,12 @@ export class WeavingIssuesService {
     }
 
     const order = await this.findOrderOrThrow(productionOrderId);
-    await assertItemPiHasActiveFloor(this.prisma, order.productionInvoiceItemId, 'nhập đan');
+    // Q6 câu 2a (anh Nhân 26/11/2026): khung của SKU đã huỷ còn ở điểm đan vẫn nhận về bình thường (thành tồn khung đan kho thành
+    // phẩm) - bỏ cổng "lệnh đang chạy" cho lệnh đã huỷ; trần nhận vẫn là số điểm đan còn giữ.
+    const cancelled = isCancelledOrder(order);
+    if (!cancelled) {
+      await assertItemPiHasActiveFloor(this.prisma, order.productionInvoiceItemId, 'nhập đan');
+    }
     const pieceBigId = parseBigIntId(dto.pieceId);
     const weavingPointBigId = parseBigIntId(dto.weavingPointId);
 
@@ -800,6 +827,8 @@ export class WeavingIssuesService {
       },
     });
     this.publishRealtime('WEAVING_ISSUE', created.id, 'RECEIVED', receivedById);
+    // Khung của lệnh đã huỷ vừa về kho -> thành tồn, cấp ngay cho lệnh đang chạy cần đúng mảnh + màu dây.
+    if (cancelled) await this.wovenStock.allocateAll(receivedById, { pieceId: created.pieceId });
 
     return this.toReceiptResponseDto(created);
   }
@@ -913,12 +942,45 @@ export class WeavingIssuesService {
   }
 
   /** "Cần xuất đan bao nhiêu" theo mảnh - query trực tiếp, không có bảng cache riêng. */
-  async getIssuePlan(productionOrderId: string): Promise<WeavingIssuePlanItemResponseDto[]> {
+  async getIssuePlan(
+    productionOrderId: string,
+    opts: { forReceive?: boolean } = {},
+  ): Promise<WeavingIssuePlanItemResponseDto[]> {
     const order = await this.findOrderOrThrow(productionOrderId);
     // Huỷ lệnh theo SKU (23/11/2026): màn xuất đan không còn đề xuất xuất cho SKU đã huỷ (ghi đã bị chặn). Bản batch giữ nguyên -
-    // Bảng thống kê / sản lượng ngày dùng nó làm mẫu số tiến độ của đúng các lệnh đã chọn.
-    if (isCancelledOrder(order)) return [];
+    // Bảng thống kê / sản lượng ngày dùng nó làm mẫu số tiến độ của đúng các lệnh đã chọn. Màn nhập đan (forReceive) vẫn thấy
+    // phần điểm đan còn giữ của SKU đã huỷ (Q6 câu 2a, 26/11/2026).
+    if (isCancelledOrder(order) && !opts.forReceive) return [];
     return (await this.getIssuePlanBatch([order.id.toString()]))[order.id.toString()] ?? [];
+  }
+
+  /** Id lệnh SX đã huỷ còn khung ở điểm đan (Σ đã xuất đan > Σ đã nhận về). */
+  async cancelledPendingReceipt(): Promise<{ productionOrderId: string; pendingQty: number }[]> {
+    const orders = await this.prisma.productionOrder.findMany({
+      where: { status: ProductionOrderStatus.CANCELLED, weavingIssues: { some: {} } },
+      select: { id: true },
+    });
+    if (orders.length === 0) return [];
+    const ids = orders.map((o) => o.id);
+    const [issued, received] = await Promise.all([
+      this.prisma.weavingIssue.groupBy({
+        by: ['productionOrderId'],
+        where: { productionOrderId: { in: ids } },
+        _sum: { qty: true },
+      }),
+      this.prisma.weavingReceipt.groupBy({
+        by: ['productionOrderId'],
+        where: { productionOrderId: { in: ids } },
+        _sum: { qty: true },
+      }),
+    ]);
+    const recv = new Map(received.map((r) => [r.productionOrderId.toString(), r._sum.qty ?? 0]));
+    return issued
+      .map((i) => ({
+        productionOrderId: i.productionOrderId.toString(),
+        pendingQty: (i._sum.qty ?? 0) - (recv.get(i.productionOrderId.toString()) ?? 0),
+      }))
+      .filter((r) => r.pendingQty > 0);
   }
 
   /** Σ WeavingIssueMaterial.qty theo materialId - đã lọc sẵn đúng (lệnh, mảnh). */
@@ -1122,6 +1184,7 @@ export class WeavingIssuesService {
       transfers,
       slipLines,
       exclusions,
+      fromStockRows,
     ] = await Promise.all([
       this.prisma.bomPiece.findMany({
         where: { bomRevisionId: { in: revisionIds } },
@@ -1170,7 +1233,19 @@ export class WeavingIssuesService {
       // Mỗi lệnh có tập loại dây/nệm bị loại riêng - 2 lệnh cùng SKU/revision khác dây dùng chung
       // map materialLinesByPiece (khoá theo revision) nhưng được lọc khác nhau ở bước dựng kế hoạch.
       loadBomOptionExclusions(this.prisma, orders),
+      this.prisma.cancelledGoodsTransfer.groupBy({
+        by: ['targetItemId', 'pieceId'],
+        where: {
+          kind: CancelledGoodsKind.WOVEN,
+          targetItemId: { in: orders.map((o) => o.productionInvoiceItemId) },
+        },
+        _sum: { qty: true },
+      }),
     ]);
+    const fromStockByKey = new Map<string, number>();
+    for (const t of fromStockRows) {
+      if (t.pieceId != null) fromStockByKey.set(`${t.targetItemId}:${t.pieceId}`, t._sum.qty ?? 0);
+    }
 
     const add = (m: Map<string, number>, key: string, n: number) =>
       m.set(key, (m.get(key) ?? 0) + n);
@@ -1246,7 +1321,9 @@ export class WeavingIssuesService {
         const totalQty = bp.qtyPerUnit * order.quantity;
         const issuedQty = pieceIssues.reduce((s, i) => s + i.qty, 0);
         const draftQty = draftByKey.get(opKey) ?? 0;
-        const byPlan = totalQty - issuedQty - draftQty;
+        const fromStockQty =
+          fromStockByKey.get(`${order.productionInvoiceItemId}:${bp.pieceId}`) ?? 0;
+        const byPlan = totalQty - issuedQty - draftQty - fromStockQty;
         const byStock =
           (readyByKey.get(`${opKey}:${finalStage}`) ?? 0) -
           (transferredByKey.get(opKey) ?? 0) -
@@ -1265,7 +1342,8 @@ export class WeavingIssuesService {
             pieceName: bp.piece.name,
             totalQty,
             issuedQty,
-            remainingToIssue: totalQty - issuedQty,
+            remainingToIssue: totalQty - issuedQty - fromStockQty,
+            fromStockQty,
             onDraftQty: draftQty,
             canIssueQty: Math.max(0, Math.min(byPlan, byStock)),
             sourceWarehouseCode: source?.warehouse.code ?? null,
