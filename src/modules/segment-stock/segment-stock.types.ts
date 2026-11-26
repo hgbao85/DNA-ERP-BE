@@ -137,3 +137,37 @@ export interface TransferOrderHoldingsResult {
   /** Số dòng giữ đoạn ở kho cũ có chuyển / nhả. */
   reservationCount: number;
 }
+
+/** Giao nhận giữa tổ (24/11/2026): kho Phôi giao đoạn của 1 lệnh cho tổ nhận (xác nhận phiếu XK dòng SEGMENT_HANDOVER). */
+export interface HandoverOrderHoldingsInput extends SegmentCodeRef {
+  productionInvoiceId: bigint;
+  /** Kho Phôi của xưởng làm lệnh (kho của phiếu). */
+  fromWarehouseId: bigint;
+  /** Kho tổ nhận: kho Hàn cùng xưởng (tổ Hàn) hoặc kho Sơn (mảnh không qua Hàn). */
+  toWarehouseId: bigint;
+  qty: number;
+  /** refId bút toán (IssueSlipLine.id). */
+  refId: string;
+  /** Gọi lại cùng khoá không chuyển lần 2 (trả duplicate = true). */
+  idempotencyKey: string;
+  note?: string | null;
+  actorId?: string | null;
+}
+
+export interface HandoverOrderHoldingsResult {
+  movedQty: number;
+  /** Lấy từ phần lệnh còn giữ ở kho Phôi. */
+  fromHeldQty: number;
+  /** Lấy từ cột dư của kho Phôi (ghi SURPLUS_IN cho lệnh trước khi giao). */
+  fromSurplusQty: number;
+  duplicate: boolean;
+}
+
+/** Trạng thái 1 ô (kho, mã đoạn) nhìn từ 1 lệnh - đọc SAU khi khoá ô. */
+export interface OrderCellState {
+  onHandQty: number;
+  /** Phần lệnh còn giữ (reserved - consumed), trần = tồn thật. */
+  ownRemainingQty: number;
+  /** Dư dùng được của ô (tồn - Σ còn giữ mọi lệnh, không âm). */
+  surplusQty: number;
+}

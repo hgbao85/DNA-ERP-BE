@@ -10,6 +10,8 @@ const FE_MODULES = [
   'purchasing',
   'materials_manager',
   'inbound_warehouse',
+  // Điều phối đan (25/11/2026)
+  'weaving_coordination',
 ];
 
 /** Type CỐ Ý không có link, kèm lý do - thêm type mới vào đây phải có lý do rõ ràng. */

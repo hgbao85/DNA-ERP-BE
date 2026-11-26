@@ -44,6 +44,7 @@ import {
   KcsCloseStepGroupDto,
 } from './dto/kcs-close.dto';
 import { MyOutputQueryDto, ScanReceiveSteelDto, ScanReportDto } from './dto/floor-scan.dto';
+import { PaintPalletDto } from '../pallets/dto/pallet.dto';
 import {
   CreateFloorWorkerDto,
   FLOOR_WORKER_STAGES,
@@ -122,6 +123,28 @@ export class FloorController {
     @Headers('idempotency-key') idempotencyKey: string | undefined,
   ) {
     return this.scan.report(token, user, dto, idempotencyKey);
+  }
+
+  /** Pallet Sơn (24/11/2026): công nhân Sơn quét tem pallet (`/floor?pallet=<token>`) - xem pallet, lệnh, mảnh, số. */
+  @Get('pallets/:palletToken')
+  @RequirePermissions(perm(PermissionAction.VIEW))
+  @RequireMfgRole(MfgRole.SON)
+  palletView(@Param('palletToken') palletToken: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.scan.palletView(palletToken, user);
+  }
+
+  /** "Sơn xong pallet này" / "Báo thiếu" - báo qua điểm sơn `:token` (máy quét gần nhất). Idempotency-Key bắt buộc. */
+  @Post('scan/:token/pallets/:palletToken/paint')
+  @RequirePermissions(perm(PermissionAction.CREATE))
+  @RequireMfgRole(MfgRole.SON)
+  paintPallet(
+    @Param('token') token: string,
+    @Param('palletToken') palletToken: string,
+    @Body() dto: PaintPalletDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ) {
+    return this.scan.paintPallet(token, palletToken, user, dto, idempotencyKey);
   }
 
   @Post('scan/:token/steel-issues/:id/receive')

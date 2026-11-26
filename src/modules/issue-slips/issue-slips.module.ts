@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { StageHandoverModule } from '../stage-handover/stage-handover.module';
+import { PalletsModule } from '../pallets/pallets.module';
 import { FloorModule } from '../floor/floor.module';
 import { MaterialIssuesModule } from '../material-issues/material-issues.module';
 import { SteelIssuesModule } from '../steel-issues/steel-issues.module';
@@ -22,6 +24,9 @@ import { IssueSlipsService } from './issue-slips.service';
     MaterialYieldIssuesModule,
     MaterialYieldRecipesModule,
     FloorModule,
+    StageHandoverModule,
+    // Pallet Sơn (24/11/2026): dòng xuất đan quét pallet, xác nhận / huỷ phiếu giải phóng pallet.
+    PalletsModule,
   ],
   controllers: [IssueSlipsController],
   providers: [IssueSlipsService],

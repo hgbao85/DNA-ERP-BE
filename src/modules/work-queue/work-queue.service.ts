@@ -1,4 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { MfgRole } from '../../generated/prisma/client';
+import { isCkDgQrEnabled } from '../ck-dg-qr/ck-dg-qr.config';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
 import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
@@ -53,6 +55,8 @@ export class WorkQueueService {
     id?: string;
     roles: string[];
     warehouseScope: string | null;
+    /** CK_DG_QR (24/11/2026): KCS chuyền kiểm là tài khoản PIN (vai FLOOR_WORKER) - nhận biết qua mfgRole. */
+    mfgRole?: string | null;
   }): Promise<WorkQueueResponseDto> {
     const has = (role: string) => user.roles.includes(role);
     const counts: Record<string, number> = {};
@@ -138,6 +142,15 @@ export class WorkQueueService {
           counts.kcsPhoi = phoi;
           counts.kcsHan = han;
           counts.kcsSon = son;
+        }),
+      );
+    }
+    // Chuyền kiểm bằng quét QR (24/11/2026): số đợt công nhân chuyền kiểm báo chờ KCS chuyền kiểm chấm. Tắt công tắc: không có khoá.
+    if (user.mfgRole === MfgRole.KCS_CHUYEN_KIEM && isCkDgQrEnabled()) {
+      set(
+        'kcsChuyenKiem',
+        this.prisma.transferCheckBatch.count({
+          where: { status: 'AWAITING_KCS', productionInvoiceItem: { cancelledAt: null } },
         }),
       );
     }

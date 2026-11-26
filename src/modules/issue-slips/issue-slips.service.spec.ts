@@ -727,6 +727,53 @@ describe('IssueSlipsService - phiếu xuất XK (Đợt 6, bản v8 YC4)', () =>
       expect(weaving.createPieceIssueInTx).not.toHaveBeenCalled();
     });
 
+    it('pallet Sơn (24/11/2026): dòng có palletIds khi chưa bật pallet -> 400, không cấp số; dòng không phải đan -> 400', async () => {
+      const prevPallet = process.env.PALLET_SON_ENABLED;
+      process.env.PALLET_SON_ENABLED = 'false';
+      try {
+        await expect(
+          service.create(
+            {
+              weavingPointId: '40',
+              lines: [
+                {
+                  kind: IssueSlipLineKind.WEAVING_PIECE,
+                  productionOrderId: '70',
+                  pieceId: '20',
+                  qty: 10,
+                  palletIds: ['5'],
+                },
+              ],
+            },
+            'u-son',
+            'phoi-son-han-son-pa',
+          ),
+        ).rejects.toThrow('PALLET_SON_ENABLED');
+        await expect(
+          service.create(
+            {
+              lines: [
+                {
+                  kind: IssueSlipLineKind.CONSUMABLE,
+                  materialId: '60',
+                  productionOrderId: '70',
+                  stage: MfgStage.SON,
+                  qty: 1,
+                  palletIds: ['5'],
+                },
+              ],
+            },
+            'u-son',
+            'phoi-son-han-son-pa',
+          ),
+        ).rejects.toThrow('Chỉ dòng mảnh xuất đan mới quét pallet');
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+      } finally {
+        if (prevPallet === undefined) delete process.env.PALLET_SON_ENABLED;
+        else process.env.PALLET_SON_ENABLED = prevPallet;
+      }
+    });
+
     it('không trộn dòng xuất đan với sắt/tiêu hao; vật tư kèm cần phiếu mảnh cùng chuyến và đúng mảnh trên phiếu đó', async () => {
       await expect(
         service.create(

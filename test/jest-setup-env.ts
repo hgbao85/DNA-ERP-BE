@@ -12,3 +12,11 @@ process.env.THROTTLE_LIMIT = process.env.THROTTLE_LIMIT ?? '1000';
 process.env.LOG_LEVEL = process.env.LOG_LEVEL ?? 'silent';
 process.env.API_PREFIX = process.env.API_PREFIX ?? 'api';
 process.env.PORT = process.env.PORT ?? '0';
+// Công tắc tính năng: test luôn bắt đầu ở trạng thái TẮT (mặc định production), không lấy theo .env của máy đang
+// chạy (ConfigModule đọc .env nhưng không ghi đè biến đã có). Suite cần bật thì tự bật / trả lại trong beforeAll / afterAll.
+process.env.SEGMENT_STOCK_ENABLED = 'false';
+process.env.STAGE_HANDOVER_ENABLED = 'false';
+process.env.PALLET_SON_ENABLED = 'false';
+process.env.CK_DG_QR_ENABLED = 'false';
+process.env.VI_TRI_KHO_ENABLED = 'false';
+process.env.DIEU_PHOI_DAN_ENABLED = 'false';

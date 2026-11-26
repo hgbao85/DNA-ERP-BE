@@ -7,12 +7,13 @@ describe('WeavingPointsService', () => {
   let prisma: {
     weavingPoint: {
       findUnique: jest.Mock;
+      findFirst: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
       delete: jest.Mock;
     };
-    weavingIssue: { count: jest.Mock };
-    weavingReceipt: { count: jest.Mock };
+    weavingIssue: { count: jest.Mock; aggregate: jest.Mock };
+    weavingReceipt: { count: jest.Mock; aggregate: jest.Mock };
     weavingIssueMaterial: { count: jest.Mock };
     issueSlip: { count: jest.Mock };
     $queryRaw: jest.Mock;
@@ -40,12 +41,19 @@ describe('WeavingPointsService', () => {
     prisma = {
       weavingPoint: {
         findUnique: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn(),
         update: jest.fn(),
         delete: jest.fn(),
       },
-      weavingIssue: { count: jest.fn().mockResolvedValue(0) },
-      weavingReceipt: { count: jest.fn().mockResolvedValue(0) },
+      weavingIssue: {
+        count: jest.fn().mockResolvedValue(0),
+        aggregate: jest.fn().mockResolvedValue({ _sum: { qty: 0 } }),
+      },
+      weavingReceipt: {
+        count: jest.fn().mockResolvedValue(0),
+        aggregate: jest.fn().mockResolvedValue({ _sum: { qty: 0 } }),
+      },
       weavingIssueMaterial: { count: jest.fn().mockResolvedValue(0) },
       issueSlip: { count: jest.fn().mockResolvedValue(0) },
       $queryRaw: jest.fn().mockResolvedValue([]),
@@ -136,6 +144,68 @@ describe('WeavingPointsService', () => {
 
       await expect(service.remove('999', admin)).rejects.toThrow(NotFoundException);
       expect(prisma.weavingPoint.delete).not.toHaveBeenCalled();
+    });
+  });
+  describe('Điều phối đan Đ3 (công tắc DIEU_PHOI_DAN_ENABLED)', () => {
+    const coordinator = { roles: ['WEAVING_COORDINATOR'], warehouseScope: null };
+    const phuKien = { roles: ['WAREHOUSE_STAFF'], warehouseScope: 'vat-tu-tp' };
+    const prev = process.env.DIEU_PHOI_DAN_ENABLED;
+    afterEach(() => {
+      process.env.DIEU_PHOI_DAN_ENABLED = prev;
+    });
+
+    it('tắt: như cũ - thủ kho Phụ kiện sửa được, Điều phối đan bị chặn, không kiểm trùng tên / còn giữ', async () => {
+      process.env.DIEU_PHOI_DAN_ENABLED = 'false';
+      prisma.weavingPoint.findUnique.mockResolvedValue(null);
+      prisma.weavingPoint.create.mockResolvedValue(existingPoint);
+      await service.create({ code: 'DD-09' }, phuKien);
+      await expect(service.create({ code: 'DD-10' }, coordinator)).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(prisma.weavingPoint.findFirst).not.toHaveBeenCalled();
+      prisma.weavingPoint.findUnique.mockResolvedValue(existingPoint);
+      prisma.weavingPoint.update.mockResolvedValue({ ...existingPoint, isActive: false });
+      prisma.weavingIssue.aggregate.mockResolvedValue({ _sum: { qty: 5 } });
+      await service.update('1', { isActive: false }, admin);
+      expect(prisma.weavingIssue.aggregate).not.toHaveBeenCalled();
+    });
+
+    it('bật: chỉ Admin + Điều phối đan; thủ kho Phụ kiện -> 403', async () => {
+      process.env.DIEU_PHOI_DAN_ENABLED = 'true';
+      prisma.weavingPoint.findUnique.mockResolvedValue(null);
+      prisma.weavingPoint.create.mockResolvedValue(existingPoint);
+      await service.create({ code: 'DD-11', contactPerson: 'Chị Lan' }, coordinator);
+      expect(prisma.weavingPoint.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ contactPerson: 'Chị Lan' }) as unknown,
+      });
+      await expect(service.create({ code: 'DD-12' }, phuKien)).rejects.toThrow(ForbiddenException);
+      prisma.weavingPoint.findUnique.mockResolvedValue(existingPoint);
+      await expect(service.remove('1', phuKien)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('bật: trùng tên (không phân biệt hoa thường) -> 409', async () => {
+      process.env.DIEU_PHOI_DAN_ENABLED = 'true';
+      prisma.weavingPoint.findUnique.mockResolvedValue(null);
+      prisma.weavingPoint.findFirst.mockResolvedValue({ code: 'DD-01', fullName: 'Diem dan 01' });
+      await expect(
+        service.create({ code: 'dd-99', fullName: 'DIEM DAN 01' }, coordinator),
+      ).rejects.toThrow(/Trùng tên/);
+      expect(prisma.weavingPoint.create).not.toHaveBeenCalled();
+    });
+
+    it('bật: không ngừng được điểm đan còn giữ hàng; hết giữ thì ngừng được', async () => {
+      process.env.DIEU_PHOI_DAN_ENABLED = 'true';
+      prisma.weavingPoint.findUnique.mockResolvedValue(existingPoint);
+      prisma.weavingIssue.aggregate.mockResolvedValue({ _sum: { qty: 10 } });
+      prisma.weavingReceipt.aggregate.mockResolvedValue({ _sum: { qty: 4 } });
+      await expect(service.update('1', { isActive: false }, coordinator)).rejects.toThrow(
+        /còn giữ 6 mảnh/,
+      );
+      expect(prisma.weavingPoint.update).not.toHaveBeenCalled();
+      prisma.weavingReceipt.aggregate.mockResolvedValue({ _sum: { qty: 10 } });
+      prisma.weavingPoint.update.mockResolvedValue({ ...existingPoint, isActive: false });
+      await service.update('1', { isActive: false }, coordinator);
+      expect(prisma.weavingPoint.update).toHaveBeenCalled();
     });
   });
 });

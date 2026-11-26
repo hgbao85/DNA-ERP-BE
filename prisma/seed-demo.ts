@@ -166,6 +166,14 @@ const DEMO_ACCOUNTS: DemoAccount[] = [
     roles: [BUSINESS_ROLES.SPEC_ACCESSORY_PACKAGING_STAFF],
     mfgRole: MfgRole.SPEC_ACCESSORY,
   },
+  {
+    // Điều phối đan (25/11/2026, docs THIET-KE-DIEU-PHOI-DAN) - tài khoản văn phòng theo dõi điểm đan gia công ngoài. KHÔNG kèm
+    // WAREHOUSE_STAFF / warehouseScope (không xuất / nhập kho). Màn "Điều phối đan" chỉ hiện khi DIEU_PHOI_DAN_ENABLED bật.
+    username: 'dieuphoidan',
+    email: 'dieuphoidan@demo.com',
+    name: 'Điều phối đan',
+    roles: [BUSINESS_ROLES.WEAVING_COORDINATOR],
+  },
 ];
 
 async function main() {

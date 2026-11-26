@@ -74,8 +74,11 @@ export function pieceMaxNow(item: {
   passedQty: number;
   awaitingQcQty: number;
   openQty: number;
+  /** Giao nhận giữa tổ (24/11/2026): còn theo hàng đã nhận (Hàn / Sơn, khi bật công tắc). Không truyền / null = không áp dụng. */
+  receivedLeft?: number | null;
 }): number {
-  return Math.max(0, item.plannedQty - item.passedQty - item.awaitingQcQty - item.openQty);
+  const byPlan = Math.max(0, item.plannedQty - item.passedQty - item.awaitingQcQty - item.openQty);
+  return item.receivedLeft == null ? byPlan : Math.max(0, Math.min(byPlan, item.receivedLeft));
 }
 
 /** Pat (công đoạn của mảnh Phôi): max(0, cần - (đã báo - lỗi - thiếu)). `doneQty` là số thô (append-only). */

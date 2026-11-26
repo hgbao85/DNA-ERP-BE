@@ -18,6 +18,7 @@ import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { auditEvent } from '../../common/utils/audit-event.util';
 import { vnDayStart } from '../../common/utils/floor-stats.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
+import { loadedQtyByLine } from '../vi-tri-kho/booking-ship-guard';
 import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -406,6 +407,15 @@ export class BookingsService {
       if (dto.warehouseCode !== undefined) {
         const code = trimOrNull(dto.warehouseCode);
         if (code) await this.assertFinishedWarehouse(tx, code);
+        // Vị trí kho (25/11/2026): đã lấy hàng ở ô của kho gom cũ vào cont thì không đổi kho gom được nữa.
+        if (code !== cur.warehouseCode) {
+          const loaded = await loadedQtyByLine(tx, id);
+          if ([...loaded.values()].some((q) => q > 0)) {
+            throw new ConflictException(
+              `Booking ${cur.bookingNo} đã có hàng lấy vào cont ở kho '${cur.warehouseCode}' - không đổi kho gom hàng được`,
+            );
+          }
+        }
         data.warehouseCode = code;
       }
       if (dto.note !== undefined) data.note = trimOrNull(dto.note);
@@ -503,6 +513,13 @@ export class BookingsService {
       if (shipped) {
         throw new ConflictException(
           `Booking ${cur.bookingNo} đã có hàng xuất thực tế - không huỷ được`,
+        );
+      }
+      // Vị trí kho (25/11/2026): hàng đã lấy khỏi ô vào cont - huỷ thì hàng "mất" khỏi tồn ô. Thủ kho trả về ô trước.
+      const loaded = await loadedQtyByLine(tx, id);
+      if ([...loaded.values()].some((q) => q > 0)) {
+        throw new ConflictException(
+          `Booking ${cur.bookingNo} đã có hàng lấy vào cont - thủ kho Thành phẩm trả hàng về ô trước khi huỷ`,
         );
       }
       const updated = await tx.booking.update({
@@ -721,6 +738,19 @@ export class BookingsService {
       if (want === undefined || want < e.shippedQty) {
         throw new ConflictException(
           `SKU ${e.productionInvoiceItem.mfgProduct.factoryCode} đã xuất ${e.shippedQty} bộ - không gỡ hay giảm dưới số đã xuất`,
+        );
+      }
+    }
+
+    // Vị trí kho (25/11/2026): dòng đã có hàng lấy vào cont không gỡ / giảm dưới số đã lấy (thủ kho trả về ô trước).
+    const loaded = await loadedQtyByLine(tx, bookingId);
+    for (const e of existing) {
+      const inCont = loaded.get(e.id.toString()) ?? 0;
+      if (inCont <= 0) continue;
+      const want = wantByPii.get(e.productionInvoiceItemId.toString());
+      if (want === undefined || want < Math.max(e.shippedQty, inCont)) {
+        throw new ConflictException(
+          `SKU ${e.productionInvoiceItem.mfgProduct.factoryCode} đã lấy ${inCont} bộ vào cont - không gỡ hay giảm dưới số đã lấy (thủ kho trả hàng về ô trước)`,
         );
       }
     }

@@ -6,6 +6,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   FloorReportKind,
@@ -62,6 +63,9 @@ import {
 } from '../../common/utils/segment-code.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../../realtime/realtime.service';
+import { isStageHandoverEnabled } from '../stage-handover/stage-handover.config';
+import { StageHandoverService } from '../stage-handover/stage-handover.service';
+import { stageWarehouseOfPi } from '../stage-handover/stage-handover-warehouse.util';
 import { CreatePieceStepBatchDto } from './dto/create-piece-step-batch.dto';
 import { CreateProductionBatchDto } from './dto/create-production-batch.dto';
 import { ListPieceStepBundlesQueryDto } from './dto/list-piece-step-bundles-query.dto';
@@ -185,6 +189,8 @@ export class ProductionBatchesService {
     private readonly notifications: NotificationsService,
     private readonly realtime: RealtimeService,
     private readonly segmentStock: SegmentStockService,
+    // Giao nhận giữa tổ (24/11/2026): cổng báo Hàn / Sơn theo hàng đã nhận. @Optional - chỉ dùng khi bật công tắc.
+    @Optional() private readonly stageHandover?: StageHandoverService,
   ) {}
 
   /** Phát realtime SAU KHI transaction đã commit (xem RealtimeService). */
@@ -300,6 +306,7 @@ export class ProductionBatchesService {
           dto.stage,
           dto.reportedQty,
         );
+        await this.assertReceivedCapInTx(tx, order.id, pieceBigId, dto.stage, dto.reportedQty);
 
         const batch = await tx.productionBatch.create({
           data: {
@@ -394,6 +401,7 @@ export class ProductionBatchesService {
             'ghi nhận sản lượng',
           );
           await this.assertPieceReportWithinPlanInTx(tx, order.id, pieceBigId, dto.stage, dto.qty);
+          await this.assertReceivedCapInTx(tx, order.id, pieceBigId, dto.stage, dto.qty);
 
           // Mỗi công nhân 1 đợt riêng (2026-10-13, mục 20.5/22): chỉ cộng vào đợt OPEN do CHÍNH người này
           // mở (reportedById = người mở) - KCS chấm đạt/lỗi theo đợt nên biết được của ai.
@@ -425,7 +433,7 @@ export class ProductionBatchesService {
               });
           // Sổ ghi từng lần báo (ai/lúc nào/bao nhiêu) - ProductionBatch.reportedById chỉ là người MỞ đợt,
           // các lần cộng dồn sau không còn dấu vết nếu không có dòng này.
-          await writeFloorReport(tx, {
+          const report = await writeFloorReport(tx, {
             kind: FloorReportKind.PIECE,
             reportedById,
             idempotencyKey,
@@ -434,6 +442,10 @@ export class ProductionBatchesService {
             productionInvoiceId: piItem.productionInvoiceId,
             lines: [{ pieceId: pieceBigId, qty: dto.qty }],
           });
+          // Pallet Sơn (24/11/2026): báo từ pallet ghi pallet Sơn xong trong cùng transaction (khoá dòng pallet SAU các khoá trên).
+          if (ctx?.afterWriteInTx) {
+            await ctx.afterWriteInTx(tx, { productionBatchId: batch.id, floorReportId: report.id });
+          }
           return batch;
         },
         { maxWait: 10_000, timeout: 20_000 },
@@ -546,6 +558,27 @@ export class ProductionBatchesService {
   }
 
   /**
+   * Giao nhận giữa tổ (24/11/2026, 3.3b): bật công tắc thì Hàn / Sơn chỉ báo trong số hàng đã nhận qua phiếu giao (+ phần
+   * QLSX mở chặn) - gọi SAU cổng kế hoạch nên số báo được = min(còn theo kế hoạch, còn theo hàng đã nhận); mở chặn không nâng được
+   * trần kế hoạch. Tắt công tắc: không làm gì, không đọc gì.
+   */
+  private async assertReceivedCapInTx(
+    tx: PrismaTx,
+    orderId: bigint,
+    pieceId: bigint,
+    stage: MfgStage,
+    qty: number,
+  ): Promise<void> {
+    if (!isStageHandoverEnabled() || !this.stageHandover) return;
+    await this.stageHandover.assertReceivedCapInTx(tx, {
+      productionOrderId: orderId,
+      pieceId,
+      stage,
+      qty,
+    });
+  }
+
+  /**
    * Chốt đợt - đóng batch đang OPEN, chuyển AWAITING_QC (mirror finishCutBundle() bên Sắt). P1 (18/11/2026): KCS tự bấm
    * "Chấm" (FloorReviewService.closeProductionBatch, truyền opts { notifyKcs: false, gateLabel: 'chốt để chấm' } và vai của
    * tổ, không truyền 'KCS'); tài khoản thống kê vẫn bấm "Gửi KCS" qua route cũ (opts mặc định). Sau bước này KCS chấm qua
@@ -649,6 +682,32 @@ export class ProductionBatchesService {
     return w.code;
   }
 
+  /** Giao nhận giữa tổ: kho tổ nhận đoạn (Hàn / Sơn) của lệnh - nơi Hàn / Sơn trừ đoạn khi bật công tắc. Tổ khác: kho Phôi. */
+  private async handoverConsumeWarehouseCode(
+    productionOrderId: bigint,
+    stage: MfgStage,
+    db: PrismaTx,
+  ): Promise<string> {
+    if (stage !== MfgStage.HAN && stage !== MfgStage.SON) {
+      return this.phoiWarehouseCodeOfOrder(productionOrderId, db);
+    }
+    const order = await db.productionOrder.findUnique({
+      where: { id: productionOrderId },
+      select: { productionInvoiceItem: { select: { productionInvoiceId: true } } },
+    });
+    const w = await stageWarehouseOfPi(
+      db,
+      order?.productionInvoiceItem.productionInvoiceId ?? null,
+      stage,
+    );
+    if (!w) {
+      throw new BadRequestException(
+        `Chưa có kho ${stage === MfgStage.HAN ? 'Hàn' : 'Sơn'} cho xưởng của lệnh - báo Admin tạo kho trước`,
+      );
+    }
+    return w.code;
+  }
+
   /**
    * Khoá của 1 lô mảnh, theo thứ tự cố định (MF3 - khoá advisory trước, FOR UPDATE sau cùng): khoá CHIA SẺ chuyển đổi tồn
    * đoạn (chỉ khi công tắc bật - lượt chuyển đổi giữ độc quyền) rồi `production-batch-open:{lệnh}:{mảnh}:{tổ}` (độc quyền,
@@ -702,7 +761,11 @@ export class ProductionBatchesService {
     ]);
     if (consumed || overage) return;
     // Mã kho Phôi của xưởng làm lệnh tra bằng chính tx (đọc thuần) - không mở thêm kết nối ngoài transaction đang giữ khoá.
-    const sourceWarehouseCode = await this.phoiWarehouseCodeOfOrder(batch.productionOrderId, tx);
+    // Giao nhận giữa tổ (24/11/2026): bật công tắc thì đoạn đã giao nằm ở kho của tổ nhận - Hàn trừ ở kho Hàn của xưởng, Sơn
+    // (mảnh không qua Hàn) trừ ở kho Sơn nơi sơn.
+    const sourceWarehouseCode = isStageHandoverEnabled()
+      ? await this.handoverConsumeWarehouseCode(batch.productionOrderId, batch.stage, tx)
+      : await this.phoiWarehouseCodeOfOrder(batch.productionOrderId, tx);
     await this.postSegmentConsumeEntries(
       tx,
       {
@@ -1014,6 +1077,21 @@ export class ProductionBatchesService {
     const workshopId = await resolver.workshopIdOfPi(
       order.productionInvoiceItem.productionInvoiceId,
     );
+    // Giao nhận giữa tổ (24/11/2026): bật công tắc thì mảnh Hàn đạt KCS LUÔN vào kho Hàn của xưởng (kể cả mảnh còn sơn ở Phú An) để
+    // thủ kho Hàn giao cho Sơn bằng phiếu (FRAME_HANDOVER chuyển kho Hàn -> kho Sơn); KCS Sơn của mảnh qua Hàn KHÔNG
+    // ghi thêm (mảnh đã nằm ở kho Sơn từ lúc giao / phiếu chuyển Phước An) - không đếm đôi.
+    if (isStageHandoverEnabled() && bp.needsHan) {
+      if (batch.stage !== MfgStage.HAN) return;
+      const han = await resolver.kindWarehouseOf(WarehouseKind.HAN, workshopId);
+      if (!han) {
+        this.logger.warn(
+          `Không có kho HAN cho xưởng ${workshopId ?? '-'} - bỏ qua ghi mảnh batch ${batch.id}`,
+        );
+        return;
+      }
+      await this.postFrameOutput(tx, batch, han.id, createdById);
+      return;
+    }
     let creditStage: MfgStage = !bp.needsHan
       ? MfgStage.PHOI
       : bp.needsSon
@@ -1036,13 +1114,22 @@ export class ProductionBatchesService {
       );
       return;
     }
+    await this.postFrameOutput(tx, batch, target.id, createdById);
+  }
+
+  private async postFrameOutput(
+    tx: PrismaTx,
+    batch: { id: bigint; pieceId: bigint; qty: number },
+    targetWarehouseId: bigint,
+    createdById: string,
+  ): Promise<void> {
     const production = await tx.warehouse.findUniqueOrThrow({
       where: { code: PRODUCTION_WAREHOUSE_CODE },
     });
     await this.stockLedgerService.postEntry(
       {
         fromWarehouseId: production.id,
-        toWarehouseId: target.id,
+        toWarehouseId: targetWarehouseId,
         pieceId: batch.pieceId,
         qty: batch.qty,
         refType: StockLedgerRefType.FRAME_OUTPUT,

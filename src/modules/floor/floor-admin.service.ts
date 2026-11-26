@@ -16,8 +16,10 @@ import {
   ProcessStep,
   Prisma,
   SolverMachine,
+  WarehouseKind,
   WorkstationKind,
 } from '../../generated/prisma/client';
+import { isCkDgQrEnabled } from '../ck-dg-qr/ck-dg-qr.config';
 import { MFG_FLOOR_WAREHOUSE_SCOPE } from '../../common/constants/role-permissions.constant';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
@@ -33,7 +35,9 @@ import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../prisma/prisma
 import { ProductionBatchesService } from '../production-batches/production-batches.service';
 import { SteelIssuesService } from '../steel-issues/steel-issues.service';
 import {
+  CK_DG_ACCOUNT_STAGES,
   CreateFloorWorkerDto,
+  FloorAccountStage,
   FloorWorkerStage,
   UpdateFloorWorkerDto,
 } from './dto/floor-worker.dto';
@@ -57,6 +61,27 @@ function newQrToken(): string {
 
 /** Nạp tên xưởng cùng lúc với máy (không N+1) - 13/11/2026. */
 const WORKSTATION_INCLUDE = { workshop: { select: { name: true } } } as const;
+/** 24/11/2026 (CK_DG_QR): bật công tắc thì nạp thêm kho Thành phẩm của điểm chuyền kiểm / khu đóng gói (tắt: như cũ). */
+const workstationInclude = () =>
+  isCkDgQrEnabled()
+    ? { ...WORKSTATION_INCLUDE, warehouse: { select: { code: true, name: true } } }
+    : WORKSTATION_INCLUDE;
+
+/** Điểm của kho Thành phẩm (24/11/2026, CK_DG_QR) - tổ đi kèm loại điểm. */
+const FG_KINDS: readonly WorkstationKind[] = [
+  WorkstationKind.TRANSFER_CHECK,
+  WorkstationKind.PACKING,
+];
+const CK_DG_STAGES: readonly MfgStage[] = [MfgStage.CHUYEN_KIEM, MfgStage.DONG_GOI];
+
+/** Tổ mới (Chuyền kiểm / Đóng gói / KCS chuyền kiểm) chỉ tạo / đổi sang được khi bật CK_DG_QR_ENABLED. */
+function assertAccountStageAllowed(stage: FloorAccountStage | undefined): void {
+  if (stage && CK_DG_ACCOUNT_STAGES.includes(stage) && !isCkDgQrEnabled()) {
+    throw new BadRequestException(
+      'Tổ Chuyền kiểm / Đóng gói / KCS chuyền kiểm chưa bật (CK_DG_QR_ENABLED)',
+    );
+  }
+}
 
 /** Cùng mức với TX_OPTIONS của cut-allocation.service.ts: mọi chỗ giữ khoá `cut-allocation:<xưởng>` chờ lâu như nhau. */
 const CUT_LOCK_TX_OPTIONS = { maxWait: 10_000, timeout: 30_000 } as const;
@@ -117,13 +142,14 @@ export class FloorAdminService {
     const rows = await this.prisma.workstation.findMany({
       where: this.ownOrUnassigned(scope),
       orderBy: [{ stage: 'asc' }, { code: 'asc' }],
-      include: WORKSTATION_INCLUDE,
+      include: workstationInclude(),
     });
     return rows.map((w) => this.toWorkstation(w));
   }
 
   async createWorkstation(dto: CreateWorkstationDto, userId?: string) {
     this.assertWorkstationShape(dto.stage, dto.kind, dto.processStep ?? null);
+    const warehouseId = await this.resolveFgWarehouse(dto.kind, dto.warehouseId);
     const scope = await this.workshopScope.getScope(userId);
     // 13/11/2026: máy cắt BẮT BUỘC có loại (CHECK DB) - thiếu thì mặc định laser; loại khác không
     // được mang loại máy cắt.
@@ -147,9 +173,10 @@ export class FloorAdminService {
           processStep: dto.kind === WorkstationKind.STEP ? dto.processStep : null,
           cutMachineType,
           workshopId,
+          ...(warehouseId != null ? { warehouseId } : {}),
           qrToken: newQrToken(),
         },
-        include: WORKSTATION_INCLUDE,
+        include: workstationInclude(),
       });
       return this.toWorkstation(created);
     } catch (e) {
@@ -229,7 +256,7 @@ export class FloorAdminService {
           return tx.workstation.update({
             where: { id: machineId },
             data,
-            include: WORKSTATION_INCLUDE,
+            include: workstationInclude(),
           });
         }, CUT_LOCK_TX_OPTIONS);
         return this.toWorkstation(updated);
@@ -238,7 +265,7 @@ export class FloorAdminService {
     const updated = await this.prisma.workstation.update({
       where: { id: machineId },
       data,
-      include: WORKSTATION_INCLUDE,
+      include: workstationInclude(),
     });
     return this.toWorkstation(updated);
   }
@@ -283,7 +310,7 @@ export class FloorAdminService {
     const updated = await this.prisma.workstation.update({
       where: { id: parseBigIntId(id) },
       data: { qrToken: newQrToken() },
-      include: WORKSTATION_INCLUDE,
+      include: workstationInclude(),
     });
     return this.toWorkstation(updated);
   }
@@ -298,6 +325,26 @@ export class FloorAdminService {
     if (stage === MfgStage.DAN) {
       throw new BadRequestException('Tổ Đan không dùng mã QR tại máy');
     }
+    // 24/11/2026 (CK_DG_QR): điểm chuyền kiểm của tổ Chuyền kiểm, khu đóng gói của tổ Đóng gói - chỉ khi bật công tắc.
+    if (FG_KINDS.includes(kind) || CK_DG_STAGES.includes(stage)) {
+      if (!isCkDgQrEnabled()) {
+        throw new BadRequestException(
+          'Điểm chuyền kiểm / khu đóng gói chưa bật (CK_DG_QR_ENABLED)',
+        );
+      }
+      const expected =
+        kind === WorkstationKind.TRANSFER_CHECK
+          ? MfgStage.CHUYEN_KIEM
+          : kind === WorkstationKind.PACKING
+            ? MfgStage.DONG_GOI
+            : null;
+      if (expected !== stage) {
+        throw new BadRequestException(
+          'Tổ Chuyền kiểm chỉ có "Điểm chuyền kiểm", tổ Đóng gói chỉ có "Khu đóng gói"',
+        );
+      }
+      return;
+    }
     if (kind !== WorkstationKind.PIECE && stage !== MfgStage.PHOI) {
       throw new BadRequestException('Máy cắt, máy công đoạn phụ và khu nhận sắt chỉ thuộc tổ Phôi');
     }
@@ -306,6 +353,33 @@ export class FloorAdminService {
         'Máy công đoạn phụ phải chọn công đoạn (Uốn/Dập/Đục lỗ/Tán/Tóp đầu/Xẻ/Nhấn)',
       );
     }
+  }
+
+  /** Điểm chuyền kiểm / khu đóng gói BẮT BUỘC 1 kho Thành phẩm đang dùng; loại khác không mang kho (CHECK workstations_fg_chk). */
+  private async resolveFgWarehouse(
+    kind: WorkstationKind,
+    warehouseId: string | undefined,
+  ): Promise<bigint | null> {
+    if (!FG_KINDS.includes(kind)) {
+      if (warehouseId) {
+        throw new BadRequestException(
+          'Chỉ điểm chuyền kiểm / khu đóng gói mới chọn kho Thành phẩm',
+        );
+      }
+      return null;
+    }
+    if (!warehouseId) throw new BadRequestException('Chọn kho Thành phẩm cho điểm này');
+    const wh = await this.prisma.warehouse.findUnique({
+      where: { id: parseBigIntId(warehouseId) },
+      select: { id: true, kind: true, isActive: true, deletedAt: true, isVirtual: true },
+    });
+    if (!wh || wh.deletedAt || wh.isVirtual || !wh.isActive) {
+      throw new BadRequestException(`Kho ${warehouseId} không tồn tại hoặc đã ngừng dùng`);
+    }
+    if (wh.kind !== WarehouseKind.THANH_PHAM) {
+      throw new BadRequestException('Điểm chuyền kiểm / khu đóng gói phải gắn kho Thành phẩm');
+    }
+    return wh.id;
   }
 
   /** Xưởng gán cho máy phải tồn tại và đang hoạt động; trả id số để ghi. */
@@ -347,6 +421,8 @@ export class FloorAdminService {
     workshopId?: bigint | null;
     cutMachineType?: SolverMachine | null;
     workshop?: { name: string } | null;
+    warehouseId?: bigint | null;
+    warehouse?: { code: string; name: string } | null;
   }) {
     return {
       id: w.id.toString(),
@@ -361,6 +437,9 @@ export class FloorAdminService {
       workshopId: w.workshopId != null ? w.workshopId.toString() : null,
       workshopName: w.workshop?.name ?? null,
       cutMachineType: w.cutMachineType ?? null,
+      warehouseId: w.warehouseId != null ? w.warehouseId.toString() : null,
+      warehouseCode: w.warehouse?.code ?? null,
+      warehouseName: w.warehouse?.name ?? null,
     };
   }
 
@@ -384,6 +463,7 @@ export class FloorAdminService {
   }
 
   async createWorker(dto: CreateFloorWorkerDto, userId?: string) {
+    assertAccountStageAllowed(dto.stage);
     const scope = await this.workshopScope.getScope(userId);
     const role = await this.prisma.role.findUnique({
       where: { name: BUSINESS_ROLES.FLOOR_WORKER },
@@ -426,6 +506,7 @@ export class FloorAdminService {
   }
 
   async updateWorker(id: string, dto: UpdateFloorWorkerDto, userId?: string) {
+    assertAccountStageAllowed(dto.stage);
     await this.findWorkerOrThrow(id, userId);
     const updated = await this.prisma.$transaction(async (tx) => {
       const u = await tx.user.update({
@@ -539,7 +620,7 @@ export class FloorAdminService {
       firstName: u.firstName,
       lastName: u.lastName,
       fullName: fullName(u),
-      stage: u.mfgRole as FloorWorkerStage | null,
+      stage: u.mfgRole as FloorAccountStage | null,
       isActive: u.isActive,
       createdAt: u.createdAt,
       /** SET = công nhân tự đặt PIN; ADMIN_SET = PIN do QLSX đặt (tài khoản cũ); PENDING = chờ đặt PIN lần đầu (còn hạn); EXPIRED = quá hạn. */

@@ -17,6 +17,11 @@ export class CreateWeavingPointDto {
   @IsString()
   aliasNote?: string;
 
+  @ApiPropertyOptional({ description: 'Người liên hệ ở điểm đan (Điều phối đan Đ3)' })
+  @IsOptional()
+  @IsString()
+  contactPerson?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

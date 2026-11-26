@@ -17,6 +17,7 @@ import { PRISMA_SERVICE, PrismaServiceType } from '../../prisma/prisma.service';
 import { RealtimeService } from '../../realtime/realtime.service';
 import { allocateSlipCode } from '../issue-slips/slip-code.util';
 import { NotificationsService } from '../notifications/notifications.service';
+import { assertShipMatchesContainers } from '../vi-tri-kho/booking-ship-guard';
 import { BookingsService } from './bookings.service';
 import { BookingResponseDto } from './dto/booking-response.dto';
 import { ShipBookingDto } from './dto/ship-booking.dto';
@@ -140,6 +141,8 @@ export class BookingShipmentsService {
           }
           want.set(l.lineId, (want.get(l.lineId) ?? 0) + l.qty);
         }
+        // Vị trí kho (25/11/2026, VI_TRI_KHO_ENABLED): mọi cont đã đóng + số thực xuất = hàng đã đóng cont. Tắt: bỏ qua.
+        await assertShipMatchesContainers(tx, booking, want);
         const plan = booking.lines
           .map((l) => ({ line: l, qty: want.get(l.id.toString()) ?? 0 }))
           .filter((x) => x.qty > 0);

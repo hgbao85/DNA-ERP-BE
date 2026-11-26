@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { StageHandoverModule } from '../stage-handover/stage-handover.module';
+import { PalletsModule } from '../pallets/pallets.module';
 import { MaterialYieldRecipesModule } from '../material-yield-recipes/material-yield-recipes.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ProductionBatchesModule } from '../production-batches/production-batches.module';
@@ -25,6 +27,9 @@ import { FloorStatsService } from './floor-stats.service';
     MaterialYieldRecipesModule,
     NotificationsModule,
     WarehouseTransfersModule,
+    StageHandoverModule,
+    // Pallet Sơn (24/11/2026): công nhân Sơn quét tem pallet báo "Sơn xong".
+    PalletsModule,
   ],
   controllers: [FloorController],
   providers: [

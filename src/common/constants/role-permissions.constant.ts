@@ -714,6 +714,15 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
     { module: PERMISSION_MODULES.STOCK, actions: [PermissionAction.VIEW] },
     { module: PERMISSION_MODULES.USER, actions: [PermissionAction.VIEW] },
   ],
+  // Điều phối đan (25/11/2026, docs THIET-KE-DIEU-PHOI-DAN) - xem BUSINESS_ROLES.WEAVING_COORDINATOR.
+  // WEAVING_ISSUE: chỉ VIEW - bảng theo dõi điểm đan (GET /weaving-coordination/board) + ghi chú làm việc (route ghi gác thêm
+  // @RequireRole); KHÔNG CREATE / UPDATE (xuất đan là thủ kho Sơn / Hàn, nhập đan là thủ kho Thành phẩm).
+  // WEAVING_POINT: ALL - thêm / sửa / ngừng điểm đan. Service còn chặn theo công tắc: DIEU_PHOI_DAN_ENABLED tắt thì quyền sửa như cũ
+  // (Admin + thủ kho Phụ kiện), bật thì chỉ Admin + Điều phối đan.
+  [BUSINESS_ROLES.WEAVING_COORDINATOR]: [
+    { module: PERMISSION_MODULES.WEAVING_ISSUE, actions: [PermissionAction.VIEW] },
+    { module: PERMISSION_MODULES.WEAVING_POINT, actions: 'ALL' },
+  ],
   // Công nhân xưởng (2026-10-13) - xem BUSINESS_ROLES.FLOOR_WORKER. Chỉ màn quét QR + "Sản lượng của tôi".
   [BUSINESS_ROLES.FLOOR_WORKER]: [
     {

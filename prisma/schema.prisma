@@ -33,6 +33,12 @@ enum MfgRole {
   SPEC_STEEL
   SPEC_ACCESSORY
   SPEC_PACKAGING
+  /// Công nhân chuyền kiểm (24/11/2026, docs THIET-KE-CHUYEN-KIEM-DONG-GOI-QR): quét tem điểm chuyền kiểm, báo số đạt / lỗi.
+  CHUYEN_KIEM
+  /// Công nhân đóng gói (24/11/2026): quét tem khu đóng gói, báo số bộ đã đóng.
+  DONG_GOI
+  /// KCS riêng của bộ phận chuyền kiểm (C2, C4 24/11/2026) - chấm đợt công nhân chuyền kiểm báo. Khác KCS Phôi / Hàn / Sơn.
+  KCS_CHUYEN_KIEM
 }
 
 /// Chỉ còn dùng cho Notification.category = ANNOUNCEMENT (admin phát cho cả nhóm role) - xem
@@ -126,6 +132,14 @@ model User {
   cuttingProposalsRequested         CuttingProposal[]              @relation("CuttingProposalRequestedBy")
   cuttingProposalsApproved          CuttingProposal[]              @relation("CuttingProposalApprovedBy")
   transferCheckResults              TransferCheckResult[]          @relation("TransferCheckCheckedBy")
+  transferCheckBatchesReported      TransferCheckBatch[]           @relation("TransferCheckBatchReportedBy")
+  transferCheckBatchesReviewed      TransferCheckBatch[]           @relation("TransferCheckBatchReviewedBy")
+  packingReportsReported            PackingReport[]                @relation("PackingReportReportedBy")
+  packingReportsCancelled           PackingReport[]                @relation("PackingReportCancelledBy")
+  // Vị trí kho Thành phẩm + load cont (25/11/2026, VI_TRI_KHO_ENABLED)
+  locationMovements                 LocationStockMovement[]        @relation("LocationMovementActor")
+  bookingContainersCreated          BookingContainer[]             @relation("BookingContainerCreatedBy")
+  bookingContainersLoaded           BookingContainer[]             @relation("BookingContainerLoadedBy")
   purchaseProposalsApproved         PurchaseProposal[]
   purchaseProposalItemsApproved     PurchaseProposalItem[]
   supplierOrdersCreated             SupplierOrder[]                @relation("SupplierOrderCreatedBy")
@@ -151,6 +165,7 @@ model User {
   qcReviewsReviewed                 QcReview[]                     @relation("QcReviewReviewedBy")
   weavingIssuesIssued               WeavingIssue[]                 @relation("WeavingIssueIssuedBy")
   weavingReceiptsReceived           WeavingReceipt[]               @relation("WeavingReceiptReceivedBy")
+  weavingFollowUpsCreated           WeavingFollowUp[]              @relation("WeavingFollowUpCreatedBy")
   materialIssuesIssued              MaterialIssue[]                @relation("MaterialIssueIssuedBy")
   materialIssuesReceived            MaterialIssue[]                @relation("MaterialIssueReceivedBy")
   materialYieldIssuesIssued         MaterialYieldIssue[]           @relation("MaterialYieldIssueIssuedBy")
@@ -512,6 +527,11 @@ enum MfgStage {
   SON
   /// Xuất đan — Dây/Đinh gộp cùng khung chưa đan tại kho vật tư thành phẩm, đưa tới điểm đan.
   DAN
+  /// Chuyền kiểm (24/11/2026) - CHỈ dùng cho tổ của điểm làm việc QR (Workstation.stage) và lý do lỗi (DefectReason.stageType).
+  /// Không có ProductionBatch / hàng đợi / kho theo giá trị này.
+  CHUYEN_KIEM
+  /// Đóng gói (24/11/2026) - cùng phạm vi dùng như CHUYEN_KIEM.
+  DONG_GOI
 }
 
 enum BomRevisionStatus {
@@ -772,7 +792,9 @@ model DefectReason {
   label     String
   stageType MfgStage?
 
-  qcReviews QcReview[]
+  qcReviews               QcReview[]
+  transferCheckBatches    TransferCheckBatch[] @relation("TransferCheckBatchDefectReason")
+  transferCheckBatchesKcs TransferCheckBatch[] @relation("TransferCheckBatchKcsDefectReason")
 
   @@index([stageType])
   @@map("defect_reasons")
@@ -783,6 +805,8 @@ model WeavingPoint {
   code            String    @unique
   fullName        String?
   aliasNote       String?
+  /// Người liên hệ ở điểm đan (Điều phối đan Đ3, 25/11/2026). Điện thoại / địa chỉ dùng 2 cột có sẵn.
+  contactPerson   String?
   phone           String?
   address         String?
   dayDaiPercent   Decimal?  @db.Decimal(5, 2)
@@ -796,6 +820,7 @@ model WeavingPoint {
   weavingReceipts       WeavingReceipt[]
   weavingIssueMaterials WeavingIssueMaterial[]
   issueSlips            IssueSlip[]
+  weavingFollowUps      WeavingFollowUp[]
 
   @@map("weaving_points")
 }
@@ -832,6 +857,9 @@ model Warehouse {
   materials                     Material[]
   officeSupplies                OfficeSupply[]
   issueSlips                    IssueSlip[]
+  pallets                       Pallet[]
+  workstations                  Workstation[]
+  locations                     WarehouseLocation[]
 
   @@unique([workshopId, kind])
   @@map("warehouses")
@@ -902,6 +930,9 @@ model MfgProduct {
   planForms              PlanForm[]
   productionInvoiceItems ProductionInvoiceItem[]
   productionOrders       ProductionOrder[]
+  locationStocks         LocationStock[]
+  locationMovements      LocationStockMovement[]
+  containerLines         BookingContainerLine[]
 
   @@index([factoryCode])
   @@map("mfg_products")
@@ -932,14 +963,16 @@ model ProductVariant {
 /// theo từng bom_revision (không versioning được nếu để trên master, đây là bài học từ
 /// frame_pieces cũ).
 model Piece {
-  id           BigInt   @id @default(autoincrement())
-  mfgProductId BigInt
-  code         String
-  groupNumber  Int
-  pieceNumber  Int?
-  name         String
-  isWoven      Boolean  @default(false)
-  weavingPrice Decimal? @db.Decimal(14, 2)
+  id             BigInt   @id @default(autoincrement())
+  mfgProductId   BigInt
+  code           String
+  groupNumber    Int
+  pieceNumber    Int?
+  name           String
+  isWoven        Boolean  @default(false)
+  /// Pallet Sơn (24/11/2026): sức chứa 1 pallet cho mảnh này (số mảnh) - chỉ để CẢNH BÁO khi thủ kho Sơn xếp quá, không chặn.
+  palletCapacity Int?
+  weavingPrice   Decimal? @db.Decimal(14, 2)
 
   mfgProduct                  MfgProduct                   @relation(fields: [mfgProductId], references: [id])
   bomPieces                   BomPiece[]
@@ -949,8 +982,10 @@ model Piece {
   stockLedgerEntries          StockLedger[]
   stockQuants                 StockQuant[]
   transferCheckResults        TransferCheckResult[]
+  transferCheckBatches        TransferCheckBatch[]
   weavingIssues               WeavingIssue[]
   weavingReceipts             WeavingReceipt[]
+  weavingFollowUps            WeavingFollowUp[]
   weavingIssueMaterials       WeavingIssueMaterial[]
   issueSlipLines              IssueSlipLine[]
   productionBatches           ProductionBatch[]
@@ -958,6 +993,7 @@ model Piece {
   pieceStepBundles            PieceStepBundle[]
   warehouseTransferPieceItems WarehouseTransferPieceItem[]
   floorReportLines            FloorReportLine[]
+  palletLoads                 PalletLoad[]
 
   @@unique([mfgProductId, code])
   @@index([mfgProductId])
@@ -1008,6 +1044,7 @@ model SegmentSpec {
   segmentOverages                SegmentOverage[]
   segmentProductions             SegmentProduction[]
   segmentProductionLeftovers     SegmentProductionLeftover[]
+  issueSlipLines                 IssueSlipLine[]
 
   @@unique([materialId, cutLengthMm])
   @@map("segment_spec")
@@ -1479,6 +1516,9 @@ model SalesOrderItem {
   productionInvoiceItems ProductionInvoiceItem[]
   // Phần A – Đợt 10a (YC5)
   bookingLines           BookingLine[]
+  locationStocks         LocationStock[]
+  locationMovements      LocationStockMovement[]
+  containerLines         BookingContainerLine[]
 
   @@index([salesOrderId])
   @@index([mfgProductId])
@@ -1547,9 +1587,11 @@ model Booking {
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
-  customer  Customer      @relation(fields: [customerId], references: [id])
-  createdBy User          @relation("BookingCreatedBy", fields: [createdById], references: [id])
-  lines     BookingLine[]
+  customer          Customer                @relation(fields: [customerId], references: [id])
+  createdBy         User                    @relation("BookingCreatedBy", fields: [createdById], references: [id])
+  lines             BookingLine[]
+  containers        BookingContainer[]
+  locationMovements LocationStockMovement[]
 
   @@index([customerId])
   @@index([status])
@@ -1573,9 +1615,11 @@ model BookingLine {
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
-  booking               Booking               @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-  productionInvoiceItem ProductionInvoiceItem @relation(fields: [productionInvoiceItemId], references: [id])
-  salesOrderItem        SalesOrderItem        @relation(fields: [salesOrderItemId], references: [id])
+  booking               Booking                 @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  productionInvoiceItem ProductionInvoiceItem   @relation(fields: [productionInvoiceItemId], references: [id])
+  salesOrderItem        SalesOrderItem          @relation(fields: [salesOrderItemId], references: [id])
+  containerLines        BookingContainerLine[]
+  locationMovements     LocationStockMovement[]
 
   @@unique([bookingId, productionInvoiceItemId])
   @@index([productionInvoiceItemId])
@@ -1811,6 +1855,8 @@ model ProductionInvoice {
   segmentOverages            SegmentOverage[]
   segmentProductions         SegmentProduction[]
   segmentProductionLeftovers SegmentProductionLeftover[]
+  stageHandoverOverrides     StageHandoverOverride[]
+  palletLoads                PalletLoad[]
 
   @@index([salesOrderId])
   @@map("production_invoices")
@@ -1887,9 +1933,15 @@ model ProductionInvoiceItem {
   productionOrder        ProductionOrder?
   transferCheckResults   TransferCheckResult[]
   packagingRecords       PackagingRecord[]
+  transferCheckBatches   TransferCheckBatch[]
+  packingReports         PackingReport[]
   cuttingProposalItems   CuttingProposalItem[]
   // Phần A – Đợt 10a (YC5)
   bookingLines           BookingLine[]
+  // Vị trí kho Thành phẩm + load cont (25/11/2026)
+  locationStocks         LocationStock[]
+  locationMovements      LocationStockMovement[]
+  containerLines         BookingContainerLine[]
   // Phần A – Đợt 9 (YC2)
   deadlineChangeRequests DeadlineChangeRequest[]
   cancelReplacementOf    ProductionOrderCancelRequest[] @relation("PoCancelReplacementItem")
@@ -2008,6 +2060,7 @@ model TransferCheckResult {
   piece                 Piece                 @relation(fields: [pieceId], references: [id])
   checkedBy             User                  @relation("TransferCheckCheckedBy", fields: [checkedById], references: [id])
   defects               TransferCheckDefect[]
+  transferCheckBatch    TransferCheckBatch?
 
   @@index([productionInvoiceItemId, pieceId])
   @@map("transfer_check_results")
@@ -2047,9 +2100,103 @@ model PackagingRecord {
   productionInvoiceItem ProductionInvoiceItem   @relation(fields: [productionInvoiceItemId], references: [id])
   packedBy              User                    @relation(fields: [packedById], references: [id])
   transfer              CancelledGoodsTransfer? @relation(fields: [transferId], references: [id])
+  packingReport         PackingReport?
 
   @@index([productionInvoiceItemId])
   @@map("packaging_records")
+}
+
+enum TransferCheckBatchStatus {
+  /// Công nhân chuyền kiểm đã báo, KCS chuyền kiểm chưa chấm. Số đạt CHƯA tính "đã qua chuyền kiểm".
+  AWAITING_KCS
+  /// KCS chuyền kiểm đã chấm - kết quả đã ghi vào TransferCheckResult (transferCheckResultId).
+  KCS_DONE
+}
+
+/// Đợt chuyền kiểm công nhân báo qua QR (24/11/2026, docs THIET-KE-CHUYEN-KIEM-DONG-GOI-QR C1-C4, công tắc CK_DG_QR_ENABLED).
+/// Công nhân báo (SKU, mảnh): số đạt + số lỗi (lỗi: nguyên nhân + >= 1 ảnh). KCS chuyền kiểm chấm: số đạt thật (<= số báo đạt),
+/// phần còn lại là lỗi chia "làm lại" (về lại hàng chờ kiểm, báo lại được) / "bỏ". Chấm xong ghi 1 TransferCheckResult
+/// (checkedQty = số đạt KCS, mỗi ảnh / nguyên nhân 1 TransferCheckDefect) - mọi màn đang đọc chuyền kiểm (Bảng mốc, trần xuất
+/// vật tư đóng gói, thống kê) không phải đổi.
+/// Trần báo (C3): đạt + lỗi của lần báo <= Hiện có − (Σ checkedQty của TransferCheckResult + Σ đạt+lỗi đợt chờ KCS + Σ bỏ
+/// của đợt đã chấm) theo (SKU, mảnh), dưới khoá `transfer-check:<item>:<piece>` dùng chung với recordTransferCheck.
+model TransferCheckBatch {
+  id                      BigInt                   @id @default(autoincrement())
+  productionInvoiceItemId BigInt
+  pieceId                 BigInt
+  workstationId           BigInt
+  reportedById            String
+  /// Số công nhân báo ĐẠT.
+  passedQty               Int
+  /// Số công nhân báo LỖI (> 0 thì bắt buộc defectReasonId + ít nhất 1 ảnh - CHECK transfer_check_batches_defect_chk).
+  defectQty               Int
+  defectReasonId          BigInt?
+  /// Ảnh lỗi chụp bằng điện thoại (URL /uploads/image).
+  photoUrls               String[]
+  note                    String?
+  idempotencyKey          String?                  @unique
+  status                  TransferCheckBatchStatus @default(AWAITING_KCS)
+  reportedAt              DateTime                 @default(now())
+  /// Kết quả KCS chuyền kiểm (null khi chưa chấm). kcsPassedQty + kcsReworkQty + kcsScrapQty = passedQty + defectQty.
+  kcsPassedQty            Int?
+  kcsReworkQty            Int?
+  kcsScrapQty             Int?
+  /// Nguyên nhân KCS ghi cho phần lỗi KCS phát hiện thêm (đạt KCS < báo đạt) - bắt buộc khi có phần đó.
+  kcsDefectReasonId       BigInt?
+  kcsPhotoUrl             String?
+  kcsNote                 String?
+  reviewedById            String?
+  reviewedAt              DateTime?
+  /// Lần kiểm ghi vào bảng chuyền kiểm cũ khi KCS chấm.
+  transferCheckResultId   BigInt?                  @unique
+
+  productionInvoiceItem ProductionInvoiceItem @relation(fields: [productionInvoiceItemId], references: [id])
+  piece                 Piece                 @relation(fields: [pieceId], references: [id])
+  workstation           Workstation           @relation(fields: [workstationId], references: [id])
+  reportedBy            User                  @relation("TransferCheckBatchReportedBy", fields: [reportedById], references: [id])
+  reviewedBy            User?                 @relation("TransferCheckBatchReviewedBy", fields: [reviewedById], references: [id])
+  defectReason          DefectReason?         @relation("TransferCheckBatchDefectReason", fields: [defectReasonId], references: [id])
+  kcsDefectReason       DefectReason?         @relation("TransferCheckBatchKcsDefectReason", fields: [kcsDefectReasonId], references: [id])
+  transferCheckResult   TransferCheckResult?  @relation(fields: [transferCheckResultId], references: [id])
+
+  @@index([productionInvoiceItemId, pieceId])
+  @@index([status, reportedAt])
+  @@index([workstationId])
+  @@map("transfer_check_batches")
+}
+
+/// Lần công nhân đóng gói báo số bộ đã đóng qua QR (24/11/2026, D1/D2/D4). Tính luôn (không duyệt): ghi 1 PackagingRecord như
+/// recordPackaging (packagingRecordId). Trần: Σ đóng <= số bộ đã qua KCS chuyền kiểm (đồng bộ mọi mảnh) và <= số lượng lệnh,
+/// dưới khoá `packaging:<item>`. Thủ kho Thành phẩm huỷ lần báo sai (lý do bắt buộc): xoá PackagingRecord (trả số), giữ dòng này
+/// làm vết (cancelledAt / cancelledById / cancelReason), có nhật ký + báo QLSX.
+model PackingReport {
+  id                      BigInt    @id @default(autoincrement())
+  productionInvoiceItemId BigInt
+  workstationId           BigInt
+  reportedById            String
+  qty                     Int
+  note                    String?
+  idempotencyKey          String?   @unique
+  packagingRecordId       BigInt?   @unique
+  reportedAt              DateTime  @default(now())
+  cancelledAt             DateTime?
+  cancelledById           String?
+  cancelReason            String?
+
+  productionInvoiceItem ProductionInvoiceItem @relation(fields: [productionInvoiceItemId], references: [id])
+  workstation           Workstation           @relation(fields: [workstationId], references: [id])
+  reportedBy            User                  @relation("PackingReportReportedBy", fields: [reportedById], references: [id])
+  cancelledBy           User?                 @relation("PackingReportCancelledBy", fields: [cancelledById], references: [id])
+  packagingRecord       PackagingRecord?      @relation(fields: [packagingRecordId], references: [id], onDelete: SetNull)
+  /// Vị trí kho (25/11/2026, VI_TRI_KHO_ENABLED): ô công nhân đóng gói quét khi cất - báo đóng gói = cất vào ô này (cùng transaction
+  /// cộng location_stocks). NULL = báo khi công tắc tắt.
+  locationId            BigInt?
+  location              WarehouseLocation?    @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
+  @@index([productionInvoiceItemId, reportedAt])
+  @@index([workstationId])
+  @@index([locationId])
+  @@map("packing_reports")
 }
 
 // =====================================================================
@@ -2134,6 +2281,7 @@ model ProductionOrder {
   cuttingPlanCoverage         CuttingPlanCoverage?
   weavingIssues               WeavingIssue[]
   weavingReceipts             WeavingReceipt[]
+  weavingFollowUps            WeavingFollowUp[]
   weavingIssueMaterials       WeavingIssueMaterial[]
   materialIssues              MaterialIssue[]
   materialYieldIssues         MaterialYieldIssue[]
@@ -2147,6 +2295,7 @@ model ProductionOrder {
   materialInspectionRequests  MaterialInspectionRequest[]
   warehouseTransferPieceItems WarehouseTransferPieceItem[]
   cancelRequests              ProductionOrderCancelRequest[]
+  palletLoads                 PalletLoad[]
 
   @@index([mfgProductId])
   @@map("production_orders")
@@ -3040,6 +3189,12 @@ enum StockLedgerRefType {
   SEGMENT_PRODUCE
   /// Huỷ lệnh đợt 2 - Q3: tổ cắt trả cây chưa cắt của SKU đã huỷ về kho Phôi (SteelReturn).
   STEEL_RETURN
+  /// Giao nhận giữa tổ (24/11/2026): đoạn của lệnh từ kho Phôi sang kho tổ nhận (Hàn / Sơn) khi xác nhận phiếu XK dòng
+  /// SEGMENT_HANDOVER. refId = IssueSlipLine.id.
+  SEGMENT_HANDOVER
+  /// Giao nhận giữa tổ (24/11/2026): mảnh đã hàn từ kho Hàn sang kho Sơn khi xác nhận phiếu XK dòng FRAME_HANDOVER.
+  /// refId = IssueSlipLine.id.
+  FRAME_HANDOVER
 }
 
 enum TransferStatus {
@@ -3318,6 +3473,8 @@ enum SegmentReservationLogKind {
   TRANSFER
   /// Điều chỉnh tay khi kiểm kê.
   ADJUST
+  /// Giao nhận giữa tổ (24/11/2026): kho Phôi giao đoạn của lệnh cho tổ nhận - âm ở dòng kho Phôi, dương ở dòng kho nhận.
+  HANDOVER
 }
 
 /// Nhật ký giữ đoạn theo lệnh (13/11/2026) - truy được phần dư nào chia cho lệnh nào, lệnh dùng bao nhiêu, nhả lúc nào. Chỉ thêm,
@@ -3861,6 +4018,7 @@ model FloorReport {
   reversalOf        FloorReport?       @relation("FloorReportReversal", fields: [reversalOfId], references: [id])
   reversedBy        FloorReport?       @relation("FloorReportReversal")
   lines             FloorReportLine[]
+  palletLoads       PalletLoad[]
 
   @@index([cutBundleId])
   @@index([stepBatchId])
@@ -3901,6 +4059,10 @@ enum WorkstationKind {
   PIECE
   /// Khu nhận sắt của Phôi - Sếp chốt 1 mã cho cả khu (mục 17): người nhận quét, tự điền số cây thực nhận.
   STEEL_RECEIVE
+  /// Điểm chuyền kiểm (24/11/2026) của 1 kho Thành phẩm - tổ CHUYEN_KIEM, warehouseId bắt buộc (CHECK workstations_fg_chk).
+  TRANSFER_CHECK
+  /// Khu đóng gói (24/11/2026) của 1 kho Thành phẩm - tổ DONG_GOI, warehouseId bắt buộc.
+  PACKING
 }
 
 /// Máy / điểm làm việc dán mã QR cố định (Sếp chốt 2026-10-12: dán theo máy, KHÔNG in PI vào mã - PI
@@ -3925,15 +4087,22 @@ model Workstation {
   /// Loại máy cắt - CHỈ kind CUT và BẮT BUỘC với CUT (CHECK workstations_cut_type_chk). Máy CUT có từ trước 13/11 là máy laser
   /// (doc cũ của WorkstationKind.CUT) nên migration gán laser.
   cutMachineType SolverMachine?
+  /// Kho Thành phẩm của điểm chuyền kiểm / khu đóng gói (24/11/2026) - CHỈ kind TRANSFER_CHECK / PACKING và BẮT BUỘC với 2 loại
+  /// này (CHECK workstations_fg_chk). Lệnh hiện ở điểm = SKU có warehouseCode = mã kho này (hoặc chưa chọn kho).
+  warehouseId    BigInt?
 
-  workshop              Workshop?          @relation(fields: [workshopId], references: [id])
+  workshop              Workshop?            @relation(fields: [workshopId], references: [id])
+  warehouse             Warehouse?           @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  transferCheckBatches  TransferCheckBatch[]
+  packingReports        PackingReport[]
   floorReports          FloorReport[]
   cutAllocations        CutAllocation[]
-  cutAllocationLogsFrom CutAllocationLog[] @relation("CutAllocationLogFrom")
-  cutAllocationLogsTo   CutAllocationLog[] @relation("CutAllocationLogTo")
+  cutAllocationLogsFrom CutAllocationLog[]   @relation("CutAllocationLogFrom")
+  cutAllocationLogsTo   CutAllocationLog[]   @relation("CutAllocationLogTo")
 
   @@index([stage])
   @@index([workshopId])
+  @@index([warehouseId])
   @@map("workstations")
 }
 
@@ -4271,6 +4440,52 @@ model WeavingReceipt {
   @@map("weaving_receipts")
 }
 
+/// Trạng thái lời hẹn trả hàng của 1 ghi chú Điều phối đan (Đ2, 25/11/2026). Ghi chú không hẹn: NONE.
+enum WeavingFollowUpPromiseStatus {
+  /// Ghi chú chỉ có nội dung trao đổi, không hẹn số / ngày.
+  NONE
+  /// Đang chờ tới ngày hẹn.
+  OPEN
+  /// Đã tới ngày hẹn mà hàng chưa về đủ - đã nhắc người điều phối.
+  REMINDED
+  /// Hàng đã về đủ số hẹn (tính từ lúc ghi) - đóng nhắc.
+  KEPT
+  /// Có lời hẹn mới hơn cho cùng (điểm đan, lệnh, mảnh) - lời hẹn này thôi theo dõi.
+  SUPERSEDED
+}
+
+/// Ghi chú làm việc với điểm đan (Điều phối đan Đ2, 25/11/2026 - docs THIET-KE-DIEU-PHOI-DAN). Theo (điểm đan, lệnh = 1 dòng PI, mảnh).
+/// Số đã gửi / đã trả KHÔNG lưu ở đây (lấy từ weaving_issues / weaving_receipts); chỉ chụp lại lúc ghi để biết "về thêm bao nhiêu
+/// kể từ lời hẹn". Chỉ ghi khi công tắc DIEU_PHOI_DAN_ENABLED bật.
+model WeavingFollowUp {
+  id                BigInt                       @id @default(autoincrement())
+  weavingPointId    BigInt
+  productionOrderId BigInt
+  pieceId           BigInt
+  content           String
+  /// Số mảnh điểm đan hẹn trả (> 0 và ≤ số đang giữ lúc ghi). null = không hẹn.
+  promisedQty       Int?
+  /// Ngày hẹn trả (ngày lịch VN). Đi cùng promisedQty (cùng có hoặc cùng không).
+  promisedDate      DateTime?                    @db.Date
+  /// Chụp lúc ghi: số đang giữ và tổng đã trả của (điểm đan, lệnh, mảnh).
+  heldAtCreate      Int
+  returnedAtCreate  Int
+  promiseStatus     WeavingFollowUpPromiseStatus @default(NONE)
+  remindedAt        DateTime?
+  closedAt          DateTime?
+  createdById       String
+  createdAt         DateTime                     @default(now())
+
+  weavingPoint    WeavingPoint    @relation(fields: [weavingPointId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+  piece           Piece           @relation(fields: [pieceId], references: [id])
+  createdBy       User            @relation("WeavingFollowUpCreatedBy", fields: [createdById], references: [id])
+
+  @@index([weavingPointId, productionOrderId, pieceId, createdAt])
+  @@index([promiseStatus, promisedDate])
+  @@map("weaving_follow_ups")
+}
+
 // =====================================================================
 // Phase 9c — Material Issue (M2 "Xuất vật tư tiêu hao" Hàn/Sơn, 2026-08-11, xem roadmap docs/
 // dna-erp-roadmap.html mục 08). Thay vat-tu-noi-bo.service.ts mock: kho vật tư-TP ("vat-tu-tp")
@@ -4475,6 +4690,7 @@ model ProductionBatch {
   qcReviews       QcReview[]
   floorReports    FloorReport[]
   segmentOverages SegmentOverage[]
+  palletLoads     PalletLoad[]
 
   @@index([productionOrderId, pieceId])
   @@index([stage, status])
@@ -4838,6 +5054,11 @@ enum IssueSlipLineKind {
   MATERIAL_YIELD
   /// Vật tư TP cho Phôi theo công thức của lệnh (MaterialYieldRecipeIssue, vd thanh nhôm -> chân nhôm) - 09/11/2026.
   MATERIAL_YIELD_RECIPE
+  /// Giao nhận giữa tổ (24/11/2026): kho Phôi giao ĐOẠN của 1 lệnh (mã đoạn = segmentSpecId + segmentSteps) cho công nhân tổ
+  /// nhận (stage HAN -> kho Hàn cùng xưởng; SON -> kho Sơn, mảnh không qua Hàn). Chỉ khi bật STAGE_HANDOVER_ENABLED.
+  SEGMENT_HANDOVER
+  /// Giao nhận giữa tổ (24/11/2026): kho Hàn (xưởng có kho Sơn) giao MẢNH đã hàn của 1 SKU cho công nhân Sơn -> kho Sơn.
+  FRAME_HANDOVER
 }
 
 /// Phiếu xuất kho XK-yymmdd-NNN (Đợt 6, bản v8 YC4 4.1-4.4, 4.9): 1 phiếu = 1 kho, nhiều dòng. Hai bước: tạo phiếu (cấp số, in,
@@ -4903,14 +5124,292 @@ model IssueSlipLine {
   weavingIssueMaterialId     BigInt?           @unique
   /// MATERIAL_YIELD_RECIPE: công thức (materialId = vật tư đầu vào của công thức).
   recipeId                   BigInt?
+  /// SEGMENT_HANDOVER (24/11/2026): mã đoạn = (segmentSpecId, segmentSteps) - cùng ý nghĩa StockLedger.segmentSteps ('' = trơn).
+  segmentSpecId              BigInt?
+  segmentSteps               String            @default("")
   packagingIssueId           BigInt?           @unique
   materialYieldIssueId       BigInt?           @unique
   materialYieldRecipeIssueId BigInt?           @unique
 
-  slip     IssueSlip @relation(fields: [slipId], references: [id])
-  material Material? @relation(fields: [materialId], references: [id])
-  piece    Piece?    @relation(fields: [pieceId], references: [id])
+  slip        IssueSlip    @relation(fields: [slipId], references: [id])
+  material    Material?    @relation(fields: [materialId], references: [id])
+  piece       Piece?       @relation(fields: [pieceId], references: [id])
+  segmentSpec SegmentSpec? @relation(fields: [segmentSpecId], references: [id])
+  /// Pallet Sơn (24/11/2026): dòng mảnh xuất đan quét từ pallet - các lượt xếp pallet (PalletLoad.issueSlipLineId) gắn vào dòng.
+  palletLoads PalletLoad[]
 
   @@index([slipId])
+  /// Giao nhận giữa tổ: cộng "đã nhận" / "đã giao" theo (loại dòng, lệnh) và (loại dòng, SKU, mảnh).
+  @@index([kind, productionInvoiceId])
+  @@index([kind, productionOrderId, pieceId])
   @@map("issue_slip_lines")
+}
+
+// =====================================================================
+// Giao nhận giữa tổ (24/11/2026 - docs THIET-KE-GIAO-NHAN-GIUA-TO-2026-11-24). Chỉ dùng khi bật STAGE_HANDOVER_ENABLED
+// (cần SEGMENT_STOCK_ENABLED). Xem src/modules/stage-handover.
+// =====================================================================
+
+/// QLSX mở chặn có lý do (3.3b): cho thêm `qty` vào phần "đã nhận" của 1 cổng báo khi kho vắng người / số tồn sai, tránh đứng
+/// chuyền. Chỉ nâng trần "theo hàng đã nhận", KHÔNG nâng trần kế hoạch (maxNow). Chỉ thêm, không sửa / xoá.
+///  - HAN / SON: theo (lệnh, SKU, mảnh), qty = số mảnh. Mảnh làm từ đoạn: quy ra đoạn = qty × định mức đoạn / mảnh.
+///  - PHOI: theo (lệnh, loại sắt), qty = số mm đoạn được báo thêm ngoài 102% sắt đã nhận.
+model StageHandoverOverride {
+  id                  BigInt   @id @default(autoincrement())
+  productionInvoiceId BigInt
+  productionOrderId   BigInt?
+  stage               MfgStage
+  pieceId             BigInt?
+  materialId          BigInt?
+  qty                 Decimal  @db.Decimal(14, 4)
+  reason              String
+  createdById         String
+  createdAt           DateTime @default(now())
+
+  productionInvoice ProductionInvoice @relation(fields: [productionInvoiceId], references: [id], onDelete: Cascade)
+
+  @@index([productionInvoiceId, stage])
+  @@map("stage_handover_overrides")
+}
+
+// =====================================================================
+// Pallet Sơn (24/11/2026 - docs THIET-KE-PALLET-SON-2026-11-24, chốt P1-P8). Chỉ dùng khi bật PALLET_SON_ENABLED.
+// Xem src/modules/pallets.
+// =====================================================================
+
+/// Trạng thái pallet: Trống -> (thủ kho Sơn xếp) Chờ sơn -> (công nhân Sơn quét, "Sơn xong") Sơn xong -> (quét vào phiếu xuất đan
+/// chờ ký) Trên phiếu đan -> (xác nhận phiếu) Trống. Huỷ phiếu chờ ký: Trên phiếu đan -> Sơn xong. KCS không đổi trạng thái (P8).
+enum PalletStatus {
+  EMPTY
+  LOADED
+  PAINTED
+  ON_SLIP
+}
+
+/// Pallet cố định của kho Sơn, dán tem QR dùng lại (P1). Tem = link `/floor?pallet=<qrToken>`. Mỗi lúc chứa tối đa 1 lượt xếp
+/// (currentLoadId) = 1 lệnh SX (SKU) + 1 mảnh.
+model Pallet {
+  id            BigInt       @id @default(autoincrement())
+  /// Mã in trên tem, vd PL-001.
+  code          String       @unique
+  qrToken       String       @unique
+  /// Kho Sơn sở hữu pallet.
+  warehouseId   BigInt
+  status        PalletStatus @default(EMPTY)
+  /// Lượt xếp đang nằm trên pallet - NULL khi Trống.
+  currentLoadId BigInt?      @unique
+  isActive      Boolean      @default(true)
+  note          String?
+  createdById   String
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  warehouse   Warehouse    @relation(fields: [warehouseId], references: [id])
+  currentLoad PalletLoad?  @relation("PalletCurrentLoad", fields: [currentLoadId], references: [id])
+  loads       PalletLoad[] @relation("PalletLoads")
+
+  @@index([warehouseId, status])
+  @@map("pallets")
+}
+
+/// 1 lượt xếp pallet (lịch sử, chỉ thêm / cập nhật mốc - không xoá): ai xếp, lệnh + mảnh + số, ai báo Sơn xong (đợt báo nào), lên
+/// phiếu xuất đan nào, lúc nào pallet về Trống.
+model PalletLoad {
+  id                  BigInt    @id @default(autoincrement())
+  palletId            BigInt
+  productionInvoiceId BigInt
+  productionOrderId   BigInt
+  pieceId             BigInt
+  /// Số mảnh thủ kho xếp.
+  qty                 Int
+  loadedById          String
+  loadedAt            DateTime  @default(now())
+  /// Số công nhân báo Sơn xong (= qty, hoặc nhỏ hơn khi "Báo thiếu"). NULL = chưa sơn.
+  paintedQty          Int?
+  /// Lý do báo thiếu (bắt buộc khi paintedQty < qty).
+  shortReason         String?
+  paintedById         String?
+  paintedAt           DateTime?
+  /// Đợt báo Sơn nhận số này (recordProductionBatch có thể cộng dồn vào đợt đang mở của cùng người) + dòng sổ báo.
+  productionBatchId   BigInt?
+  floorReportId       BigInt?
+  /// Dòng phiếu xuất đan (WEAVING_PIECE) đang / đã chứa pallet. Huỷ phiếu chờ ký thì bỏ gắn (về NULL).
+  issueSlipLineId     BigInt?
+  /// Pallet về Trống (xác nhận phiếu xuất đan, hoặc thủ kho gỡ lượt xếp chưa sơn).
+  clearedAt           DateTime?
+  clearedById         String?
+  /// 'ISSUED' (xác nhận phiếu đan) | 'UNLOADED' (gỡ lượt xếp chưa sơn).
+  clearedReason       String?
+
+  pallet            Pallet            @relation("PalletLoads", fields: [palletId], references: [id])
+  currentOf         Pallet?           @relation("PalletCurrentLoad")
+  productionInvoice ProductionInvoice @relation(fields: [productionInvoiceId], references: [id])
+  productionOrder   ProductionOrder   @relation(fields: [productionOrderId], references: [id])
+  piece             Piece             @relation(fields: [pieceId], references: [id])
+  productionBatch   ProductionBatch?  @relation(fields: [productionBatchId], references: [id], onDelete: SetNull)
+  floorReport       FloorReport?      @relation(fields: [floorReportId], references: [id], onDelete: SetNull)
+  issueSlipLine     IssueSlipLine?    @relation(fields: [issueSlipLineId], references: [id], onDelete: SetNull)
+
+  @@index([palletId, loadedAt])
+  @@index([productionOrderId, pieceId])
+  @@index([issueSlipLineId])
+  @@map("pallet_loads")
+}
+
+// ─── Vị trí kho Thành phẩm + soạn hàng theo booking + load từng cont (25/11/2026 - docs THIET-KE-VI-TRI-KHO-LOAD-CONT,
+// chốt V1-V9). Công tắc VI_TRI_KHO_ENABLED (mặc định tắt) - xem src/modules/vi-tri-kho/vi-tri-kho.config.ts. Số lượng tính theo BỘ
+// (cùng đơn vị số đóng gói / dòng booking). V9: mọi dòng tồn / dịch chuyển / hàng trong cont ghi đủ bộ 3 SKU (mfgProductId) - LSX
+// (productionInvoiceItemId = dòng SKU của lệnh) - PO (salesOrderItemId = dòng đơn), không bao giờ chỉ theo SKU.
+
+/// V1: 1 ô của kho Thành phẩm (khu - dãy - ô, vd A-01-02), mỗi ô 1 tem QR (`<origin>/floor?loc=<qrToken>`).
+model WarehouseLocation {
+  id          BigInt   @id @default(autoincrement())
+  warehouseId BigInt
+  /// Mã ô = khu-dãy-ô (CHECK warehouse_locations_code_chk), không trùng trong 1 kho.
+  code        String
+  zone        String
+  aisle       String
+  slot        String
+  qrToken     String   @unique
+  /// Tắt = không cất / lấy / chuyển vào được (chỉ tắt được khi ô trống).
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  warehouse      Warehouse               @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  stocks         LocationStock[]
+  movementsFrom  LocationStockMovement[] @relation("LocationMovementFrom")
+  movementsTo    LocationStockMovement[] @relation("LocationMovementTo")
+  packingReports PackingReport[]
+
+  @@unique([warehouseId, code])
+  @@map("warehouse_locations")
+}
+
+/// Tồn theo ô: 1 dòng / (ô, bộ 3 SKU - LSX - PO). V3: 1 ô chứa được nhiều bộ 3. Unique NULLS NOT DISTINCT (migration).
+model LocationStock {
+  id                      BigInt   @id @default(autoincrement())
+  locationId              BigInt
+  productionInvoiceItemId BigInt
+  mfgProductId            BigInt
+  /// NULL = dòng SKU tạo tay không gắn dòng đơn (không xếp booking được).
+  salesOrderItemId        BigInt?
+  qty                     Int
+  updatedAt               DateTime @updatedAt
+
+  location              WarehouseLocation     @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  productionInvoiceItem ProductionInvoiceItem @relation(fields: [productionInvoiceItemId], references: [id])
+  mfgProduct            MfgProduct            @relation(fields: [mfgProductId], references: [id])
+  salesOrderItem        SalesOrderItem?       @relation(fields: [salesOrderItemId], references: [id], onDelete: Restrict)
+
+  @@unique([locationId, productionInvoiceItemId, mfgProductId, salesOrderItemId])
+  @@index([productionInvoiceItemId])
+  @@map("location_stocks")
+}
+
+/// Loại dịch chuyển tồn theo ô.
+enum LocationMovementKind {
+  /// Cất vào ô (công nhân đóng gói báo, hoặc thủ kho cất hàng đã đóng chưa có ô).
+  PUTAWAY
+  /// Huỷ lần báo đóng gói (D4) - lấy số đã cất ra khỏi ô.
+  PUTAWAY_CANCEL
+  /// Chuyển ô -> ô.
+  MOVE
+  /// Lấy cho booking - vào cont.
+  PICK
+  /// Trả từ cont (chưa đóng) về ô.
+  UNPICK
+}
+
+/// Lịch sử dịch chuyển (cất, chuyển chỗ, lấy cho booking, trả về). Idempotency-Key của route công nhân / thủ kho.
+model LocationStockMovement {
+  id                      BigInt               @id @default(autoincrement())
+  kind                    LocationMovementKind
+  fromLocationId          BigInt?
+  toLocationId            BigInt?
+  productionInvoiceItemId BigInt
+  mfgProductId            BigInt
+  salesOrderItemId        BigInt?
+  qty                     Int
+  packingReportId         BigInt?
+  bookingId               BigInt?
+  /// Dòng booking lúc lấy / trả (NULL nếu Sales gỡ dòng sau khi đã trả hết hàng về ô - vết vẫn giữ bộ 3 + booking + cont).
+  bookingLineId           BigInt?
+  containerId             BigInt?
+  actorId                 String
+  note                    String?
+  idempotencyKey          String?              @unique
+  createdAt               DateTime             @default(now())
+
+  fromLocation          WarehouseLocation?    @relation("LocationMovementFrom", fields: [fromLocationId], references: [id], onDelete: Restrict)
+  toLocation            WarehouseLocation?    @relation("LocationMovementTo", fields: [toLocationId], references: [id], onDelete: Restrict)
+  productionInvoiceItem ProductionInvoiceItem @relation(fields: [productionInvoiceItemId], references: [id])
+  mfgProduct            MfgProduct            @relation(fields: [mfgProductId], references: [id])
+  salesOrderItem        SalesOrderItem?       @relation(fields: [salesOrderItemId], references: [id], onDelete: Restrict)
+  booking               Booking?              @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  bookingLine           BookingLine?          @relation(fields: [bookingLineId], references: [id], onDelete: SetNull)
+  container             BookingContainer?     @relation(fields: [containerId], references: [id], onDelete: Restrict)
+  actor                 User                  @relation("LocationMovementActor", fields: [actorId], references: [id])
+
+  @@index([fromLocationId, createdAt])
+  @@index([toLocationId, createdAt])
+  @@index([productionInvoiceItemId, createdAt])
+  @@index([bookingId])
+  @@index([containerId])
+  @@map("location_stock_movements")
+}
+
+enum BookingContainerStatus {
+  /// Đang load - còn lấy hàng / trả hàng được.
+  OPEN
+  /// Đã đóng cont (đủ số cont, seal, ≥ 1 ảnh, ≥ 1 dòng hàng).
+  LOADED
+}
+
+/// V7: 1 cont của booking - thủ kho Thành phẩm đứng kiểm.
+model BookingContainer {
+  id          BigInt                 @id @default(autoincrement())
+  bookingId   BigInt
+  containerNo String?
+  sealNo      String?
+  /// Ảnh load cont (POST /uploads/image) - đóng cont cần ≥ 1.
+  photoUrls   String[]               @default([])
+  status      BookingContainerStatus @default(OPEN)
+  note        String?
+  createdById String
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+  loadedAt    DateTime?
+  loadedById  String?
+
+  booking           Booking                 @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  createdBy         User                    @relation("BookingContainerCreatedBy", fields: [createdById], references: [id])
+  loadedBy          User?                   @relation("BookingContainerLoadedBy", fields: [loadedById], references: [id])
+  lines             BookingContainerLine[]
+  locationMovements LocationStockMovement[]
+
+  @@index([bookingId])
+  @@map("booking_containers")
+}
+
+/// Hàng trong cont: 1 dòng / (cont, dòng booking) - ghi đủ bộ 3 của dòng booking.
+model BookingContainerLine {
+  id                      BigInt   @id @default(autoincrement())
+  containerId             BigInt
+  bookingLineId           BigInt
+  productionInvoiceItemId BigInt
+  mfgProductId            BigInt
+  salesOrderItemId        BigInt
+  qty                     Int
+  updatedAt               DateTime @updatedAt
+
+  container             BookingContainer      @relation(fields: [containerId], references: [id], onDelete: Cascade)
+  bookingLine           BookingLine           @relation(fields: [bookingLineId], references: [id], onDelete: Restrict)
+  productionInvoiceItem ProductionInvoiceItem @relation(fields: [productionInvoiceItemId], references: [id])
+  mfgProduct            MfgProduct            @relation(fields: [mfgProductId], references: [id])
+  salesOrderItem        SalesOrderItem        @relation(fields: [salesOrderItemId], references: [id])
+
+  @@unique([containerId, bookingLineId])
+  @@index([bookingLineId])
+  @@map("booking_container_lines")
 }

@@ -33,6 +33,14 @@ export interface FloorReportInput {
 /** Ngữ cảnh của 1 lần báo đi qua màn quét QR (FloorScanService) - các hàm báo cũ nhận thêm tham số này. */
 export interface FloorReportContext {
   workstationId?: bigint;
+  /**
+   * Pallet Sơn (24/11/2026): việc ghi thêm trong CÙNG transaction của lần báo, SAU khi đợt + dòng sổ đã ghi (vd đánh dấu pallet
+   * Sơn xong) - ném lỗi thì cả lần báo rollback. Hiện chỉ ProductionBatchesService.recordProductionBatch dùng.
+   */
+  afterWriteInTx?: (
+    tx: PrismaTx,
+    written: { productionBatchId: bigint; floorReportId: bigint },
+  ) => Promise<void>;
 }
 
 /** Gửi lại cùng Idempotency-Key sau khi QLSX đã hủy hết lần báo đó (P1, 18/11/2026): 409, không ghi dòng sổ mới. */

@@ -18,7 +18,8 @@ export class WorkQueueController {
     @CurrentUser('id') id: string,
     @CurrentUser('roles') roles: string[],
     @CurrentUser('warehouseScope') warehouseScope: string | null,
+    @CurrentUser('mfgRole') mfgRole: string | null,
   ) {
-    return this.workQueueService.getWorkQueue({ id, roles, warehouseScope });
+    return this.workQueueService.getWorkQueue({ id, roles, warehouseScope, mfgRole });
   }
 }
