@@ -120,7 +120,14 @@ export class WovenStockService {
       }),
       db.cancelledGoodsTransfer.groupBy({
         by: ['targetItemId', 'pieceId'],
-        where: { kind: CancelledGoodsKind.WOVEN, targetItemId: { in: itemIds }, ...pieceWhere },
+        // khung lệnh huỷ đã lấy vào nhưng còn "đang chuyển" chưa nằm ở kho lệnh đó: chỉ tính khi thủ kho nơi nhận xác nhận
+        // số thực nhận; phần không nhận tự về lại nguồn vì dòng chỉ còn đúng số thực nhận.
+        where: {
+          kind: CancelledGoodsKind.WOVEN,
+          targetItemId: { in: itemIds },
+          ...pieceWhere,
+          ...WOVEN_TRANSFER_RECEIVED,
+        },
         _sum: { qty: true },
       }),
       db.cancelledGoodsTransfer.groupBy({
@@ -339,38 +346,6 @@ export class WovenStockService {
       _sum: { qty: true },
     });
     return agg._sum.qty ?? 0;
-  }
-
-  /**
-   * Lệnh nhận bị huỷ khi khung lấy khác kho còn đang chuyển (chưa thủ kho nơi nhận xác nhận): bỏ các dòng đó - khung chưa rời kho
-   * nguồn nên trở về tồn của lệnh huỷ nguồn, lần cấp sau chia lại cho lệnh khác. Best-effort - lỗi chỉ log.
-   */
-  async revertPendingIncoming(orderId: bigint, actorId: string): Promise<number> {
-    try {
-      const order = await this.prisma.productionOrder.findUnique({
-        where: { id: orderId },
-        select: { productionInvoiceItemId: true },
-      });
-      if (!order) return 0;
-      const { count } = await this.prisma.cancelledGoodsTransfer.deleteMany({
-        where: {
-          kind: CancelledGoodsKind.WOVEN,
-          targetItemId: order.productionInvoiceItemId,
-          receiveStatus: CancelledGoodsReceiveStatus.PENDING,
-        },
-      });
-      if (count > 0) {
-        this.logger.log(
-          `Lệnh ${orderId} huỷ: bỏ ${count} dòng khung đan đang chuyển tới lệnh (người duyệt ${actorId})`,
-        );
-      }
-      return count;
-    } catch (e) {
-      this.logger.error(
-        `Bỏ khung đan đang chuyển của lệnh ${orderId} lỗi: ${e instanceof Error ? e.message : String(e)}`,
-      );
-      return 0;
-    }
   }
 
   /** Cấp tồn cho mọi tồn khung đan đang có (sau khi duyệt huỷ / nhận đan của lệnh đã huỷ). Best-effort - lỗi chỉ log. */

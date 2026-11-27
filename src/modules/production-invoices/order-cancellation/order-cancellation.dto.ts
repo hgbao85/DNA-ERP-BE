@@ -2,7 +2,6 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
-  ArrayMinSize,
   IsArray,
   IsBoolean,
   IsEnum,
@@ -175,12 +174,19 @@ export interface WovenInTransitDto {
   fromWarehouseName: string;
   toWarehouseName: string;
   createdAt: string;
+  /** Lệnh nhận đã huỷ khi khung còn đang chuyển: nhận bao nhiêu thành tồn ở kho này, phần không nhận về lại kho nguồn. */
+  targetCancelled: boolean;
 }
 
 export class ConfirmWovenReceivedDto {
-  /** Ảnh phiếu chuyển đã ký (≥ 1). */
+  /** Ảnh phiếu chuyển đã ký (bắt buộc ≥ 1 khi nhận > 0 khung). */
   @IsArray()
-  @ArrayMinSize(1)
   @IsString({ each: true })
   signedSlipUrls!: string[];
+
+  /** Số khung thực nhận (0..số đang chuyển); bỏ trống = nhận đủ. Phần không nhận về lại kho nguồn. */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  receivedQty?: number;
 }
