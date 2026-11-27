@@ -157,7 +157,7 @@ export class SegmentStockService {
     for (const r of reservations) {
       const remaining = round4(r.reservedQty.toNumber() - r.consumedQty.toNumber());
       held += remaining;
-      // Dòng giữ của phương án tính trước (chưa có lệnh) cũng trừ khỏi dư - Nhân 26/11 câu 4.
+      // Dòng giữ của phương án tính trước (chưa có lệnh) cũng trừ khỏi dư - nghiệp vụ 26/11 câu 4.
       if (r.productionInvoiceId != null) {
         remainingByOrder.set(r.productionInvoiceId.toString(), remaining);
       }
@@ -692,7 +692,7 @@ export class SegmentStockService {
   // ---------------------------------------------------------------------------
 
   /**
-   * Anh Nhân câu 14a + mục 2 (24/11/2026): đọc dư dùng được (tồn - Σ còn giữ mọi lệnh) của nhiều ô trong 1 kho, KHÔNG khoá - dùng
+   * Nghiệp vụ câu 14a + mục 2 (24/11/2026): đọc dư dùng được (tồn - Σ còn giữ mọi lệnh) của nhiều ô trong 1 kho, KHÔNG khoá - dùng
    * lúc tính phương án cắt (trừ đoạn dư khỏi nhu cầu trước khi gửi bộ giải). Lúc duyệt mới khoá + giữ thật (allocateSurplusToOrder).
    * Khoá trả về `${segmentSpecId}|${segmentSteps}`.
    */
@@ -849,7 +849,7 @@ export class SegmentStockService {
   }
 
   /**
-   * Nhân trả lời 26/11 câu 4: phương án cắt tính TRƯỚC khi có lệnh giữ đoạn dư ngay lúc tính - lệnh khác không thấy nữa. Dòng giữ
+   * Nghiệp vụ trả lời 26/11 câu 4: phương án cắt tính TRƯỚC khi có lệnh giữ đoạn dư ngay lúc tính - lệnh khác không thấy nữa. Dòng giữ
    * không có PI (productionInvoiceId null, cuttingProposalId = phương án), nhật ký SURPLUS_IN refType CUTTING_PROPOSAL như lúc duyệt.
    * Giữ tối đa bằng dư hiện có (đọc sau khoá ô). Nhả: releaseProposalAllocations; tạo lệnh: attachProposalHolds.
    */
@@ -1090,7 +1090,7 @@ export class SegmentStockService {
   }
 
   /**
-   * Đổi xưởng (anh Nhân 13/11/2026 câu 8: thủ kho không chỉnh tay - phần đã làm giữ nguyên, phần còn lại tính cho xưởng mới):
+   * Đổi xưởng (nghiệp vụ 13/11/2026 câu 8: thủ kho không chỉnh tay - phần đã làm giữ nguyên, phần còn lại tính cho xưởng mới):
    * chuyển phần đoạn lệnh CÒN GIỮ ở kho Phôi khác sang kho Phôi xưởng mới - bút toán WAREHOUSE_TRANSFER kho cũ → kho mới, giữ
    * cho lệnh ở kho mới, nhật ký TRANSFER cả 2 dòng (kho cũ âm, kho mới dương). Phần đã dùng (consumedQty) ở lại kho cũ.
    *  - Kho cũ không đủ tồn thật cho phần còn giữ (dữ liệu cũ âm): chỉ chuyển phần có, phần còn lại nhả (RELEASE) để kho cũ không

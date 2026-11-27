@@ -50,7 +50,7 @@ export interface SegmentStocktakeResult {
 }
 
 /**
- * Kiểm kê đoạn (anh Nhân 13/11/2026: thủ kho Phôi không nhập tay, chỉ chỉnh khi kiểm kê). Thủ kho nhập SỐ ĐẾM của 1 mã đoạn ở kho
+ * Kiểm kê đoạn (nghiệp vụ 13/11/2026: thủ kho Phôi không nhập tay, chỉ chỉnh khi kiểm kê). Thủ kho nhập SỐ ĐẾM của 1 mã đoạn ở kho
  * Phôi, hệ thống ghi phần chênh bằng bút toán ADJUST (đối ứng "Cân đối tồn kho"). Khoá CÙNG khoá ô (kho, mã đoạn) với phía cộng /
  * phía trừ (SegmentStockService) nên không đan xen với Hàn / Sơn đang trừ. Phần chênh vào / ra cột Dư (tồn - còn giữ); không đụng
  * phần giữ của lệnh.

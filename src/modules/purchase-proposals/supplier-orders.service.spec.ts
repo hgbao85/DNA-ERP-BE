@@ -88,7 +88,7 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
     reviseReason: null,
     createdAt: new Date('2026-11-04T03:00:00Z'),
     supplier,
-    createdBy: { firstName: 'Nghi', lastName: 'Trần' },
+    createdBy: { firstName: 'A', lastName: 'Người mua' },
     items: [pendingItem({ supplierOrderId: 90n })],
     ...overrides,
   });
@@ -184,7 +184,7 @@ describe('SupplierOrdersService (bản v8 mục 4.10 - đơn đặt hàng NCC)',
       });
     });
 
-    describe('cấp lại số đơn huỷ (12/11/2026, anh Nhân - không nhảy cóc)', () => {
+    describe('cấp lại số đơn huỷ (12/11/2026, nghiệp vụ - không nhảy cóc)', () => {
       it('có số đơn huỷ chưa từng ký thì đơn mới lấy lại số đó, bộ đếm không tăng', async () => {
         prisma.$queryRaw.mockResolvedValueOnce([{ seq: 50 }]);
 

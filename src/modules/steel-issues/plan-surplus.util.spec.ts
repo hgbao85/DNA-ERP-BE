@@ -1,6 +1,6 @@
 import { loadPlanSurplus } from './plan-surplus.util';
 
-/** Câu 12b / 14a (anh Nhân 24/11/2026): đoạn dư theo phương án + đoạn dư lấy từ kho, gán cho SKU. */
+/** Câu 12b / 14a (nghiệp vụ 24/11/2026): đoạn dư theo phương án + đoạn dư lấy từ kho, gán cho SKU. */
 describe('loadPlanSurplus', () => {
   const order = (id: bigint, status = 'RELEASED', quantity = 2) => ({
     id,

@@ -462,7 +462,7 @@ describe('FloorReviewService.listOpen', () => {
 
   // ─── P1 (18/11/2026): KCS xem đợt đang mở, không lọc xưởng; piActive / blockedReason; pat + chân nhôm; stoppedPis ───
 
-  // Câu 4 (anh Nhân 24/11/2026, đảo cách ẩn 23/11): KCS chấm nốt đợt của SKU đã huỷ - đợt vẫn hiện, không xám dù PI không còn
+  // Câu 4 (nghiệp vụ 24/11/2026, đảo cách ẩn 23/11): KCS chấm nốt đợt của SKU đã huỷ - đợt vẫn hiện, không xám dù PI không còn
   // SKU đang chạy; cancelledOrderIds để FE gắn nhãn "SKU đã huỷ".
   describe('huỷ lệnh theo SKU - KCS chấm nốt', () => {
     it('không lọc lệnh đã huỷ; đợt của lệnh huỷ không xám dù PI dừng + trả cancelledOrderIds', async () => {

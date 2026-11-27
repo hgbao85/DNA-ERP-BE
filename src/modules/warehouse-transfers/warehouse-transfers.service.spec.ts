@@ -738,7 +738,7 @@ describe('WarehouseTransfersService', () => {
       prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 1000 } }]);
     });
 
-    it('rà soát 14/11 CK4 (anh Nhân 16/11): kho gửi ít tồn hơn số nhận -> 409, không ghi sổ, không nhận thiếu', async () => {
+    it('rà soát 14/11 CK4 (nghiệp vụ 16/11): kho gửi ít tồn hơn số nhận -> 409, không ghi sổ, không nhận thiếu', async () => {
       prisma.warehouseTransfer.findUnique.mockResolvedValue(transferRow());
       prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 12 } }]);
 
@@ -769,7 +769,7 @@ describe('WarehouseTransfersService', () => {
       );
     });
 
-    it('anh Nhân 16/11 (c): nhận phiếu chuyển hàng của lệnh -> nhắc kho đích lập phiếu chuyển tiếp nếu lệnh đã đổi xưởng tiếp', async () => {
+    it('Nghiệp vụ 16/11 (c): nhận phiếu chuyển hàng của lệnh -> nhắc kho đích lập phiếu chuyển tiếp nếu lệnh đã đổi xưởng tiếp', async () => {
       const row = transferRow({ productionInvoiceId: 77n, fromWarehouseId: 1n, toWarehouseId: 7n });
       prisma.warehouseTransfer.findUnique.mockResolvedValue(row);
       prisma.warehouseTransfer.findUniqueOrThrow.mockResolvedValue({
@@ -1257,7 +1257,7 @@ describe('WarehouseTransfersService', () => {
   });
 
   describe('createPieceTransfer', () => {
-    // Anh Nhân 09/11/2026: mảnh không đan chuyển kho Phôi/Hàn/Sơn -> kho Thành phẩm của lệnh.
+    // Nghiệp vụ 09/11/2026: mảnh không đan chuyển kho Phôi/Hàn/Sơn -> kho Thành phẩm của lệnh.
     const pieceDto = {
       fromWarehouseId: '1',
       toWarehouseId: '3',
@@ -1590,7 +1590,7 @@ describe('WarehouseTransfersService', () => {
     });
   });
 
-  describe('anh Nhân 16/11 câu 1: phiếu chuyển hàng của lệnh chưa nhận khi lệnh đổi xưởng tiếp', () => {
+  describe('Nghiệp vụ 16/11 câu 1: phiếu chuyển hàng của lệnh chưa nhận khi lệnh đổi xưởng tiếp', () => {
     // Phiếu Phú An (Phôi, xưởng 1) -> Phước An (Phôi, xưởng 2) đang chờ nhận.
     const moveRow = (o: Record<string, unknown> = {}) =>
       transferRow({
@@ -1842,7 +1842,7 @@ describe('WarehouseTransfersService', () => {
     it('trả kèm tên người tạo/xác nhận/từ chối khi relation có dữ liệu', async () => {
       prisma.warehouseTransfer.findUnique.mockResolvedValue(
         transferRow({
-          createdBy: { firstName: 'Văn', lastName: 'Nhân' },
+          createdBy: { firstName: 'Văn', lastName: 'A' },
           confirmedBy: { firstName: 'Thị', lastName: 'Hoa' },
           rejectedBy: null,
         }),
@@ -1850,7 +1850,7 @@ describe('WarehouseTransfersService', () => {
 
       const result = await service.findOne('50', null);
 
-      expect(result.createdByName).toBe('Văn Nhân');
+      expect(result.createdByName).toBe('Văn A');
       expect(result.confirmedByName).toBe('Thị Hoa');
       expect(result.rejectedByName).toBeNull();
     });

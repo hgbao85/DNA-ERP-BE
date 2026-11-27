@@ -174,7 +174,7 @@ export async function assertOrderNotCancelled(
 }
 
 /**
- * Câu 4 (anh Nhân 24/11/2026): KCS chấm nốt (và chốt để chấm) đợt của SKU đã huỷ - hàng đạt vào kho công đoạn như thường. Lệnh
+ * Câu 4 (nghiệp vụ 24/11/2026): KCS chấm nốt (và chốt để chấm) đợt của SKU đã huỷ - hàng đạt vào kho công đoạn như thường. Lệnh
  * đã huỷ luôn ở FINISHED (lệnh 1 SKU thì PI không còn SKU nào ACTIVE) nên cổng xưởng chặn mất - nơi gọi của KCS bỏ qua cổng khi
  * hàm này trả true. Huỷ không đảo lại được nên kiểm ngoài transaction là đủ. Công nhân vẫn không báo thêm được (cổng cũ).
  */
@@ -191,7 +191,7 @@ export async function isOrderCancelledById(
 }
 
 /**
- * Huỷ lệnh đợt 2 - Q3 (anh Nhân 24/11/2026): QLSX cho tổ cắt "cắt tiếp" sắt đã xuất của SKU đã huỷ - đề nghị huỷ đã duyệt mang
+ * Huỷ lệnh đợt 2 - Q3 (nghiệp vụ 24/11/2026): QLSX cho tổ cắt "cắt tiếp" sắt đã xuất của SKU đã huỷ - đề nghị huỷ đã duyệt mang
  * cutDecision = CONTINUE. Khi đó báo cắt / báo cắt xong / xác nhận nhận sắt của SKU này được qua cổng xưởng; đoạn ra vào dư kho Phôi.
  */
 export async function isCutContinuedForOrder(

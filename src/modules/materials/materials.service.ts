@@ -105,7 +105,7 @@ export class MaterialsService {
     // create(), request thua bị unique constraint ở DB chặn (nguồn chặn thật, không phải check ở
     // trên) nhưng ném ra Prisma P2002 thô, rơi vào AllExceptionsFilter thành thông báo chung chung
     // "Duplicate value for: code" thay vì lỗi nghiệp vụ rõ ràng như nhánh pre-check phía trên.
-    // 20/11 (Sang báo): tạo vật tư + ghi dòng tồn đầu trong CÙNG 1 transaction (trước đây 2 bước rời - ghi tồn lỗi thì còn vật
+    // 20/11 (IT báo): tạo vật tư + ghi dòng tồn đầu trong CÙNG 1 transaction (trước đây 2 bước rời - ghi tồn lỗi thì còn vật
     // tư không tồn đầu), dòng tồn đầu ghi người tạo (sổ kho trước đây hiện "Người sửa: —").
     const writeOpening = !!(dto.openingQty && dto.openingQty > 0 && dto.warehouseId);
     let material: MaterialWithRelations;
@@ -160,7 +160,7 @@ export class MaterialsService {
   }
 
   /**
-   * Test toàn hệ thống 19/11 (việc Bảo nhận từ Sang): tồn đầu lúc tạo vật tư là 1 bút toán ghi tồn (đối ứng kho ảo Cân đối tồn
+   * Test toàn hệ thống 19/11 (việc chia lại trong IT): tồn đầu lúc tạo vật tư là 1 bút toán ghi tồn (đối ứng kho ảo Cân đối tồn
    * kho) như "Sửa nhanh tồn" - cùng luật phạm vi: Admin / Giám đốc ghi được mọi kho, còn lại phải đang phụ trách ĐÚNG kho đó.
    * Trước đây quyền tạo vật tư đi theo vai nền "Nhân viên" của mọi tài khoản văn phòng nên ai cũng ghi tồn vào kho bất kỳ.
    * Tạo vật tư KHÔNG kèm tồn đầu không đổi.

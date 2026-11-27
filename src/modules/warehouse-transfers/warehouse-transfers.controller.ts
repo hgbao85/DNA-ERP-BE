@@ -100,7 +100,7 @@ export class WarehouseTransfersController {
   }
 
   /**
-   * Cảnh báo lúc đổi xưởng (anh Nhân 16/11): phiếu chuyển hàng của lệnh còn chờ nhận. Người đổi xưởng (KHSX / QLSX) không có quyền
+   * Cảnh báo lúc đổi xưởng (nghiệp vụ 16/11): phiếu chuyển hàng của lệnh còn chờ nhận. Người đổi xưởng (KHSX / QLSX) không có quyền
    * xem phiếu chuyển kho nên dùng quyền xem lệnh sản xuất. Đặt TRƯỚC @Get(':id').
    */
   @Get('workshop-moves/pending')
@@ -178,7 +178,7 @@ export class WarehouseTransfersController {
     return this.warehouseTransfersService.reject(id, dto.rejectionReason, warehouseScope, userId);
   }
 
-  /** (a) Kho GỬI huỷ phiếu chuyển hàng của lệnh chưa nhận - hàng chưa rời kho / xe quay về (anh Nhân 16/11 câu 1). */
+  /** (a) Kho GỬI huỷ phiếu chuyển hàng của lệnh chưa nhận - hàng chưa rời kho / xe quay về (nghiệp vụ 16/11 câu 1). */
   @Post(':id/cancel')
   @RequireAssignedWarehouse()
   @RequirePermissions(CREATE)

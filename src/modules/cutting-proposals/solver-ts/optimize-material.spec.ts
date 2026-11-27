@@ -320,7 +320,7 @@ describe('optimizeMaterial', () => {
     });
   });
 
-  describe('cây mua cuối cắt khúc thừa thành đoạn dư (anh Nhân câu 9-11, 24/11/2026)', () => {
+  describe('cây mua cuối cắt khúc thừa thành đoạn dư (nghiệp vụ câu 9-11, 24/11/2026)', () => {
     const opts = { maxWasteRatio: 0.01, timeLimit: 20, maxSurplus: 10 };
 
     it('150 đoạn 60 mm trên cây 6 m: tắt thì vô nghiệm (dư ≤ 10), bật thì 2 cây, cây cuối cắt hết khúc thừa thành đoạn dư', () => {
@@ -422,7 +422,7 @@ describe('optimizeMaterial', () => {
     });
   });
 
-  describe('repackTailSurplus (Nhân 26/11 câu 5 + 8)', () => {
+  describe('repackTailSurplus (nghiệp vụ 26/11 câu 5 + 8)', () => {
     // cây dùng được 6000, cỡ 1000 (giá 1001) và 100 (giá 101); ngưỡng cùi 1 cây 60
     const base = {
       costS: [1001, 101],

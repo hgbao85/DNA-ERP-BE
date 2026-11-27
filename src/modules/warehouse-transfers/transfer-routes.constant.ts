@@ -13,7 +13,7 @@ import { warehouseFamilyOf } from '../../common/utils/warehouse-family.util';
  * đình đích có hợp lệ tiếp theo gia đình nguồn không" - không suy ra 1 kho đích duy nhất nữa.
  */
 export const FAMILY_ROUTES: Record<string, string> = {
-  // Anh Nhân 09/11/2026: mảnh KHÔNG đan chuyển thẳng từ kho Sơn (kho giữ mảnh) sang kho Thành phẩm của lệnh; mảnh cần đan xuất
+  // Nghiệp vụ 09/11/2026: mảnh KHÔNG đan chuyển thẳng từ kho Sơn (kho giữ mảnh) sang kho Thành phẩm của lệnh; mảnh cần đan xuất
   // đan thẳng từ kho Sơn (phiếu XK) - không còn chặng Phôi-Sơn-Hàn -> Phụ kiện -> Thành phẩm cho mảnh.
   'phoi-son-han': 'thanh-pham',
 };

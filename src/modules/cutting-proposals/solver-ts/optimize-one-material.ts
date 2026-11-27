@@ -82,7 +82,7 @@ export interface OneMaterialOptions {
    */
   laserMinTailMm?: number;
   /**
-   * CS2 (anh Nhân 20/11/2026): cây lẻ đang có ở kho Phôi của xưởng làm lệnh. Đi theo MỌI lần giải (chuẩn, retry, dò,
+   * CS2 (nghiệp vụ 20/11/2026): cây lẻ đang có ở kho Phôi của xưởng làm lệnh. Đi theo MỌI lần giải (chuẩn, retry, dò,
    * bestAchievable): mỗi lần giải thêm các chiều dài này (trừ chiều dài đang thử làm cây mua) với giới hạn đúng số cây, và
    * ưu tiên dùng hết cây lẻ trước. Chiều dài MUA vẫn chỉ 1 / loại sắt như cũ.
    */
@@ -295,10 +295,10 @@ function optimizeOneMaterialAtCap(
     ...(opts.lastBarFill ? { lastBarFill: true } : {}),
   };
   const machineOpts = { ...baseMachineOpts, ...(minTail > 0 ? { laserMinTailMm: minTail } : {}) };
-  // CS2: thêm cây lẻ (khác chiều dài mua đang thử) + giới hạn số cây vào mọi lần giải. Anh Nhân câu 2b: dùng cây lẻ trước kể cả
+  // CS2: thêm cây lẻ (khác chiều dài mua đang thử) + giới hạn số cây vào mọi lần giải. Nghiệp vụ câu 2b: dùng cây lẻ trước kể cả
   // khi làm hao hụt vượt ngưỡng - KHSX xin đặc cách. optimizeMaterial chỉ nới ngưỡng TỪNG cây cho kiểu cắt trên cây lẻ (lọc thì
   // bộ giải tự bỏ cây lẻ để giữ dưới ngưỡng - đo thật 20/11: SAT-001 cây lẻ 5800 bị bỏ); kiểu cắt trên cây mua giữ ngưỡng (review
-  // Sang 21/11: nới cả loại sắt thì cây mua cũng cắt 1 đoạn/cây được). Ngưỡng tổng (over_waste) xét như cũ.
+  // IT 21/11: nới cả loại sắt thì cây mua cũng cắt 1 đoạn/cây được). Ngưỡng tổng (over_waste) xét như cũ.
   const leftovers = (opts.leftovers ?? []).filter(
     (l) => Number.isFinite(l.length) && l.length > 0 && Math.trunc(l.count) > 0,
   );

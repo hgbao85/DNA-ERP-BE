@@ -1,5 +1,5 @@
 /**
- * CS2 (anh Nhân 20/11/2026, chốt lại 23/11 câu 1 chọn B): cây lẻ trong kho Phôi của xưởng làm lệnh. Bộ giải THẬT (HiGHS):
+ * CS2 (nghiệp vụ 20/11/2026, chốt lại 23/11 câu 1 chọn B): cây lẻ trong kho Phôi của xưởng làm lệnh. Bộ giải THẬT (HiGHS):
  * - xếp đoạn lên cây lẻ TRƯỚC, kể cả khi không bớt được cây mua nào, tối đa đúng số cây đang có (kể cả khi cây lẻ hao hơn cây mua);
  * - phần còn thiếu cắt từ chiều dài mua (1 chiều dài), ít cây nhất; cây mua cắt cho hết (đoạn dư trong giới hạn như thường);
  * - phần còn thiếu không vừa kiểu cắt nào trong ngưỡng thì được 1 "cây mua cuối" cắt tự do (vượt ngưỡng -> KHSX xin đặc cách);
@@ -43,7 +43,7 @@ describe('CS2 - cây lẻ trong kho (bộ giải thật)', () => {
     expect(r.produced[0]).toBeGreaterThanOrEqual(5);
   });
 
-  // Anh Nhân 23/11 câu 1 chọn B (trước đó 21-23/11: cây lẻ không bớt được cây mua thì không cắt).
+  // Nghiệp vụ 23/11 câu 1 chọn B (trước đó 21-23/11: cây lẻ không bớt được cây mua thì không cắt).
   it('cây lẻ KHÔNG bớt được cây mua nào (6 đoạn: vẫn phải mua 2 cây 6000) -> VẪN cắt cây lẻ trước, 2 cây 6000 cắt cho hết', () => {
     const r = optimizeMaterial(highs, SIZES, DEMANDS, [6000, 4500], TRIM, KERF, {
       ...OPTS,
@@ -130,7 +130,7 @@ describe('CS2 - cây lẻ trong kho (bộ giải thật)', () => {
     expect(r.bars_by_length).toEqual({ '6000': 2 });
   });
 
-  // Review Sang 21/11: bản đầu tối đa số CÂY lẻ -> 30 cây lẻ 5800 cho 20 đoạn 500 bị dùng hết, mỗi cây 1 đoạn (hao 91 %).
+  // Review IT 21/11: bản đầu tối đa số CÂY lẻ -> 30 cây lẻ 5800 cho 20 đoạn 500 bị dùng hết, mỗi cây 1 đoạn (hao 91 %).
   it('nhiều cây lẻ: chỉ dùng đủ số cây cần (20 đoạn 500, có 30 cây lẻ 5800 -> 2 cây), không phá hết cây lẻ', () => {
     const r = optimizeMaterial(highs, [500], [20], [6000, 5800], TRIM, KERF, {
       ...OPTS,
@@ -165,7 +165,7 @@ describe('CS2 - cây lẻ trong kho (bộ giải thật)', () => {
     expect(r.feasible).toBe(false);
   });
 
-  // Review Sang 21/11 (2c): MC Tự động + cây lẻ trước đây bỏ đường thu hẹp bó, loại sắt lớn hết giờ không ra nghiệm (đo 23/11).
+  // Review IT 21/11 (2c): MC Tự động + cây lẻ trước đây bỏ đường thu hẹp bó, loại sắt lớn hết giờ không ra nghiệm (đo 23/11).
   it('MC Tự động (đường thu hẹp bó) + cây lẻ: ra phương án theo bó, cây lẻ cắt tay, không quá số cây lẻ', () => {
     const r = optimizeMaterial(highs, [1990], [61], [6000, 4500], TRIM, KERF, {
       ...OPTS,
@@ -268,7 +268,7 @@ describe('CS2 - câu 2b: dùng cây lẻ kể cả khi vượt ngưỡng (KHSX x
     highs = await getHighs();
   });
 
-  // Đúng ví dụ trong file hỏi anh Nhân 23/11, anh chọn B: cắt cây lẻ 5800 trước, phần còn thiếu sang 1 cây 6000.
+  // Đúng ví dụ trong câu hỏi nghiệp vụ 23/11, phương án B: cắt cây lẻ 5800 trước, phần còn thiếu sang 1 cây 6000.
   it('ca thật SAT-001 (650 x4, 420 x8, ngưỡng 1 %): cắt cây lẻ 5800 trước, phần thiếu sang 1 cây 6000 (cắt cho hết)', () => {
     const r = optimizeOneMaterial(highs, [650, 420], [4, 8], [6000], 10, 2.5, 1, {
       timeLimitSec: 10,
@@ -324,7 +324,7 @@ describe('CS2 - câu 2b: dùng cây lẻ kể cả khi vượt ngưỡng (KHSX x
     expect(r.over_waste).toBe(false);
   });
 
-  it('anh Nhân câu 11a (24/11/2026): có cây lẻ + bật cây mua cuối -> cây mua cuối cắt hết khúc thừa, không bị trần 10 đoạn dư', () => {
+  it('Nghiệp vụ câu 11a (24/11/2026): có cây lẻ + bật cây mua cuối -> cây mua cuối cắt hết khúc thừa, không bị trần 10 đoạn dư', () => {
     const o = { maxWasteRatio: 0.01, timeLimit: 10, maxSurplus: 10, lengthCaps: { 4500: 1 } };
     const off = optimizeMaterial(highs, [60], [120], [4500, 6000], 10, 1, o);
     const on = optimizeMaterial(highs, [60], [120], [4500, 6000], 10, 1, {

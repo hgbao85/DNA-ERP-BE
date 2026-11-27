@@ -407,7 +407,7 @@ export class UpdateSystemConfigDto {
   @ApiPropertyOptional({
     example: 2,
     description:
-      'Luật gộp: số SKU tối đa trong 1 đợt tính / 1 lệnh gộp (mặc định 2 - Sếp Nhân). 1-50.',
+      'Luật gộp: số SKU tối đa trong 1 đợt tính / 1 lệnh gộp (mặc định 2 - quản lý). 1-50.',
   })
   @IsOptional()
   @IsInt()

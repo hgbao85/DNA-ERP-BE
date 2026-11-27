@@ -633,7 +633,7 @@ describe('CuttingProposalsService.getBatchSuggestions', () => {
       });
     });
 
-    // 24/11/2026 (anh Nhân): bỏ chặn khung N ngày - đơn mốc xa vẫn được gợi ý gộp (chỉ xếp sau đơn mốc gần), kèm độ chênh.
+    // 24/11/2026 (nghiệp vụ): bỏ chặn khung N ngày - đơn mốc xa vẫn được gợi ý gộp (chỉ xếp sau đơn mốc gần), kèm độ chênh.
     it('fix-options: đơn kia mốc cách 8 ngày (khung cài 7) VẪN được gợi ý gộp, kèm độ chênh', async () => {
       build(withWindow(7), fixSolver());
       const res = await service.getBatchFixOptions({ productionInvoiceItemIds: ['1'] });

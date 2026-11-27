@@ -1,7 +1,7 @@
 import { ProdItemStageType } from '../../generated/prisma/client';
 
 /**
- * LUẬT GỘP (2026-10-24, Sếp Nhân: "chỉ được gom các lệnh cách nhau khoảng 3 ngày đổ lại", "không được gộp 2 lệnh cách nhau quá xa",
+ * LUẬT GỘP (2026-10-24, quản lý: "chỉ được gom các lệnh cách nhau khoảng 3 ngày đổ lại", "không được gộp 2 lệnh cách nhau quá xa",
  * "sẽ kiểm soát lúc lên kế hoạch"; người dùng: "giới hạn chỉ được gộp tối đa bao nhiêu đó SKU"). Áp ở mọi chỗ KHSX tạo/giữ một đợt cắt
  * chung: cutting-batch-solve, merge PI, lưu hạn lệnh gộp. Cùng một hàm để 3 chỗ không nói 3 kiểu.
  *
@@ -9,7 +9,7 @@ import { ProdItemStageType } from '../../generated/prisma/client';
  * 2026-10-24). KHÔNG rơi về hạn của PI như frameDeadlineOf: lệnh gộp lấy hạn PI = hạn sớm nhất của nhóm, rơi về đó thì SKU chưa có mốc
  * bị tính như đang ở mốc sớm nhất -> báo vi phạm oan. SKU chưa có mốc riêng: bỏ qua (không chặn - không biết thì không kết luận).
  *
- * KHUNG N NGÀY TÍNH CẢ NGÀY ĐẦU (Sếp Nhân 2026-10-24: "ngày 1 gộp được ngày 3, ngày 1 ko được gộp với ngày 4", "bắt buộc chỉ được gộp
+ * KHUNG N NGÀY TÍNH CẢ NGÀY ĐẦU (quản lý 2026-10-24: "ngày 1 gộp được ngày 3, ngày 1 ko được gộp với ngày 4", "bắt buộc chỉ được gộp
  * tối đa 2 lệnh"): windowDays nghĩa là mốc sớm nhất và muộn nhất CHÊNH tối đa windowDays − 1 ngày.
  * 13/11/2026: Sếp nâng khung mặc định từ 3 lên 5 ngày - mốc ngày 10 gộp được ngày 14 (chênh 4),
  * không gộp được ngày 15 (chênh 5).
@@ -74,7 +74,7 @@ export function checkMergeRules(
   if (dated.length >= 2) {
     const first = dated[0];
     const last = dated[dated.length - 1];
-    // 24/11/2026 (anh Nhân, file huỷ lệnh câu 3 "Thêm"): BỎ chặn "chênh tối đa N ngày" khi gộp - không chặn nữa, chỉ ưu tiên gộp
+    // 24/11/2026 (nghiệp vụ, file huỷ lệnh câu 3 "Thêm"): BỎ chặn "chênh tối đa N ngày" khi gộp - không chặn nữa, chỉ ưu tiên gộp
     // các lệnh có mốc gần nhau (gợi ý gộp xếp theo độ chênh). spanDays vẫn trả để màn hiện độ chênh; luật số SKU tối đa giữ nguyên.
     spanDays = Math.round((last.at.getTime() - first.at.getTime()) / DAY_MS);
   }

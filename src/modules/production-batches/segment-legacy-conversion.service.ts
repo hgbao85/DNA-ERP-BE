@@ -54,7 +54,7 @@ class DryRunRollback extends Error {
 }
 
 /**
- * Chuyển đổi dữ liệu tồn đoạn cũ sang tồn đoạn theo lệnh (anh Nhân 13/11/2026 câu 10: tồn không được âm, số âm cũ sửa lại theo
+ * Chuyển đổi dữ liệu tồn đoạn cũ sang tồn đoạn theo lệnh (nghiệp vụ 13/11/2026 câu 10: tồn không được âm, số âm cũ sửa lại theo
  * nguyên tắc mới). Cả lượt chạy trong 1 transaction; xem thử (dryRun) chạy y hệt rồi rollback.
  *  1. Đưa mọi ô tồn đoạn cũ (trừ kho ảo PRODUCTION / OPENING_BALANCE) về 0 bằng bút toán ADJUST - số âm cũ là phần Hàn / Sơn trừ theo cách cũ vào dòng
  *     trơn. Ô dương cũ (chỉnh tay) cũng về 0: tồn đoạn từ nay chỉ vào qua KCS + kiểm kê đoạn.

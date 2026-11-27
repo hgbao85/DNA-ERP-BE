@@ -54,7 +54,7 @@ const bucketKey = (warehouseId: bigint, materialId: bigint, lengthMm: number, sp
   `${warehouseId}|${materialId}|${lengthMm}|${spec}`;
 
 /**
- * CS2 (anh Nhân 20/11/2026): cây lẻ đang có KHẢ DỤNG ở ĐÚNG kho Phôi của xưởng làm lệnh, kèm SỐ CÂY. Trả
+ * CS2 (nghiệp vụ 20/11/2026): cây lẻ đang có KHẢ DỤNG ở ĐÚNG kho Phôi của xưởng làm lệnh, kèm SỐ CÂY. Trả
  * `Map<materialId (chuỗi), [{ length, count }] tăng dần theo chiều dài>`; loại sắt không có cây lẻ nào thì KHÔNG có khoá.
  * Không biết xưởng (`workshopId` null) -> rỗng (không biết kho nào là "đúng kho").
  *
@@ -66,7 +66,7 @@ const bucketKey = (warehouseId: bigint, materialId: bigint, lengthMm: number, sp
  * chiều dài của (kho, vật tư, quy cách) đó. Số cây = phần nguyên của khả dụng; chiều dài lọc theo `isUsableStockLength` (nơi
  * gọi tự bỏ chiều dài đang mua của từng loại sắt).
  *
- * Review Sang 21/11:
+ * Review IT 21/11:
  *   - Đọc ĐÚNG kho mà approve() sẽ đọc/giữ chỗ (kho mặc định của vật tư qua WorkshopWarehouseResolver theo xưởng) và chỉ ô quy cách
  *     rỗng (sắt không mang quy cách; approve() chỉ đọc ô này) - trước đây cộng mọi kho Phôi của xưởng + mọi quy cách nên xưởng có 2
  *     kho Phôi / cây lẻ có quy cách thì duyệt báo 409 "Tính lại" lặp mãi.

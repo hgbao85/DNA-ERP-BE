@@ -1,5 +1,5 @@
 /**
- * CS2 (anh Nhân 20/11/2026): 1 loại sắt trong 1 phương án có thể vừa cắt cây lẻ đang có ở kho Phôi vừa cắt cây chiều dài
+ * CS2 (nghiệp vụ 20/11/2026): 1 loại sắt trong 1 phương án có thể vừa cắt cây lẻ đang có ở kho Phôi vừa cắt cây chiều dài
  * mua - số cây phải tách theo TỪNG chiều dài (CuttingProposalPattern.stockLengthMm), không còn 1 chiều dài/dòng.
  *
  * Trả Map<chiều dài, số cây> tăng dần theo chiều dài. Kiểu cắt chưa lưu chiều dài (phương án tính trước 20/11) tính theo

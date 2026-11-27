@@ -265,7 +265,7 @@ export class CutMachineStatsService {
     };
   }
 
-  /** Chiều dài cây theo phương án APPROVED đầu tiên của (PI, loại sắt); neo PI hoặc PO. CS2 (review Sang 21/11): phương án có cây lẻ
+  /** Chiều dài cây theo phương án APPROVED đầu tiên của (PI, loại sắt); neo PI hoặc PO. CS2 (review IT 21/11): phương án có cây lẻ
    *  kho Phôi (kiểu cắt khác chiều dài mua) thì lấy chiều dài TRUNG BÌNH theo số cây của các kiểu cắt - con số chỉ để ước số cây. */
   private async loadBarLengths(piIds: Array<bigint | null>): Promise<Map<string, number>> {
     const ids = [...new Set(piIds.filter((x): x is bigint => x != null))];

@@ -391,7 +391,7 @@ export class ConsumableMaterialPurchaseService {
         });
       } else {
         // Gom MỌI dòng của cùng khoá (vật tư, quy cách) - dòng đã ký (PURCHASING), chưa ký, PURCHASED cùng tồn tại được
-        // (vd dòng đã ký + dòng NEW cho phần thêm). `planPurchaseRecompute` quyết định ghi dòng nào (anh Nhân 07/11):
+        // (vd dòng đã ký + dòng NEW cho phần thêm). `planPurchaseRecompute` quyết định ghi dòng nào (nghiệp vụ 07/11):
         // dòng ĐÃ ký giữ nguyên, dòng chưa ký bỏ orderQty khi nhu cầu giảm. Khoá theo (vật tư, quy cách): nệm khác quy cách
         // giữa các SKU là các dòng mua RIÊNG (2026-10-23).
         const itemKey = (materialId: bigint | string, spec: string | null) =>

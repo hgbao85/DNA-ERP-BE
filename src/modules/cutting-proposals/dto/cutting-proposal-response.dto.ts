@@ -138,7 +138,7 @@ export class CuttingProposalPieceSummaryResponseDto {
   /// Tên các mảnh dùng tới cỡ đoạn này (vd ["chân bàn"]) - nhiều tên khi cỡ đoạn dùng chung giữa
   /// các mảnh/SKU trong đợt cắt gộp. Rỗng nếu không tra được tên (dữ liệu backfill cũ).
   @Expose() @ApiProperty({ type: [String] }) names!: string[];
-  /// Anh Nhân câu 14a (24/11/2026): số đoạn dư có sẵn trong kho Phôi đã dùng trước - `demand` là phần còn phải cắt.
+  /// Nghiệp vụ câu 14a (24/11/2026): số đoạn dư có sẵn trong kho Phôi đã dùng trước - `demand` là phần còn phải cắt.
   @Expose() @ApiPropertyOptional() fromStock?: number;
 }
 

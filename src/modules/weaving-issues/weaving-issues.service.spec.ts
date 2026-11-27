@@ -220,7 +220,7 @@ describe('WeavingIssuesService', () => {
     );
   });
 
-  // Xuất đan 2 phiếu (anh Nhân 09/11/2026): phiếu mảnh từ kho giữ mảnh (kho Sơn) + phiếu vật tư kèm từ kho Phụ kiện. Ghi thật
+  // Xuất đan 2 phiếu (nghiệp vụ 09/11/2026): phiếu mảnh từ kho giữ mảnh (kho Sơn) + phiếu vật tư kèm từ kho Phụ kiện. Ghi thật
   // nằm ở IssueSlipsService (cấp số, ảnh ký) - ở đây test phần kiểm và ghi trong transaction.
   describe('xuất đan 2 phiếu', () => {
     const sonWarehouse = { id: 70n, code: 'phoi-son-han-son-pa', kind: 'SON', workshopId: 1n };

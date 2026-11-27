@@ -2,7 +2,7 @@
 import { OrderCancellationService, orderCancelPiLockKey } from './order-cancellation.service';
 
 /**
- * 2 lỗi Cao của huỷ lệnh đợt 1 (review Sang 23/11, còn ở main 02016a3):
+ * 2 lỗi Cao của huỷ lệnh đợt 1 (review IT 23/11, còn ở main 02016a3):
  *  1. Sếp duyệt huỷ 2 SKU của cùng lệnh gộp gần như cùng lúc -> lệnh thành DONE thay vì CANCELLED.
  *  2. SKU còn lại đã Kết thúc mà vẫn tính lại phương án / dòng mua sau khi đã nhả giữ chỗ.
  */

@@ -1,5 +1,5 @@
 /**
- * Số cần MUA của 1 vật tư theo công thức anh Nhân chốt (V3-3, bản yêu cầu v8 mục 7.9, 04/11/2026):
+ * Số cần MUA của 1 vật tư theo công thức nghiệp vụ chốt (V3-3, bản yêu cầu v8 mục 7.9, 04/11/2026):
  *
  *   buyQty = nhu cầu × (1 + % hao hụt mua) − tồn khả dụng (tồn CHƯA GIỮ cho lệnh khác)
  *

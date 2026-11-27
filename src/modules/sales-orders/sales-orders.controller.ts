@@ -84,7 +84,7 @@ export class SalesOrdersController {
     return this.salesOrdersService.updateItem(id, itemId, dto);
   }
 
-  /** Huỷ lệnh câu 2 (anh Nhân 24/11/2026): khách huỷ hẳn - Sales huỷ 1 dòng đơn (kèm lý do). */
+  /** Huỷ lệnh câu 2 (nghiệp vụ 24/11/2026): khách huỷ hẳn - Sales huỷ 1 dòng đơn (kèm lý do). */
   @Post(':id/items/:itemId/cancel')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions({ module: PERMISSION_MODULES.SALES_ORDER, action: PermissionAction.UPDATE })

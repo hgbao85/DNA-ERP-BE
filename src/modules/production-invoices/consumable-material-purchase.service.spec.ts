@@ -1013,7 +1013,7 @@ describe('ConsumableMaterialPurchaseService', () => {
       );
     });
   });
-  // Tính lại khi nhu cầu GIẢM (anh Nhân chốt 07/11): ranh giới là "Giám đốc đã ký" (PURCHASING).
+  // Tính lại khi nhu cầu GIẢM (nghiệp vụ chốt 07/11): ranh giới là "Giám đốc đã ký" (PURCHASING).
   describe('tính lại khi nhu cầu giảm (chưa ký / đã ký)', () => {
     const mockLookups = () => {
       const withMaterial = prisma as unknown as { material?: Record<string, jest.Mock> };

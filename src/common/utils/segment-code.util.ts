@@ -5,7 +5,7 @@ import {
 } from '../constants/process-steps.constant';
 
 /**
- * MÃ ĐOẠN (13/11/2026, tồn đoạn kho Phôi theo lệnh - anh Nhân câu 4: "tách theo mã đoạn"): mã đoạn = (cỡ đoạn, bộ công đoạn phụ).
+ * MÃ ĐOẠN (13/11/2026, tồn đoạn kho Phôi theo lệnh - nghiệp vụ câu 4: "tách theo mã đoạn"): mã đoạn = (cỡ đoạn, bộ công đoạn phụ).
  * Cỡ đoạn = SegmentSpec (loại sắt + chiều dài cắt). Bộ công đoạn = các công đoạn phụ đoạn phải qua (Uốn/Dập/Đục lỗ/Tán/...),
  * KHÔNG gồm Cắt (đoạn nào cũng cắt). '' = TRƠN (chỉ cắt).
  *

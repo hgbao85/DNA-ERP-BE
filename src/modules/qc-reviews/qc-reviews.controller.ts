@@ -105,7 +105,7 @@ export class QcReviewsController {
   }
 
   /**
-   * Sửa/xóa ảnh bằng chứng khi lỡ chọn nhầm - 2026-09-11 lần 2 (theo Sếp Trương Văn Nhân: "cho
+   * Sửa/xóa ảnh bằng chứng khi lỡ chọn nhầm - 2026-09-11 lần 2 (theo quản lý: "cho
    * người nhập được sửa luôn"), mở cho CHÍNH người đã chấm review này, KHÔNG chỉ ADMIN như thiết
    * kế ban đầu. Bỏ hẳn `@RequireRole(ADMIN)`/`@RequireMfgRole(KCS)` - quyết định "actor này có phải
    * người nhập hay Admin không" cần đọc dữ liệu record (reviewedById) nên chuyển vào

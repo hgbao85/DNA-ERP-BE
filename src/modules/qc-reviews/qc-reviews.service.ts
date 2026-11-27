@@ -1020,7 +1020,7 @@ export class QcReviewsService {
   /**
    * KCS duyệt 1 "đợt gửi KCS theo công đoạn" (PieceStepBundle, 2026-09-07) - mirror ĐÚNG cách Phôi/
    * Sắt chấm (reviewCutBundle()): CHỈ 2 kết quả Đạt/Không đạt (quyết định nghiệp vụ 2026-09-07,
-   * Sếp Trương Văn Nhân qua chat nội bộ: "sửa được thì không tính là lỗi" - toàn bộ failedQty coi
+   * Quản lý qua chat nội bộ: "sửa được thì không tính là lỗi" - toàn bộ failedQty coi
    * như "không đạt", Phôi tự sửa rồi báo Bù đủ bằng 1 bundle MỚI, không qua cấp bù kho). Từ
    * 2026-09-08 lần 2, reviewProductionBatch() (Hàn/Sơn/VTTP chốt cuối) cũng đã quy về ĐÚNG pattern
    * này - `CreateQcReviewDto` dùng chung shape cho cả 2 method, không tách DTO riêng. bundle.status
@@ -1224,7 +1224,7 @@ export class QcReviewsService {
    * actor, ip) - không cần ghi tay. failedQty/reason/defectReasonId/reviewedAt/reviewedById BẤT
    * BIẾN, không đụng tới.
    *
-   * 2026-09-11 lần 2 (theo Sếp Trương Văn Nhân, hỏi qua chat nội bộ "ai được quyền sửa" - trả lời
+   * 2026-09-11 lần 2 (theo quản lý, hỏi qua chat nội bộ "ai được quyền sửa" - trả lời
    * "cho người nhập được sửa luôn"): mở thêm cho CHÍNH người đã tạo review này
    * (`reviewedById === actorUserId`), KHÔNG chỉ ADMIN như thiết kế ban đầu - route bỏ
    * `@RequireRole(ADMIN)`, actor/role check chuyển vào service vì cần đọc dữ liệu record (biết ai

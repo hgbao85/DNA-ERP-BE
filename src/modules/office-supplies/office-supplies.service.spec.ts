@@ -75,7 +75,7 @@ describe('OfficeSuppliesService', () => {
       },
       warehouse: { findUnique: jest.fn().mockResolvedValue(warehousePsh) },
       // Mock $transaction chạy callback với chính `prisma` giả này làm `tx` - đủ để test logic
-      // nghiệp vụ trong adjustQuantity() mà không cần Prisma thật (khớp idiom MaterialsService.spec).
+      // Nghiệp vụ trong adjustQuantity() mà không cần Prisma thật (khớp idiom MaterialsService.spec).
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
     };
     service = new OfficeSuppliesService(prisma as unknown as PrismaServiceType);

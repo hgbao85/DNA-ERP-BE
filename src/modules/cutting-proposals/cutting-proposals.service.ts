@@ -420,7 +420,7 @@ type SolverJob = {
   /** Nhãn cho log/thông báo QLSX: mã lệnh SX, hoặc mã PI khi cắt chung cả nhóm. */
   label: string;
   /**
-   * Câu 14a + mục 2 (anh Nhân 24/11/2026): PI + các SKU (bản định mức, số bộ) để tính số cần theo (cỡ đoạn, bộ công đoạn) rồi trừ
+   * Câu 14a + mục 2 (nghiệp vụ 24/11/2026): PI + các SKU (bản định mức, số bộ) để tính số cần theo (cỡ đoạn, bộ công đoạn) rồi trừ
    * đoạn dư đúng quy cách ở kho Phôi của xưởng. Thiếu (lượt tính trước PI) = không trừ (chưa có PI để giữ đoạn).
    */
   stockDemand?: {
@@ -777,7 +777,7 @@ export class CuttingProposalsService {
           `SKU đã huỷ (dòng đơn bị Sales huỷ hoặc dòng của lệnh đã huỷ), không lên lệnh được: ${cancelled.join(', ')}`,
         );
       }
-      // LUẬT GỘP (2026-10-24, Sếp Nhân: "chỉ được gom các lệnh cách nhau khoảng 3 ngày đổ lại", "sẽ kiểm soát lúc lên kế hoạch") -
+      // LUẬT GỘP (2026-10-24, quản lý: "chỉ được gom các lệnh cách nhau khoảng 3 ngày đổ lại", "sẽ kiểm soát lúc lên kế hoạch") -
       // chặn ngay lúc KHSX bấm Tính, trước khi tốn một lượt giải. Xem merge-rules.util.
       const mergeCfg = await tx.systemConfig.findUniqueOrThrow({
         where: { id: SYSTEM_CONFIG_ID },
@@ -906,7 +906,7 @@ export class CuttingProposalsService {
           where: { id: { in: toDrop.map((pr) => pr.id) } },
           data: { status: CuttingProposalStatus.SUPERSEDED },
         });
-        // Nhân 26/11 câu 4: lượt tính trước bị bỏ trả đoạn dư đã giữ về kho.
+        // Nghiệp vụ 26/11 câu 4: lượt tính trước bị bỏ trả đoạn dư đã giữ về kho.
         if (this.segmentStock) {
           for (const pr of toDrop) {
             await this.segmentStock.releaseProposalAllocations(tx, pr.id, actorUserId);
@@ -1028,7 +1028,7 @@ export class CuttingProposalsService {
         );
       }
       await tx.cuttingProposalItem.deleteMany({ where: { cuttingProposalId: bigId } });
-      // Nhân 26/11 câu 4: phương án bị xoá trả đoạn dư đã giữ lúc tính về kho.
+      // Nghiệp vụ 26/11 câu 4: phương án bị xoá trả đoạn dư đã giữ lúc tính về kho.
       if (this.segmentStock) await this.segmentStock.releaseProposalAllocations(tx, bigId);
     });
     this.invalidateBatchContext();
@@ -1330,7 +1330,7 @@ export class CuttingProposalsService {
           some: { productionInvoiceItemId: { in: items.map((i) => i.productionInvoiceItemId) } },
         },
       };
-      // Nhân 26/11 câu 4: các lượt anh em bị thay trả đoạn dư đã giữ (trước khi phương án được chọn giữ thêm phần thiếu).
+      // Nghiệp vụ 26/11 câu 4: các lượt anh em bị thay trả đoạn dư đã giữ (trước khi phương án được chọn giữ thêm phần thiếu).
       if (this.segmentStock) {
         const siblings = await tx.cuttingProposal.findMany({
           where: siblingWhere,
@@ -1359,7 +1359,7 @@ export class CuttingProposalsService {
         data: { status: CuttingProposalStatus.SUPERSEDED },
       });
     }
-    // Nhân 26/11 câu 4: đoạn phương án đã giữ lúc tính gắn sang PI; phần đã bị trả (lượt mới hơn lấy) thì giữ lại ngay bây giờ -
+    // Nghiệp vụ 26/11 câu 4: đoạn phương án đã giữ lúc tính gắn sang PI; phần đã bị trả (lượt mới hơn lấy) thì giữ lại ngay bây giờ -
     // thiếu thì ghi segment_stock_short (phần thiếu thành số cần cắt thêm, như lúc duyệt).
     if (this.segmentStock && isSegmentStockEnabled()) {
       await this.segmentStock.attachProposalHolds(tx, cuttingProposalId, invoiceId);
@@ -1455,7 +1455,7 @@ export class CuttingProposalsService {
    *  null) TRƯỚC khi xoá PI - FK không cho xoá PI đang được phương án trỏ tới. SKU quay về "chưa
    *  gom" nên KHSX phải tính lại (phương án cũ giữ lại làm lịch sử). */
   async releaseForInvoice(tx: PrismaTx, invoiceId: bigint): Promise<void> {
-    // Nhân 26/11 câu 4: lệnh không được duyệt / bị xoá -> trả đoạn dư phương án đã giữ (TRƯỚC khi xoá PI: dòng giữ xoá theo PI).
+    // Nghiệp vụ 26/11 câu 4: lệnh không được duyệt / bị xoá -> trả đoạn dư phương án đã giữ (TRƯỚC khi xoá PI: dòng giữ xoá theo PI).
     if (this.segmentStock) {
       const gone = await tx.cuttingProposal.findMany({
         where: {
@@ -2043,7 +2043,7 @@ export class CuttingProposalsService {
           const chain: typeof pool = [];
           for (const c of pool) {
             if (chain.length >= capacity) break;
-            // 24/11/2026 (anh Nhân): không loại đơn ngoài khung N ngày nữa - pool đã xếp theo độ gần mốc cần sắt (ưu tiên gần).
+            // 24/11/2026 (nghiệp vụ): không loại đơn ngoài khung N ngày nữa - pool đã xếp theo độ gần mốc cần sắt (ưu tiên gần).
             chain.push(c);
           }
           if (chain.length === 0) {
@@ -2675,7 +2675,7 @@ export class CuttingProposalsService {
    */
   /**
    * Phương án ĐÃ DUYỆT cùng neo (cùng lệnh SX đơn SKU, hoặc cùng lệnh gộp) với phương án proposalId - đúng tập approve() sẽ đánh
-   * SUPERSEDED và nhả giữ chỗ. CS2 (review Sang 21/11): đọc cây lẻ cho lượt tính lại phải coi giữ chỗ của các phương án này là của
+   * SUPERSEDED và nhả giữ chỗ. CS2 (review IT 21/11): đọc cây lẻ cho lượt tính lại phải coi giữ chỗ của các phương án này là của
    * chính lệnh (sắp nhả), không phải của lệnh khác. Phương án tính trước lệnh (chưa neo) -> rỗng.
    */
   private async siblingProposalIdsToSupersede(proposalId: bigint): Promise<bigint[]> {
@@ -2699,7 +2699,7 @@ export class CuttingProposalsService {
   async approve(
     id: string,
     actorUserId: string | null,
-    /** Huỷ lệnh câu 5 (anh Nhân 24/11): luồng huỷ SKU của lệnh gộp hạ "số cần" (buyQty) dòng SẮT đã ký NCC xuống nhu cầu mới,
+    /** Huỷ lệnh câu 5 (nghiệp vụ 24/11): luồng huỷ SKU của lệnh gộp hạ "số cần" (buyQty) dòng SẮT đã ký NCC xuống nhu cầu mới,
      *  giữ số đã ký (orderQty) - như 3 nguồn mua ngoài sắt (planSignedLowering). Mặc định không. */
     opts: { lowerSignedOnDrop?: boolean } = {},
   ): Promise<CuttingProposalResponseDto> {
@@ -2868,7 +2868,7 @@ export class CuttingProposalsService {
     // set bên trong nhánh "existingProposal"/"created" của khối gộp PurchaseProposal, đọc lại ở
     // notifyPurchaseProposalCreated() (best-effort, ngoài transaction).
     let purchaseProposalIdForNotify: bigint | undefined;
-    // Sự kiện báo người mua sau commit (anh Nhân 07/11): bỏ số mua khi nhu cầu giảm / nhu cầu giảm dưới số đã ký.
+    // Sự kiện báo người mua sau commit (nghiệp vụ 07/11): bỏ số mua khi nhu cầu giảm / nhu cầu giảm dưới số đã ký.
     const recomputeEvents: PurchaseRecomputeEvent[] = [];
     let recomputePiId: bigint | null = null;
 
@@ -2958,7 +2958,7 @@ export class CuttingProposalsService {
         // chuyển chủ từ phương án vừa bị đánh SUPERSEDED. Xem doc comment model CuttingPlanCoverage.
         await this.claimCuttingPlanCoverage(tx, bigId, proposal);
 
-        // Câu 14a + mục 2 (anh Nhân 24/11/2026): giữ thật phần đoạn dư lượt tính đã trừ khỏi nhu cầu. Không còn đủ (lệnh khác vừa lấy)
+        // Câu 14a + mục 2 (nghiệp vụ 24/11/2026): giữ thật phần đoạn dư lượt tính đã trừ khỏi nhu cầu. Không còn đủ (lệnh khác vừa lấy)
         // thì không duyệt được - phải Tính lại (giống cây lẻ CS2).
         await this.allocateSegmentStockUse(
           tx,
@@ -3016,7 +3016,7 @@ export class CuttingProposalsService {
             // C2 (16/11): stock_quant là 1 dòng/(kho, vật tư, chiều dài, QUY CÁCH) - chỉ đọc đúng ô quy cách rỗng (sắt không
             // mang quy cách; xuất sắt / giữ chỗ cũng chỉ đi ô này).
             //
-            // CS2 (anh Nhân 20/11/2026): dòng có thể cắt cả cây lẻ đang có ở kho Phôi (chiều dài khác chiều dài mua) lẫn cây
+            // CS2 (nghiệp vụ 20/11/2026): dòng có thể cắt cả cây lẻ đang có ở kho Phôi (chiều dài khác chiều dài mua) lẫn cây
             // chiều dài mua - đọc tồn + giữ chỗ theo TỪNG chiều dài (khoá theo chiều dài tăng dần, thứ tự nhất quán).
             //   - Chiều dài mua (bestStockLengthMm): lấy tồn khả dụng trước, thiếu thì mua (như cũ).
             //   - Cây lẻ: bộ giải đã giới hạn đúng số cây đang có lúc tính; lúc duyệt không còn đủ (đã bị lệnh khác giữ /
@@ -3200,7 +3200,7 @@ export class CuttingProposalsService {
               // L7) mọi ca 2 SKU cùng loại sắt chốt 2 cỡ cây khác nhau.
               if (plannedLine) {
                 const linePlanned = Math.max(0, planned - otherUnsignedQty);
-                // Nhu cầu giảm mà người mua đã tăng số mua: bỏ orderQty, báo nhập lại (anh Nhân 07/11).
+                // Nhu cầu giảm mà người mua đã tăng số mua: bỏ orderQty, báo nhập lại (nghiệp vụ 07/11).
                 const write = planUnsignedWrite(toRecomputeItem(plannedLine), linePlanned);
                 if (write.orderQtyReset) {
                   recomputeEvents.push({
@@ -3347,7 +3347,7 @@ export class CuttingProposalsService {
               // riêng). Pool vẫn rút theo tổng số cây (length-agnostic); xuất sắt tự chặn số cây theo từng chiều dài
               // (SteelIssuesService.prepareIssue).
               stockLengthMm: bestStockLengthMm ?? 0,
-              // Review Sang 21/11: cây lẻ cùng vật tư với cây mua -> khoá riêng theo chiều dài, nếu không reserve() trả lại dòng
+              // Review IT 21/11: cây lẻ cùng vật tư với cây mua -> khoá riêng theo chiều dài, nếu không reserve() trả lại dòng
               // của lần trước và phần giữ thứ 2 mất lặng lẽ. Dòng cây mua giữ khoá dạng cũ.
               lengthKeyed: leftover,
             },
@@ -3424,7 +3424,7 @@ export class CuttingProposalsService {
       const { segmentSpecLookup, segmentNames } = job;
       let { bomRows } = job;
       let numSets = job.numSets;
-      // Câu 14a + mục 2 (anh Nhân 24/11/2026): đoạn dư đúng quy cách trong kho Phôi của xưởng trừ khỏi nhu cầu TRƯỚC khi gửi bộ giải
+      // Câu 14a + mục 2 (nghiệp vụ 24/11/2026): đoạn dư đúng quy cách trong kho Phôi của xưởng trừ khỏi nhu cầu TRƯỚC khi gửi bộ giải
       // (phần còn thiếu mới tính cắt + mua sắt). Lúc duyệt mới giữ thật (approve). Lỗi đọc không làm hỏng lượt tính.
       let segmentStockUse: SegmentStockUse[] = [];
       try {
@@ -3438,7 +3438,7 @@ export class CuttingProposalsService {
         this.logger.warn(
           `Cutting proposal ${proposalId}: không đọc được đoạn dư kho Phôi, tính như không có: ${(error as Error).message}`,
         );
-        // Tính như không có đoạn dư -> trả phần lỡ giữ trước khi lỗi (lượt tính trước, Nhân 26/11 câu 4).
+        // Tính như không có đoạn dư -> trả phần lỡ giữ trước khi lỗi (lượt tính trước, nghiệp vụ 26/11 câu 4).
         await this.releaseProposalHoldsSafe(proposalId);
       }
       const config = await this.prisma.systemConfig.findUniqueOrThrow({
@@ -3504,7 +3504,7 @@ export class CuttingProposalsService {
 
       const standardLengths = config.solverStockLengths as number[];
 
-      // CS2 (anh Nhân 20/11/2026): cây lẻ ở ĐÚNG kho Phôi của xưởng làm lệnh được dùng TRƯỚC (tối đa đúng số cây đang có), phần
+      // CS2 (nghiệp vụ 20/11/2026): cây lẻ ở ĐÚNG kho Phôi của xưởng làm lệnh được dùng TRƯỚC (tối đa đúng số cây đang có), phần
       // còn thiếu cắt từ chiều dài MUA - 1 chiều dài / loại sắt: chiều dài KHSX chọn cho quy cách, không thì cây chuẩn. Áp cho MỌI
       // loại sắt, kể cả loại KHSX đã tự chọn chiều dài (câu 3). Trước 20/11 chiều dài tồn ở kho Phôi MỌI xưởng bị đưa vào danh
       // sách chiều dài mua, không giới hạn số cây. Lỗi đọc tồn KHÔNG được làm hỏng lượt tính - log rồi tính như không có cây lẻ.
@@ -3517,7 +3517,7 @@ export class CuttingProposalsService {
           distinctMaterialIds,
           { minMm: config.solverMinLengthMm, maxMm: config.solverMaxLengthMm, standardLengths: [] },
           job.workshop ? BigInt(job.workshop.id) : null,
-          // Review Sang 21/11: cây lẻ lệnh này đang giữ qua phương án cũ (sẽ bị thay khi duyệt phương án này) vẫn tính là có.
+          // Review IT 21/11: cây lẻ lệnh này đang giữ qua phương án cũ (sẽ bị thay khi duyệt phương án này) vẫn tính là có.
           { excludeCuttingProposalIds: await this.siblingProposalIdsToSupersede(proposalId) },
         );
         for (const [id, rows] of leftovers) {
@@ -3765,7 +3765,7 @@ export class CuttingProposalsService {
       // CUTTING_PROPOSAL_CALCULATION_FAILED) - cùng lý do trên. saveFailure() vẫn lưu FAILED +
       // errorMessage vào chính CuttingProposal, và extractErrorMessage() vẫn được dùng ở đó.
       await this.saveFailure(proposalId, error);
-      // Nhân 26/11 câu 4: lượt tính lỗi không dùng được - trả đoạn dư đã giữ lúc tính.
+      // Nghiệp vụ 26/11 câu 4: lượt tính lỗi không dùng được - trả đoạn dư đã giữ lúc tính.
       await this.releaseProposalHoldsSafe(proposalId);
       if (preInvoice) {
         await this.notifySolveFinished(proposalId, requestedById, batchLabel);
@@ -3832,7 +3832,7 @@ export class CuttingProposalsService {
   }
 
   /**
-   * Huỷ lệnh theo SKU - đợt 1 (23/11/2026, anh Nhân câu 2 + user chốt): lệnh GỘP huỷ 1 SKU khi CHƯA xuất sắt thì tính lại phương
+   * Huỷ lệnh theo SKU - đợt 1 (23/11/2026, nghiệp vụ câu 2 + user chốt): lệnh GỘP huỷ 1 SKU khi CHƯA xuất sắt thì tính lại phương
    * án cho các SKU còn lại (requestForInvoice) - phương án mới luôn bị cổng tự duyệt chặn vì lệnh đã có phương án APPROVED, nên
    * luồng huỷ gọi hàm này trong onComplete để duyệt thay. CHỈ duyệt khi phương án mới "sạch" (cắt được, không vượt ngưỡng hao
    * hụt - cùng 2 nhánh đầu của cổng tự duyệt); không sạch thì giữ phương án cũ (cắt hết, phần SKU huỷ thành dư) và trả lý do để
@@ -4056,7 +4056,7 @@ export class CuttingProposalsService {
    * từ nguồn gốc thì không còn gì để đoán: chạy lại bao nhiêu lần cũng ra một số (idempotent - yêu
    * cầu bắt buộc của mọi lần chạy MRP), và luôn truy được "35 cây gồm 20 của A + 15 của B".
    *
-   * "ĐÃ CHỐT" = dòng Giám đốc ĐÃ KÝ: PURCHASING (sau "Sếp đã duyệt") và PURCHASED (anh Nhân chốt
+   * "ĐÃ CHỐT" = dòng Giám đốc ĐÃ KÝ: PURCHASING (sau "Sếp đã duyệt") và PURCHASED (nghiệp vụ chốt
    * 07/11; trước đó là mọi trạng thái khác NEW, gồm cả QUOTING/SUBMITTED). Đây là ranh giới
    * planned-order / firmed-order kinh điển: dòng CHƯA ký (NEW/QUOTING/SUBMITTED/REJECTED) được ghi
    * đè số kế hoạch (người mua nhập lại số mua nếu nhu cầu giảm), còn dòng đã ký tiền đã đi - sửa số
@@ -4843,7 +4843,7 @@ export class CuttingProposalsService {
 
   /** 1 lệnh SX cắt riêng: đúng 1 định mức, số bộ để solver tự nhân - hành vi có từ Phase 7. */
   /**
-   * Câu 14a + mục 2 (anh Nhân 24/11/2026): "kho Phôi có 5 đoạn dư 1.990 mm, lệnh mới cần 30 -> dùng 5 đoạn dư trước, chỉ cắt 25".
+   * Câu 14a + mục 2 (nghiệp vụ 24/11/2026): "kho Phôi có 5 đoạn dư 1.990 mm, lệnh mới cần 30 -> dùng 5 đoạn dư trước, chỉ cắt 25".
    * Số cần theo (cỡ đoạn, bộ công đoạn) của các SKU trong job; đoạn dư chỉ dùng cho đúng bộ công đoạn (câu 12b: đoạn dư đã làm đủ
    * công đoạn như đoạn của lệnh). Có sẵn = dư dùng được của ô + phần chính PI này đang giữ từ phương án cũ (sẽ nhả khi phương án này
    * thay). Trả bom tuyệt đối (num_sets = 1) đã trừ; null khi tắt / không có gì để trừ.
@@ -4930,7 +4930,7 @@ export class CuttingProposalsService {
     const use: SegmentStockUse[] = [];
     const usedBySpec = new Map<string, number>();
     if (piId == null) {
-      // Nhân trả lời 26/11 câu 4: lượt tính TRƯỚC khi có lệnh giữ đoạn dư NGAY lúc tính (khoá ô, giữ tối đa bằng dư) - lệnh khác
+      // Nghiệp vụ trả lời 26/11 câu 4: lượt tính TRƯỚC khi có lệnh giữ đoạn dư NGAY lúc tính (khoá ô, giữ tối đa bằng dư) - lệnh khác
       // không thấy những đoạn đó nữa. Trước khi giữ: trả đoạn các lượt tính trước khác của cùng SKU đang giữ (tính lại thì lượt mới
       // nhận lại). Trả về kho khi phương án bị bỏ / lệnh không được duyệt (releaseProposalAllocations).
       const items = await this.prisma.cuttingProposalItem.findMany({
@@ -5072,7 +5072,7 @@ export class CuttingProposalsService {
       : await new WorkshopWarehouseResolver(tx).phoiWarehouseOfPi(piId).catch(() => null);
     const kept: SegmentStockUse[] = [];
     let short = 0;
-    // Nhân 26/11 câu 4: phương án tính trước đã giữ đoạn ngay lúc tính (gắn sang PI khi tạo lệnh) - chỉ giữ thêm phần còn thiếu.
+    // Nghiệp vụ 26/11 câu 4: phương án tính trước đã giữ đoạn ngay lúc tính (gắn sang PI khi tạo lệnh) - chỉ giữ thêm phần còn thiếu.
     const heldLogs = await tx.segmentReservationLog.findMany({
       where: {
         refType: CUTTING_PROPOSAL_SEGMENT_REF,

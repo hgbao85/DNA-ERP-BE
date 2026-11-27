@@ -209,7 +209,7 @@ describe('ProductionInvoicesService.retryProductionOrder - mua ngoài sắt', ()
     );
   });
 
-  // Đề xuất số 2 của Sang (13/11/2026): đường TỰ ĐỘNG (sau khi Sếp duyệt) lỗi thì báo Admin; chạy đủ 3 bước thì đóng.
+  // Đề xuất số 2 của IT (13/11/2026): đường TỰ ĐỘNG (sau khi Sếp duyệt) lỗi thì báo Admin; chạy đủ 3 bước thì đóng.
   describe('báo Admin khi tạo dòng mua ngoài sắt lỗi', () => {
     type Compute = (piId: bigint, context: string, opts?: { rethrow?: boolean }) => Promise<void>;
     const compute = (): Compute =>

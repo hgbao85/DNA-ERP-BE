@@ -68,7 +68,7 @@ export class SteelReturnLineDto {
   bars!: number;
 }
 
-/** Huỷ lệnh đợt 2 - Q3 (anh Nhân 24/11/2026): QLSX quyết sắt đã xuất chưa cắt của SKU đã huỷ. */
+/** Huỷ lệnh đợt 2 - Q3 (nghiệp vụ 24/11/2026): QLSX quyết sắt đã xuất chưa cắt của SKU đã huỷ. */
 export class DecideCutDto {
   @ApiProperty({ enum: ProductionOrderCutDecision })
   @IsEnum(ProductionOrderCutDecision)
@@ -139,7 +139,7 @@ export class ListOrderCancelRequestsQueryDto {
   productionOrderId?: string;
 }
 
-/** Nhân 26/11 câu 2: 1 dòng sắt tổ cắt trả về chờ thủ kho Phôi xác nhận. */
+/** Nghiệp vụ 26/11 câu 2: 1 dòng sắt tổ cắt trả về chờ thủ kho Phôi xác nhận. */
 export interface PendingSteelReturnDto {
   id: string;
   productionInvoiceId: string;
@@ -161,7 +161,7 @@ export class ConfirmSteelReturnDto {
   countedBars!: number;
 }
 
-/** Nhân 26/11 câu 1: khung đan lấy tồn khác kho thành phẩm, đang chuyển - chờ thủ kho nơi nhận xác nhận. */
+/** Nghiệp vụ 26/11 câu 1: khung đan lấy tồn khác kho thành phẩm, đang chuyển - chờ thủ kho nơi nhận xác nhận. */
 export interface WovenInTransitDto {
   id: string;
   qty: number;

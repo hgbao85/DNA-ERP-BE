@@ -10,7 +10,7 @@ const NEW = 20n;
 const SPEC = 5n;
 const PI = 100n;
 
-/** Đổi xưởng: chuyển phần đoạn lệnh còn giữ ở kho Phôi cũ sang kho Phôi xưởng mới (anh Nhân 13/11 câu 8). */
+/** Đổi xưởng: chuyển phần đoạn lệnh còn giữ ở kho Phôi cũ sang kho Phôi xưởng mới (nghiệp vụ 13/11 câu 8). */
 function makeEnv(opts: {
   reserved: number;
   consumed: number;

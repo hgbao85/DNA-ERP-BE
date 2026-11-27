@@ -2,7 +2,7 @@
 import { WOVEN_STOCK_AUTO_NOTE, WovenStockService } from './woven-stock.service';
 
 /**
- * Q6 huỷ lệnh (anh Nhân 26/11/2026): khung đã đan của SKU huỷ thành tồn kho thành phẩm theo mảnh + màu dây; lệnh sau cần đúng loại
+ * Q6 huỷ lệnh (nghiệp vụ 26/11/2026): khung đã đan của SKU huỷ thành tồn kho thành phẩm theo mảnh + màu dây; lệnh sau cần đúng loại
  * tự lấy tồn trước, chỉ xuất đan phần còn thiếu.
  */
 describe('WovenStockService', () => {
@@ -60,7 +60,7 @@ describe('WovenStockService', () => {
     return { svc: new WovenStockService(db, realtime as never), db, realtime };
   }
 
-  it('tồn = đã nhận đan + đã lấy tồn vào − đã qua chuyền kiểm − đã lấy tồn ra, gộp mọi kho TP theo mảnh + màu dây (Nhân 26/11 câu 1)', async () => {
+  it('tồn = đã nhận đan + đã lấy tồn vào − đã qua chuyền kiểm − đã lấy tồn ra, gộp mọi kho TP theo mảnh + màu dây (nghiệp vụ 26/11 câu 1)', async () => {
     const { svc, db } = make({
       reqs: [req(1n, 70n, 130n, 'thanh-pham-2', 7n), req(2n, 71n, 131n, null, 7n)],
       receipts: [
@@ -135,7 +135,7 @@ describe('WovenStockService', () => {
       ),
     ).toBe(true);
     expect(realtime.publishEntityChanged).toHaveBeenCalledTimes(2);
-    // chỉ lệnh đang chạy, chưa huỷ, đúng dây - mọi kho thành phẩm (Nhân 26/11 câu 1)
+    // chỉ lệnh đang chạy, chưa huỷ, đúng dây - mọi kho thành phẩm (nghiệp vụ 26/11 câu 1)
     expect(db.productionOrder.findMany.mock.calls[0][0].where).toEqual(
       expect.objectContaining({
         floorStage: 'ACTIVE',
@@ -207,7 +207,7 @@ describe('WovenStockService', () => {
     expect(db.cancelledGoodsTransfer.create).not.toHaveBeenCalled();
   });
 
-  it('Nhân 26/11 câu 1: lệnh kho khác cũng lấy được - cùng kho trước, phần lấy khác kho là "đang chuyển"', async () => {
+  it('Nghiệp vụ 26/11 câu 1: lệnh kho khác cũng lấy được - cùng kho trước, phần lấy khác kho là "đang chuyển"', async () => {
     const { svc, db } = make({
       reqs: [req(1n, 70n, 130n, 'thanh-pham-2', 7n), req(2n, 71n, 131n, 'thanh-pham', 7n)],
       receipts: [
@@ -238,7 +238,7 @@ describe('WovenStockService', () => {
     );
   });
 
-  it('Nhân 27/11 cách 2: lệnh huỷ chỉ có thêm tồn từ khung đã lấy vào khi thủ kho nơi nhận đã xác nhận (đang chuyển chưa tính)', async () => {
+  it('Nghiệp vụ 27/11 cách 2: lệnh huỷ chỉ có thêm tồn từ khung đã lấy vào khi thủ kho nơi nhận đã xác nhận (đang chuyển chưa tính)', async () => {
     const { svc, db } = make({ reqs: [req(1n, 70n, 109n, 'thanh-pham-2', null)] });
     await svc.loadStock(db);
     const inArgs = db.cancelledGoodsTransfer.groupBy.mock.calls.find(

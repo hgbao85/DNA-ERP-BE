@@ -500,7 +500,7 @@ export class FloorScanService {
       }
       if (queueWorkshopId == null) return [];
       const pis = await this.cutAllocation.getWorkshopAllocationPis(queueWorkshopId);
-      // Nhân 26/11 câu 3: máy công đoạn phụ cũng làm đoạn cắt tiếp của SKU đã huỷ (lệnh có thể không còn trên bảng chia). Lỗi phần
+      // Nghiệp vụ 26/11 câu 3: máy công đoạn phụ cũng làm đoạn cắt tiếp của SKU đã huỷ (lệnh có thể không còn trên bảng chia). Lỗi phần
       // thêm này chỉ log, không làm mất lệnh của bảng chia.
       if (ws.kind !== WorkstationKind.STEP) return pis;
       let continued: Array<{ productionInvoiceId: string; code: string }> = [];
@@ -619,7 +619,7 @@ export class FloorScanService {
         select: { id: true, code: true },
       }),
       // Huỷ lệnh theo SKU (23/11/2026): SKU đã huỷ không còn để chọn báo - trừ máy cắt + máy công đoạn phụ tổ Phôi khi QLSX cho
-      // cắt tiếp (Q3 24/11; Nhân 26/11 câu 3: đoạn cắt tiếp làm đủ công đoạn). Máy báo mảnh không liệt kê (review IT 26/11 mục 2.5).
+      // cắt tiếp (Q3 24/11; nghiệp vụ 26/11 câu 3: đoạn cắt tiếp làm đủ công đoạn). Máy báo mảnh không liệt kê (review IT 26/11 mục 2.5).
       this.prisma.productionOrder.findMany({
         where: {
           productionInvoiceItem: { productionInvoiceId: piId },

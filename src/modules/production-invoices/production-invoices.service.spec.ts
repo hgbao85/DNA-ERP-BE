@@ -433,7 +433,7 @@ describe('ProductionInvoicesService', () => {
       );
     });
 
-    // 24/11/2026 (anh Nhân): bỏ chặn khung N ngày - lệnh gộp mốc cách xa vẫn lưu được.
+    // 24/11/2026 (nghiệp vụ): bỏ chặn khung N ngày - lệnh gộp mốc cách xa vẫn lưu được.
     it('lệnh gộp: mốc cần sắt sau khi lưu cách nhau 9 ngày VẪN lưu được (bỏ chặn khung ngày 24/11)', async () => {
       prisma.productionInvoiceItem.findMany.mockResolvedValue([
         withDeadline(20n, '2026-11-01'),
@@ -970,7 +970,7 @@ describe('ProductionInvoicesService', () => {
       expect(prisma.productionInvoice.create).not.toHaveBeenCalled();
     });
 
-    it('LUẬT GỘP: mốc cần sắt cách nhau 7 ngày KHÔNG còn bị chặn (anh Nhân bỏ khung ngày 24/11)', async () => {
+    it('LUẬT GỘP: mốc cần sắt cách nhau 7 ngày KHÔNG còn bị chặn (nghiệp vụ bỏ khung ngày 24/11)', async () => {
       prisma.productionInvoiceItem.findMany.mockResolvedValue([
         mergeCandidate(20n, { materialDeadline: new Date('2026-09-01') }),
         mergeCandidate(21n, { materialDeadline: new Date('2026-09-08') }),
@@ -2102,7 +2102,7 @@ describe('ProductionInvoicesService', () => {
       });
     });
 
-    // 24/11/2026 (anh Nhân): bỏ chặn khung N ngày - PI gộp mốc cách 12 ngày vẫn gửi QLSX được.
+    // 24/11/2026 (nghiệp vụ): bỏ chặn khung N ngày - PI gộp mốc cách 12 ngày vẫn gửi QLSX được.
     it('PI gộp mốc cần sắt cách 12 ngày vẫn gửi QLSX được (bỏ chặn khung ngày 24/11)', async () => {
       prisma.productionInvoice.findUnique.mockResolvedValue(pi({ isMerged: true }));
       prisma.productionInvoiceItem.findUnique.mockResolvedValue(item240());

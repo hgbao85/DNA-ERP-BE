@@ -235,7 +235,7 @@ describe('eventFromPlan / toRecomputeItem', () => {
   });
 });
 
-// Huỷ lệnh theo SKU - đợt 1 (23/11/2026, anh Nhân câu 3).
+// Huỷ lệnh theo SKU - đợt 1 (23/11/2026, nghiệp vụ câu 3).
 describe('planSignedLowering / lowerSignedOnDrop', () => {
   it('mặc định (không cờ) KHÔNG hạ dòng đã ký', () => {
     const plan = planPurchaseRecompute([item(1, S.PURCHASING, 100, null, 20)], 30);

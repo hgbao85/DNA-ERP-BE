@@ -694,7 +694,7 @@ export const ROLE_GRANTS: Partial<Record<BusinessRole, ModuleGrant[]>> = {
       module: PERMISSION_MODULES.PURCHASE_PROPOSAL,
       actions: [PermissionAction.VIEW, PermissionAction.UPDATE],
     },
-    // 12/11/2026 (anh Nhân): người mua tự thêm/sửa NCC (màn Mua hàng > Nhà cung cấp), CHỈ Admin xoá. DELETE bỏ khỏi
+    // 12/11/2026 (nghiệp vụ): người mua tự thêm/sửa NCC (màn Mua hàng > Nhà cung cấp), CHỈ Admin xoá. DELETE bỏ khỏi
     // đây; DB đã seed 'ALL' từ trước nên DELETE /suppliers/:id còn chặn thêm bằng @RequireRole(ADMIN).
     {
       module: PERMISSION_MODULES.SUPPLIER,

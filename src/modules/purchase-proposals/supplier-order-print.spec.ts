@@ -118,7 +118,7 @@ describe('renderPrintWorkbook', () => {
     orderCode: '53/2026',
     revision: 0,
     date: new Date('2026-11-04T03:00:00Z'),
-    buyerName: 'Trần Nghi',
+    buyerName: 'Người mua A',
   };
 
   const load = async (buf: Buffer) => {
@@ -140,7 +140,7 @@ describe('renderPrintWorkbook', () => {
     expect(ws.getCell('C6').value).toBe('- Giám đốc Công ty TNHH DV XNK Đông Nam Á');
     expect(ws.getCell('C7').value).toBeNull();
     expect(ws.getCell('A8').value).toBe('Nhân viên đề xuất:');
-    expect(ws.getCell('C8').value).toBe('Trần Nghi');
+    expect(ws.getCell('C8').value).toBe('Người mua A');
     expect(ws.getCell('A9').value).toBe('Thuộc bộ phận:');
     expect(ws.getCell('C9').value).toBe('Mua hàng');
     expect(ws.getCell('A10').text).toContain('Kim Phát - Số 53/2026');
@@ -149,7 +149,7 @@ describe('renderPrintWorkbook', () => {
     expect(ws.getCell('F13').value).toBe(2);
     expect(ws.getCell('G13').value).toBe('PI-2026-031: 2');
     expect(ws.getCell('A14').value).toBeNull();
-    expect(ws.getCell('A36').value).toBe('Trần Nghi');
+    expect(ws.getCell('A36').value).toBe('Người mua A');
   });
 
   it('hơn 15 dòng thì sang trang 2, cùng số đơn; thay phiếu ghi trên tiêu đề', async () => {

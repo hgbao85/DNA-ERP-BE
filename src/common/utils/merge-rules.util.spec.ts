@@ -19,7 +19,7 @@ describe('merge-rules.util', () => {
     expect(ownSteelDeadlineOf(item('A', null))).toBeNull();
   });
 
-  // 24/11/2026 (anh Nhân): bỏ chặn 'chênh tối đa N ngày' - mốc cách xa vẫn gộp được, chỉ trả độ chênh để màn hiện / xếp ưu tiên.
+  // 24/11/2026 (nghiệp vụ): bỏ chặn 'chênh tối đa N ngày' - mốc cách xa vẫn gộp được, chỉ trả độ chênh để màn hiện / xếp ưu tiên.
   it('mốc cần sắt cách xa (ngày 1 với ngày 20) vẫn gộp được, chỉ trả độ chênh', () => {
     const r = checkMergeRules([item('A', '2026-11-01'), item('B', '2026-11-20')], cfg);
     expect(r).toMatchObject({ ok: true, spanDays: 19, reason: null });

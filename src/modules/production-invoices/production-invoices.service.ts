@@ -2559,7 +2559,7 @@ export class ProductionInvoicesService {
         `Auto material-yield-recipe-purchase trigger failed for ${context}: ${(error as Error).message}`,
       );
     }
-    // Đề xuất số 2 của Sang (13/11/2026): đường tự động lỗi thì báo Admin (trước đây chỉ log); chạy đủ 3 khối thì đóng thông
+    // Đề xuất số 2 của IT (13/11/2026): đường tự động lỗi thì báo Admin (trước đây chỉ log); chạy đủ 3 khối thì đóng thông
     // báo cũ (kể cả khi Admin bấm "Tạo lại" thành công). Admin bấm "Tạo lại" mà vẫn lỗi thì đã thấy lỗi ngay trên màn hình.
     if (failed.length === 0) {
       await this.resolvePiNotifications('PRODUCTION_INVOICE', piId, ['NON_STEEL_PURCHASE_FAILED']);
@@ -3238,7 +3238,7 @@ export class ProductionInvoicesService {
       // Huỷ lệnh đợt 2 - Q6: khung đã đan chuyển từ SKU đã huỷ sang SKU này coi như đã nhận đan.
       this.prisma.cancelledGoodsTransfer.groupBy({
         by: ['pieceId'],
-        // Nhân 26/11 câu 1: khung lấy khác kho chỉ đếm khi thủ kho nơi nhận đã xác nhận.
+        // Nghiệp vụ 26/11 câu 1: khung lấy khác kho chỉ đếm khi thủ kho nơi nhận đã xác nhận.
         where: {
           targetItemId: item.id,
           kind: CancelledGoodsKind.WOVEN,
@@ -3541,7 +3541,7 @@ export class ProductionInvoicesService {
    * audit-log.extension.ts) nên phải tự ghi `writeAuditLog()`, cùng pattern
    * auditItemApprovalTransition() ở trên.
    *
-   * 2026-09-11 lần 2 (theo Sếp Trương Văn Nhân: "cho người nhập được sửa luôn"): mở thêm cho
+   * 2026-09-11 lần 2 (theo quản lý: "cho người nhập được sửa luôn"): mở thêm cho
    * CHÍNH người đã ghi lần kiểm này (`transferCheckResult.checkedById === actorUserId`), KHÔNG chỉ
    * ADMIN - route bỏ `@RequireRole(ADMIN)`, check chuyển vào service vì cần đọc dữ liệu record.
    */

@@ -64,7 +64,7 @@ describe('ItemDeadlineWriter (Phần A – Đợt 9)', () => {
       salesOrder: null,
     });
 
-    // 24/11/2026 (anh Nhân câu 3c): bỏ chặn khung N ngày - kéo mốc ra xa vẫn lưu được.
+    // 24/11/2026 (nghiệp vụ câu 3c): bỏ chặn khung N ngày - kéo mốc ra xa vẫn lưu được.
     it('giá trị đang lưu cách nhau 1 ngày, yêu cầu chờ kéo ra 9 ngày → vẫn qua', async () => {
       tx.productionInvoiceItem.findMany.mockResolvedValue([
         item(1n, '2026-11-01'),

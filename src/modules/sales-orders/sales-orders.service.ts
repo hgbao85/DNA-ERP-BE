@@ -41,9 +41,9 @@ import { RealtimeEntityAction } from '../../realtime/realtime.contract';
 import { writeAuditLog } from '../../prisma/extensions/audit-log.extension';
 
 /**
- * Nhật ký dòng đơn hàng bán (19/11, test toàn hệ thống của Sang): SalesOrder (đầu đơn) có trong AUDITED_MODELS nhưng dòng đơn
+ * Nhật ký dòng đơn hàng bán (19/11, test toàn hệ thống của IT): SalesOrder (đầu đơn) có trong AUDITED_MODELS nhưng dòng đơn
  * thì không - sửa số lượng / ngày giao / màu dây-nệm, thêm dòng SKU không để lại dấu vết ai làm. Ghi tay TRONG transaction
- * nghiệp vụ (cùng commit / rollback với thay đổi), tên bảng theo tên model như extension để trang "Nhật ký hoạt động" lọc được.
+ * Nghiệp vụ (cùng commit / rollback với thay đổi), tên bảng theo tên model như extension để trang "Nhật ký hoạt động" lọc được.
  */
 const ITEM_AUDIT_TABLE = 'SalesOrderItem';
 const auditClient = (tx: PrismaTx) => tx as unknown as Pick<PrismaClient, 'auditLog'>;
@@ -600,7 +600,7 @@ export class SalesOrdersService {
   }
 
   /**
-   * Huỷ lệnh câu 2 (anh Nhân 24/11/2026): khách huỷ hẳn thì Sales tự huỷ dòng đơn (huỷ lệnh SX chỉ huỷ phần sản xuất, đơn bán
+   * Huỷ lệnh câu 2 (nghiệp vụ 24/11/2026): khách huỷ hẳn thì Sales tự huỷ dòng đơn (huỷ lệnh SX chỉ huỷ phần sản xuất, đơn bán
    * vẫn sinh dòng SKU mới). Chỉ huỷ được khi: chưa xuất bộ nào, không còn lệnh sản xuất sống (có thì KHSX đề nghị huỷ lệnh
    * trước, Sếp duyệt), không đang được tính phương án cắt, không nằm trong booking chưa huỷ. Dòng SKU chưa gom của dòng này
    * gắn cancelledAt để KHSX hết thấy ở Gom đợt cắt.

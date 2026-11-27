@@ -79,7 +79,7 @@ describe('StockReservationsService', () => {
       expect(result.quantity.toNumber()).toBe(5);
     });
 
-    // CS2 review Sang 21/11: khoá không có chiều dài -> lần giữ chỗ thứ 2 cùng vật tư (cây lẻ + cây mua) trả lại dòng lần 1, mất phần giữ.
+    // CS2 review IT 21/11: khoá không có chiều dài -> lần giữ chỗ thứ 2 cùng vật tư (cây lẻ + cây mua) trả lại dòng lần 1, mất phần giữ.
     it('lengthKeyed: cùng nguồn giữ 2 chiều dài cùng vật tư = 2 dòng riêng (cây mua giữ khoá cũ, cây lẻ có đuôi chiều dài)', async () => {
       const rows = new Map<
         string,
@@ -1030,7 +1030,7 @@ describe('StockReservationsService', () => {
       });
     });
 
-    // CS2 review Sang 21/11: xuất cây chiều dài mua không được ăn phần giữ cây lẻ (rút theo tổng thì dòng 5800 bị rút trước).
+    // CS2 review IT 21/11: xuất cây chiều dài mua không được ăn phần giữ cây lẻ (rút theo tổng thì dòng 5800 bị rút trước).
     describe('stockLengthMm (xuất sắt): chỉ rút dòng cùng chiều dài hoặc dòng chưa ghi chiều dài', () => {
       const pool = () => [
         {

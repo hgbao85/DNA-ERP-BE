@@ -26,13 +26,13 @@ export type CapacityMode = 'CONT_PER_DAY' | 'DAYS_PER_CONT';
 
 /**
  * Nhập đan / Chuyền kiểm chỉ có 1 ngày mốc: coi lệnh làm trong X = ⌈cont ÷ năng lực⌉ ngày KẾT THÚC đúng ngày mốc (mặc định đang
- * chờ anh Nhân xác nhận - câu 2.2). Đổi thành false = dồn cả lệnh vào đúng 1 ngày mốc.
+ * chờ nghiệp vụ xác nhận - câu 2.2). Đổi thành false = dồn cả lệnh vào đúng 1 ngày mốc.
  */
 export const SINGLE_DATE_STAGE_SPREAD_X_DAYS = true;
 
 /**
  * Cảnh báo "chưa đủ 1 cont/ngày" chỉ xét dòng ĐÃ CÓ ngày bắt đầu Phôi (PHOI_START) - tránh "bão" cảnh báo lệnh cũ (V4-13).
- * Chấm ngày D lúc tin sáng 7h ngày D+1 (câu 2.3 - đang chờ anh Nhân xác nhận; đổi giờ ở daily-jobs DIGEST_HOUR_VN).
+ * Chấm ngày D lúc tin sáng 7h ngày D+1 (câu 2.3 - đang chờ nghiệp vụ xác nhận; đổi giờ ở daily-jobs DIGEST_HOUR_VN).
  */
 export const DAILY_OUTPUT_REQUIRES_PHOI_START = true;
 

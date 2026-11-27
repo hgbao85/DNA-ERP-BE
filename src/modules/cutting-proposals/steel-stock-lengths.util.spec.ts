@@ -140,7 +140,7 @@ describe('steel-stock-lengths.util', () => {
       expect(prisma.stockQuant.findMany).not.toHaveBeenCalled();
     });
 
-    // Review Sang 21/11: lúc tính cộng mọi kho Phôi của xưởng + mọi quy cách, lúc duyệt chỉ đọc 1 kho + quy cách rỗng -> 409 lặp mãi.
+    // Review IT 21/11: lúc tính cộng mọi kho Phôi của xưởng + mọi quy cách, lúc duyệt chỉ đọc 1 kho + quy cách rỗng -> 409 lặp mãi.
     it('đọc ĐÚNG kho approve() dùng (kho mặc định resolve theo xưởng) và chỉ ô quy cách rỗng', async () => {
       const prisma = makePrisma({
         material: {
@@ -212,7 +212,7 @@ describe('steel-stock-lengths.util', () => {
       expect(prisma.warehouseTransferReservation.findMany).toHaveBeenCalledTimes(1);
     });
 
-    // Review Sang 21/11: "Tính lại" không được coi cây lẻ chính lệnh đang giữ (qua phương án sắp bị thay) là của lệnh khác.
+    // Review IT 21/11: "Tính lại" không được coi cây lẻ chính lệnh đang giữ (qua phương án sắp bị thay) là của lệnh khác.
     it('excludeCuttingProposalIds: không trừ giữ chỗ của phương án cũ cùng lệnh sắp bị thay', async () => {
       const prisma = makePrisma();
       await loadAvailableStockLengths(asPrisma(prisma), [200n], filter, 3n, {

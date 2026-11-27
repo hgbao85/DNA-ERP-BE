@@ -23,7 +23,7 @@ export interface SegmentTargetsInput {
   /** Số cần theo bộ công đoạn (gộp mọi SKU / mảnh của lệnh); '' = trơn. */
   variants: { segmentSteps: string; needQty: number }[];
   /**
-   * Đoạn DƯ theo phương án cắt sẽ làm đủ bộ công đoạn này (anh Nhân câu 12b, 24/11/2026) - đã cắt mà chưa qua công đoạn thì là đoạn
+   * Đoạn DƯ theo phương án cắt sẽ làm đủ bộ công đoạn này (nghiệp vụ câu 12b, 24/11/2026) - đã cắt mà chưa qua công đoạn thì là đoạn
    * ĐANG CHỜ công đoạn (wip), không phải dư trơn (nếu không lệnh khác lấy mất như đoạn trơn trước khi kịp uốn / dập).
    */
   plannedSurplus?: Partial<Record<string, number>>;

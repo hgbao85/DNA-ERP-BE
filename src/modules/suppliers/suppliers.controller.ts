@@ -51,7 +51,7 @@ export class SuppliersController {
     return this.suppliersService.update(id, dto);
   }
 
-  // 12/11/2026 (anh Nhân): người mua tự thêm/sửa NCC nhưng CHỈ Admin xoá - chặn theo vai trò (không chỉ quyền
+  // 12/11/2026 (nghiệp vụ): người mua tự thêm/sửa NCC nhưng CHỈ Admin xoá - chặn theo vai trò (không chỉ quyền
   // SUPPLIER:DELETE) để quyền đã seed sẵn cho Mua hàng trên DB không mở được route này.
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)

@@ -25,7 +25,7 @@ const userName = (u: { firstName: string; lastName: string; username: string } |
   u ? `${u.lastName} ${u.firstName}`.trim() || u.username : null;
 
 /**
- * Sổ báo vượt tồn đoạn (13/11/2026, anh Nhân câu 2, 6, 7, 9). Hàn / Sơn báo vượt không bị chặn; phía trừ
+ * Sổ báo vượt tồn đoạn (13/11/2026, nghiệp vụ câu 2, 6, 7, 9). Hàn / Sơn báo vượt không bị chặn; phía trừ
  * (ProductionBatchesService.consumeSegmentsByCode) ghi 1 dòng ở đây khi thiếu đoạn hoặc làm vượt số lượng lệnh / làm lại.
  * QLSX xem và đóng từng dòng (bắt buộc lý do, có nhật ký); KHSX xem. QLSX gắn xưởng chỉ thấy / đóng dòng mà kho Phôi trên dòng thuộc xưởng mình (TĐ9, xem canHandle).
  */
