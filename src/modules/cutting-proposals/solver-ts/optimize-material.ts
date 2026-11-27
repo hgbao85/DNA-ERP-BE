@@ -139,6 +139,89 @@ export function fillTailReserve(
   return add;
 }
 
+/**
+ * Nhân trả lời 26/11 câu 5 + 8: cây mua cuối ưu tiên cắt ĐOẠN DÀI trước nếu hao hụt vẫn thấp, chỉ thêm đoạn ngắn khi không còn cách
+ * đạt ngưỡng; giữ giới hạn số cỡ / cây (MC Tự động 5 cỡ). Giữ nguyên các đoạn cây cuối phải cắt cho nhu cầu, bỏ phần đoạn DƯ bộ giải
+ * đã xếp (bộ giải chỉ tối thiểu cùi nên hay lấp bằng nhiều đoạn ngắn) rồi xếp lại phần trống:
+ *   1. trong các cách có cùi ≤ ngưỡng 1 cây (`allowedS`) và đúng luật laze: ÍT đoạn nhất, hoà thì cùi nhỏ hơn;
+ *   2. không cách nào đạt ngưỡng: cùi nhỏ nhất, hoà thì ít đoạn hơn.
+ * Đoạn dư chỉ dùng các cỡ đã có trên cây cuối + (nếu còn chỗ trong giới hạn số cỡ) các cỡ dài nhất. Đơn vị đã scale. Trả số đoạn
+ * mới từng cỡ (null = giữ nguyên).
+ */
+export function repackTailSurplus(p: {
+  tailCounts: number[];
+  /** Số đoạn của từng cỡ trên cây cuối là DƯ (vượt nhu cầu cả phương án). */
+  surplusCounts: number[];
+  costS: number[];
+  lenS: number[];
+  usableS: number;
+  allowedS: number;
+  minTailS: number;
+  maxSizes: number | null;
+}): number[] | null {
+  const n = p.tailCounts.length;
+  const req = p.tailCounts.map((c, k) => Math.max(0, c - Math.min(c, p.surplusCounts[k])));
+  let used = 0;
+  let longestReq = 0;
+  for (let k = 0; k < n; k++) {
+    used += req[k] * p.costS[k];
+    if (req[k] > 0) longestReq = Math.max(longestReq, p.lenS[k]);
+  }
+  const free = p.usableS - used;
+  if (free < 0 || free > 200000) return null;
+  const reqSizes = new Set([...Array(n).keys()].filter((k) => req[k] > 0));
+  let allowed = [...Array(n).keys()];
+  if (p.maxSizes != null) {
+    const slots = Math.max(0, p.maxSizes - reqSizes.size);
+    const extra = allowed
+      .filter((k) => !reqSizes.has(k))
+      .sort((a, b) => p.lenS[b] - p.lenS[a])
+      .slice(0, slots);
+    allowed = [...reqSizes, ...extra];
+  }
+  // Đoạn dài trước: cùng số đoạn thì giữ lựa chọn có đoạn dài hơn (duyệt cỡ giảm dần, chỉ thay khi ÍT đoạn hơn hẳn).
+  allowed.sort((a, b) => p.lenS[b] - p.lenS[a]);
+  const INF = 1 << 30;
+  const cnt = new Int32Array(free + 1).fill(INF);
+  const pick = new Int32Array(free + 1).fill(-1);
+  cnt[0] = 0;
+  for (const k of allowed) {
+    const w = p.costS[k];
+    if (w <= 0 || w > free) continue;
+    for (let c = w; c <= free; c++) {
+      if (cnt[c - w] + 1 < cnt[c]) {
+        cnt[c] = cnt[c - w] + 1;
+        pick[c] = k;
+      }
+    }
+  }
+  const fillOf = (c: number) => {
+    const add = new Array<number>(n).fill(0);
+    let longest = longestReq;
+    while (c > 0) {
+      const k = pick[c];
+      add[k]++;
+      longest = Math.max(longest, p.lenS[k]);
+      c -= p.costS[k];
+    }
+    return { add, longest };
+  };
+  const candidates: number[] = [];
+  for (let c = 0; c <= free; c++) if (cnt[c] < INF) candidates.push(c);
+  const within = candidates
+    .filter((c) => free - c <= p.allowedS)
+    .sort((a, b) => cnt[a] - cnt[b] || b - a);
+  const rest = candidates.sort((a, b) => b - a || cnt[a] - cnt[b]);
+  for (const c of [...within, ...rest]) {
+    const { add, longest } = fillOf(c);
+    const cui = free - c;
+    if (p.minTailS > 0 && longest + cui <= p.minTailS) continue;
+    if (longest === 0 && c === 0 && reqSizes.size === 0) continue;
+    return req.map((r, k) => r + add[k]);
+  }
+  return null;
+}
+
 function rssMb(): number {
   return process.memoryUsage().rss / 1024 / 1024;
 }
@@ -521,7 +604,26 @@ export function optimizeMaterial(
     });
   }
   let tailManualBars = 0;
-  if (res.tail && tailLength !== null && tailReserveS > 0) {
+  if (res.tail && tailLength !== null && opts.lastBarFill) {
+    // Nhân 26/11 câu 5 + 8: cây mua cuối ưu tiên đoạn dài, ít đoạn; đoạn ngắn chỉ khi cần để đạt ngưỡng.
+    const prodAll = cutLengths.map((_, k) => {
+      let prod = res.tail!.counts[k];
+      for (let p = 0; p < allPatterns.length; p++)
+        prod += allPatterns[p].counts[k] * barsPerPattern[p];
+      return prod;
+    });
+    const repacked = repackTailSurplus({
+      tailCounts: res.tail.counts,
+      surplusCounts: prodAll.map((pr, k) => Math.max(0, pr - demands[k])),
+      costS: cutLengths.map((c) => scale(c) + kerfS),
+      lenS: cutLengths.map(scale),
+      usableS: scale(tailLength) - scale(trim),
+      allowedS: Math.max(0, Math.floor(scale(tailLength) * maxWasteRatio + 1e-6)),
+      minTailS: minTail > 0 ? scale(minTail) : 0,
+      maxSizes: tailMaxSizes,
+    });
+    if (repacked) res.tail = { counts: repacked };
+  } else if (res.tail && tailLength !== null && tailReserveS > 0) {
     // Review IT 26/11 mục 1.4: chừa cùi tailReserveS là cho trường hợp xấu nhất (đoạn dài nhất trên cây là cỡ ngắn nhất). Cây cuối
     // đã có đoạn dài thì luật laze chỉ cần (đoạn dài nhất + cùi) > minTail - lấp thêm đoạn vào phần chừa thừa cho cùi nhỏ nhất.
     const add = fillTailReserve(

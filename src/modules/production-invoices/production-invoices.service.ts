@@ -8,6 +8,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
+import { WOVEN_TRANSFER_RECEIVED } from '../woven-stock/woven-stock.service';
 import {
   CancelledGoodsKind,
   AuditAction,
@@ -3237,7 +3238,12 @@ export class ProductionInvoicesService {
       // Huỷ lệnh đợt 2 - Q6: khung đã đan chuyển từ SKU đã huỷ sang SKU này coi như đã nhận đan.
       this.prisma.cancelledGoodsTransfer.groupBy({
         by: ['pieceId'],
-        where: { targetItemId: item.id, kind: CancelledGoodsKind.WOVEN },
+        // Nhân 26/11 câu 1: khung lấy khác kho chỉ đếm khi thủ kho nơi nhận đã xác nhận.
+        where: {
+          targetItemId: item.id,
+          kind: CancelledGoodsKind.WOVEN,
+          ...WOVEN_TRANSFER_RECEIVED,
+        },
         _sum: { qty: true },
       }),
     ]);
@@ -3318,7 +3324,11 @@ export class ProductionInvoicesService {
       // Huỷ lệnh đợt 2 - Q6: khung đã đan chuyển từ SKU đã huỷ sang.
       this.prisma.cancelledGoodsTransfer.groupBy({
         by: ['pieceId', 'targetItemId'],
-        where: { targetItemId: { in: itemBigIds }, kind: CancelledGoodsKind.WOVEN },
+        where: {
+          targetItemId: { in: itemBigIds },
+          kind: CancelledGoodsKind.WOVEN,
+          ...WOVEN_TRANSFER_RECEIVED,
+        },
         _sum: { qty: true },
       }),
     ]);
@@ -3421,6 +3431,7 @@ export class ProductionInvoicesService {
                   targetItemId: item.id,
                   pieceId: pieceBigId,
                   kind: CancelledGoodsKind.WOVEN,
+                  ...WOVEN_TRANSFER_RECEIVED,
                 },
                 _sum: { qty: true },
               }),

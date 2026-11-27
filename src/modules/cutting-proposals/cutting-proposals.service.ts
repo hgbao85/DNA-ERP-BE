@@ -906,6 +906,12 @@ export class CuttingProposalsService {
           where: { id: { in: toDrop.map((pr) => pr.id) } },
           data: { status: CuttingProposalStatus.SUPERSEDED },
         });
+        // Nhân 26/11 câu 4: lượt tính trước bị bỏ trả đoạn dư đã giữ về kho.
+        if (this.segmentStock) {
+          for (const pr of toDrop) {
+            await this.segmentStock.releaseProposalAllocations(tx, pr.id, actorUserId);
+          }
+        }
       }
 
       return tx.cuttingProposal.create({
@@ -1022,6 +1028,8 @@ export class CuttingProposalsService {
         );
       }
       await tx.cuttingProposalItem.deleteMany({ where: { cuttingProposalId: bigId } });
+      // Nhân 26/11 câu 4: phương án bị xoá trả đoạn dư đã giữ lúc tính về kho.
+      if (this.segmentStock) await this.segmentStock.releaseProposalAllocations(tx, bigId);
     });
     this.invalidateBatchContext();
   }
@@ -1307,6 +1315,29 @@ export class CuttingProposalsService {
       select: { productionInvoiceItemId: true },
     });
     if (items.length > 0) {
+      const siblingWhere = {
+        id: { not: cuttingProposalId },
+        productionOrderId: null,
+        productionInvoiceId: null,
+        status: {
+          in: [
+            CuttingProposalStatus.CALCULATING,
+            CuttingProposalStatus.DRAFT,
+            CuttingProposalStatus.FAILED,
+          ],
+        },
+        items: {
+          some: { productionInvoiceItemId: { in: items.map((i) => i.productionInvoiceItemId) } },
+        },
+      };
+      // Nhân 26/11 câu 4: các lượt anh em bị thay trả đoạn dư đã giữ (trước khi phương án được chọn giữ thêm phần thiếu).
+      if (this.segmentStock) {
+        const siblings = await tx.cuttingProposal.findMany({
+          where: siblingWhere,
+          select: { id: true },
+        });
+        for (const sb of siblings) await this.segmentStock.releaseProposalAllocations(tx, sb.id);
+      }
       await tx.cuttingProposal.updateMany({
         where: {
           id: { not: cuttingProposalId },
@@ -1327,6 +1358,22 @@ export class CuttingProposalsService {
         },
         data: { status: CuttingProposalStatus.SUPERSEDED },
       });
+    }
+    // Nhân 26/11 câu 4: đoạn phương án đã giữ lúc tính gắn sang PI; phần đã bị trả (lượt mới hơn lấy) thì giữ lại ngay bây giờ -
+    // thiếu thì ghi segment_stock_short (phần thiếu thành số cần cắt thêm, như lúc duyệt).
+    if (this.segmentStock && isSegmentStockEnabled()) {
+      await this.segmentStock.attachProposalHolds(tx, cuttingProposalId, invoiceId);
+      const fresh = await tx.cuttingProposal.findUnique({
+        where: { id: cuttingProposalId },
+        select: { requestParams: true },
+      });
+      await this.allocateSegmentStockUse(
+        tx,
+        cuttingProposalId,
+        fresh?.requestParams ?? null,
+        invoiceId,
+        null,
+      );
     }
     // tx do caller giữ, chưa commit: xoá ở đây chỉ làm bản nhớ cũ không sống thêm; TTL ngắn lo phần còn lại.
     this.invalidateBatchContext();
@@ -1408,6 +1455,23 @@ export class CuttingProposalsService {
    *  null) TRƯỚC khi xoá PI - FK không cho xoá PI đang được phương án trỏ tới. SKU quay về "chưa
    *  gom" nên KHSX phải tính lại (phương án cũ giữ lại làm lịch sử). */
   async releaseForInvoice(tx: PrismaTx, invoiceId: bigint): Promise<void> {
+    // Nhân 26/11 câu 4: lệnh không được duyệt / bị xoá -> trả đoạn dư phương án đã giữ (TRƯỚC khi xoá PI: dòng giữ xoá theo PI).
+    if (this.segmentStock) {
+      const gone = await tx.cuttingProposal.findMany({
+        where: {
+          productionInvoiceId: invoiceId,
+          status: {
+            in: [
+              CuttingProposalStatus.DRAFT,
+              CuttingProposalStatus.CALCULATING,
+              CuttingProposalStatus.FAILED,
+            ],
+          },
+        },
+        select: { id: true },
+      });
+      for (const g of gone) await this.segmentStock.releaseProposalAllocations(tx, g.id);
+    }
     await tx.cuttingProposal.updateMany({
       where: {
         productionInvoiceId: invoiceId,
@@ -3374,6 +3438,8 @@ export class CuttingProposalsService {
         this.logger.warn(
           `Cutting proposal ${proposalId}: không đọc được đoạn dư kho Phôi, tính như không có: ${(error as Error).message}`,
         );
+        // Tính như không có đoạn dư -> trả phần lỡ giữ trước khi lỗi (lượt tính trước, Nhân 26/11 câu 4).
+        await this.releaseProposalHoldsSafe(proposalId);
       }
       const config = await this.prisma.systemConfig.findUniqueOrThrow({
         where: { id: SYSTEM_CONFIG_ID },
@@ -3699,6 +3765,8 @@ export class CuttingProposalsService {
       // CUTTING_PROPOSAL_CALCULATION_FAILED) - cùng lý do trên. saveFailure() vẫn lưu FAILED +
       // errorMessage vào chính CuttingProposal, và extractErrorMessage() vẫn được dùng ở đó.
       await this.saveFailure(proposalId, error);
+      // Nhân 26/11 câu 4: lượt tính lỗi không dùng được - trả đoạn dư đã giữ lúc tính.
+      await this.releaseProposalHoldsSafe(proposalId);
       if (preInvoice) {
         await this.notifySolveFinished(proposalId, requestedById, batchLabel);
       }
@@ -4861,7 +4929,75 @@ export class CuttingProposalsService {
     ]);
     const use: SegmentStockUse[] = [];
     const usedBySpec = new Map<string, number>();
-    for (const [k, n] of [...need.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    if (piId == null) {
+      // Nhân trả lời 26/11 câu 4: lượt tính TRƯỚC khi có lệnh giữ đoạn dư NGAY lúc tính (khoá ô, giữ tối đa bằng dư) - lệnh khác
+      // không thấy những đoạn đó nữa. Trước khi giữ: trả đoạn các lượt tính trước khác của cùng SKU đang giữ (tính lại thì lượt mới
+      // nhận lại). Trả về kho khi phương án bị bỏ / lệnh không được duyệt (releaseProposalAllocations).
+      const items = await this.prisma.cuttingProposalItem.findMany({
+        where: { cuttingProposalId: proposalId },
+        select: { productionInvoiceItemId: true },
+      });
+      const keys = [...need.entries()]
+        .map(([k, n]) => {
+          const [spec, steps] = k.split('|');
+          return { spec: BigInt(spec), steps, n };
+        })
+        .sort((a, b) =>
+          a.spec < b.spec
+            ? -1
+            : a.spec > b.spec
+              ? 1
+              : a.steps < b.steps
+                ? -1
+                : a.steps > b.steps
+                  ? 1
+                  : 0,
+        );
+      const segmentStock = this.segmentStock;
+      await this.prisma.$transaction(
+        async (tx) => {
+          if (items.length > 0) {
+            const others = await tx.cuttingProposal.findMany({
+              where: {
+                id: { not: proposalId },
+                productionOrderId: null,
+                productionInvoiceId: null,
+                items: {
+                  some: {
+                    productionInvoiceItemId: { in: items.map((i) => i.productionInvoiceItemId) },
+                  },
+                },
+              },
+              select: { id: true },
+            });
+            for (const o of others) await segmentStock.releaseProposalAllocations(tx, o.id);
+          }
+          for (const k of keys) {
+            const taken = Math.floor(
+              (await segmentStock.holdForProposal(tx, {
+                warehouseId: warehouse.id,
+                segmentSpecId: k.spec,
+                segmentSteps: k.steps,
+                cuttingProposalId: proposalId,
+                qty: Math.floor(k.n + 1e-9),
+              })) + 1e-9,
+            );
+            if (taken <= 0) continue;
+            use.push({
+              warehouse_id: warehouse.id.toString(),
+              segment_spec_id: k.spec.toString(),
+              segment_steps: k.steps,
+              qty: taken,
+            });
+            usedBySpec.set(k.spec.toString(), (usedBySpec.get(k.spec.toString()) ?? 0) + taken);
+          }
+        },
+        { timeout: 30_000 },
+      );
+    }
+    for (const [k, n] of piId == null
+      ? []
+      : [...need.entries()].sort(([a], [b]) => a.localeCompare(b))) {
       const ownQty = own.get(k);
       const have =
         (surplus.get(k) ?? 0) + (ownQty && ownQty.warehouseId === warehouse.id ? ownQty.qty : 0);
@@ -4936,6 +5072,28 @@ export class CuttingProposalsService {
       : await new WorkshopWarehouseResolver(tx).phoiWarehouseOfPi(piId).catch(() => null);
     const kept: SegmentStockUse[] = [];
     let short = 0;
+    // Nhân 26/11 câu 4: phương án tính trước đã giữ đoạn ngay lúc tính (gắn sang PI khi tạo lệnh) - chỉ giữ thêm phần còn thiếu.
+    const heldLogs = await tx.segmentReservationLog.findMany({
+      where: {
+        refType: CUTTING_PROPOSAL_SEGMENT_REF,
+        refId: proposalId.toString(),
+        kind: { in: ['SURPLUS_IN', 'RELEASE'] },
+        reservation: { productionInvoiceId: piId },
+      },
+      select: {
+        kind: true,
+        qty: true,
+        reservation: { select: { warehouseId: true, segmentSpecId: true, segmentSteps: true } },
+      },
+    });
+    const heldByCell = new Map<string, number>();
+    for (const l of heldLogs) {
+      const k = `${l.reservation.warehouseId}|${l.reservation.segmentSpecId}|${l.reservation.segmentSteps}`;
+      heldByCell.set(
+        k,
+        (heldByCell.get(k) ?? 0) + (l.kind === 'SURPLUS_IN' ? 1 : -1) * l.qty.toNumber(),
+      );
+    }
     // Cùng thứ tự khoá ô với SegmentStockService (compareCells: kho rồi cỡ đoạn theo SỐ, rồi bộ công đoạn) - sắp theo chữ thì
     // id khác số chữ số (9 / 10) khoá ngược chiều, có thể deadlock (review IT 26/11 mục 3.7).
     const cmpId = (x: string, y: string) => {
@@ -4958,26 +5116,35 @@ export class CuttingProposalsService {
         short += u.qty;
         continue;
       }
-      const r = await this.segmentStock.allocateSurplusToOrder(tx, {
-        warehouseId: BigInt(u.warehouse_id),
-        segmentSpecId: BigInt(u.segment_spec_id),
-        segmentSteps: u.segment_steps,
-        productionInvoiceId: piId,
-        qty: u.qty,
-        refType: CUTTING_PROPOSAL_SEGMENT_REF,
-        refId: proposalId.toString(),
-        note: 'Phương án cắt dùng đoạn dư trong kho trước khi cắt',
-        actorId: actorUserId ?? undefined,
-      });
-      if (r.allocatedQty + 1e-9 < u.qty) {
+      const already = Math.max(
+        0,
+        heldByCell.get(`${u.warehouse_id}|${u.segment_spec_id}|${u.segment_steps}`) ?? 0,
+      );
+      const want = Math.max(0, u.qty - already);
+      const r =
+        want > 1e-9
+          ? await this.segmentStock.allocateSurplusToOrder(tx, {
+              warehouseId: BigInt(u.warehouse_id),
+              segmentSpecId: BigInt(u.segment_spec_id),
+              segmentSteps: u.segment_steps,
+              productionInvoiceId: piId,
+              qty: want,
+              refType: CUTTING_PROPOSAL_SEGMENT_REF,
+              refId: proposalId.toString(),
+              note: 'Phương án cắt dùng đoạn dư trong kho trước khi cắt',
+              actorId: actorUserId ?? undefined,
+            })
+          : { allocatedQty: 0 };
+      const got = Math.min(u.qty, already + r.allocatedQty);
+      if (got + 1e-9 < u.qty) {
         if (!precomputed) {
           throw fail(
-            `Đoạn dư trong kho Phôi đã bị lệnh khác dùng (cần ${u.qty}, còn ${r.allocatedQty}) - bấm "Tính lại" để tính với số dư mới.`,
+            `Đoạn dư trong kho Phôi đã bị lệnh khác dùng (cần ${u.qty}, còn ${got}) - bấm "Tính lại" để tính với số dư mới.`,
           );
         }
-        short += u.qty - r.allocatedQty;
+        short += u.qty - got;
       }
-      if (r.allocatedQty > 0) kept.push({ ...u, qty: r.allocatedQty });
+      if (got > 0) kept.push({ ...u, qty: got });
     }
     if (short > 0) {
       // Hướng dẫn cắt đọc segment_stock_use: ghi đúng số đã giữ để "có sẵn" khớp thật.
@@ -5602,6 +5769,21 @@ export class CuttingProposalsService {
     }
     this.publishRealtime('CUTTING_PROPOSAL', proposalId, 'FINISHED', null);
     return true;
+  }
+
+  /** Trả đoạn dư phương án đang giữ (phương án chưa gắn lệnh). Best-effort - lỗi chỉ log. */
+  private async releaseProposalHoldsSafe(proposalId: bigint): Promise<void> {
+    if (!this.segmentStock) return;
+    const segmentStock = this.segmentStock;
+    try {
+      await this.prisma.$transaction((tx) =>
+        segmentStock.releaseProposalAllocations(tx, proposalId),
+      );
+    } catch (e) {
+      this.logger.error(
+        `Không trả được đoạn dư phương án cắt ${proposalId} đang giữ: ${(e as Error).message}`,
+      );
+    }
   }
 
   private async saveFailure(proposalId: bigint, error: unknown): Promise<void> {

@@ -6,6 +6,7 @@ import {
   Logger,
   NotFoundException,
   Optional,
+  ForbiddenException,
 } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import {
@@ -20,6 +21,7 @@ import {
   ProductionOrderStatus,
   PurchaseProposalStatus,
   SteelIssueStatus,
+  SteelReturnStatus,
   StockLedgerRefType,
 } from '../../../generated/prisma/client';
 import { AppClsStore } from '../../../common/interfaces/cls-store.interface';
@@ -46,7 +48,7 @@ import { SegmentProductionService } from '../../segment-stock/segment-production
 import { StockLedgerService } from '../../stock/stock-ledger.service';
 import { WovenStockService } from '../../woven-stock/woven-stock.service';
 import { WorkshopWarehouseResolver } from '../../stock/workshop-warehouse.util';
-import { DecideCutDto } from './order-cancellation.dto';
+import { DecideCutDto, PendingSteelReturnDto } from './order-cancellation.dto';
 
 /** Người gọi (KHSX / Admin / Sếp) - roles để biết có được thao tác đề nghị của người khác không. */
 export interface CancelActor {
@@ -649,9 +651,10 @@ export class OrderCancellationService {
           }
         }
         const phoi = await new WorkshopWarehouseResolver(tx).phoiWarehouseOfPi(piId);
-        const production = await tx.warehouse.findUniqueOrThrow({ where: { code: 'PRODUCTION' } });
+        // Nhân 26/11 câu 2: QLSX chỉ ghi số cây trả (chờ xác nhận); thủ kho Phôi đếm + xác nhận thì mới ghi sổ kho
+        // (confirmSteelReturn). Cây đã rời tổ cắt nên vẫn trừ khỏi sắt tổ cắt còn (steelLeftoverMm / tiến độ Phôi).
         for (const line of returns) {
-          const row = await tx.steelReturn.create({
+          await tx.steelReturn.create({
             data: {
               cancelRequestId: id,
               productionInvoiceId: piId,
@@ -660,23 +663,9 @@ export class OrderCancellationService {
               bars: line.bars,
               warehouseId: phoi.id,
               createdById: actor.id,
+              status: SteelReturnStatus.PENDING,
             },
           });
-          await this.stockLedger.postEntry(
-            {
-              fromWarehouseId: production.id,
-              toWarehouseId: phoi.id,
-              materialId: row.materialId,
-              qty: line.bars,
-              refType: StockLedgerRefType.STEEL_RETURN,
-              refId: row.id.toString(),
-              createdById: actor.id,
-              idempotencyKey: `steel-return:${row.id}`,
-              stockLengthMm: line.lengthMm,
-              note: `Tổ cắt trả cây - ngưng cắt SKU đã huỷ (đề nghị ${id})`,
-            },
-            tx,
-          );
         }
       }
       await tx.productionOrderCancelRequest.update({
@@ -695,6 +684,140 @@ export class OrderCancellationService {
     });
     this.publish(row.productionOrderId, actor.id);
     return this.cutSteelRow(row, piId);
+  }
+
+  // ─── Nhân 26/11 câu 2: thủ kho Phôi xác nhận sắt tổ cắt trả về ─────────────────────────────────────────────────────────────
+
+  /** Dòng trả sắt chờ thủ kho xác nhận (phạm vi kho của người xem; trống = mọi kho Phôi). */
+  async listPendingSteelReturns(warehouseScope: string | null): Promise<PendingSteelReturnDto[]> {
+    const rows = await this.prisma.steelReturn.findMany({
+      where: { status: SteelReturnStatus.PENDING },
+      orderBy: { id: 'asc' },
+      take: 200,
+      select: {
+        id: true,
+        productionInvoiceId: true,
+        lengthMm: true,
+        bars: true,
+        createdAt: true,
+        createdById: true,
+        warehouseId: true,
+        material: { select: { code: true, name: true } },
+        cancelRequest: {
+          select: {
+            productionOrder: {
+              select: {
+                productionInvoiceItem: {
+                  select: { lsxCode: true, mfgProduct: { select: { factoryCode: true } } },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const whIds = [...new Set(rows.map((r) => r.warehouseId))];
+    const userIds = [...new Set(rows.map((r) => r.createdById))];
+    const [warehouses, users] = await Promise.all([
+      this.prisma.warehouse.findMany({
+        where: { id: { in: whIds } },
+        select: { id: true, code: true, name: true },
+      }),
+      this.prisma.user.findMany({
+        where: { id: { in: userIds } },
+        select: { id: true, firstName: true, lastName: true, username: true },
+      }),
+    ]);
+    const whById = new Map(warehouses.map((w) => [w.id.toString(), w]));
+    const userById = new Map(users.map((u) => [u.id, u]));
+    return rows
+      .filter(
+        (r) => !warehouseScope || whById.get(r.warehouseId.toString())?.code === warehouseScope,
+      )
+      .map((r) => {
+        const item = r.cancelRequest.productionOrder.productionInvoiceItem;
+        const u = userById.get(r.createdById);
+        const wh = whById.get(r.warehouseId.toString());
+        return {
+          id: r.id.toString(),
+          productionInvoiceId: r.productionInvoiceId.toString(),
+          lenhCode: item.lsxCode ?? '',
+          factoryCode: item.mfgProduct.factoryCode,
+          materialCode: r.material.code,
+          materialName: r.material.name,
+          lengthMm: r.lengthMm,
+          bars: r.bars,
+          warehouseName: wh?.name ?? '',
+          createdByName: u ? [u.lastName, u.firstName].filter(Boolean).join(' ') || u.username : '',
+          createdAt: r.createdAt.toISOString(),
+        };
+      });
+  }
+
+  /**
+   * Thủ kho Phôi xác nhận số cây thực nhận (≤ số QLSX ghi) -> ghi sổ kho từ Sản xuất vào kho Phôi đúng chiều dài (cây lẻ CS2).
+   * Đếm ít hơn: chỉ ghi số đếm được, phần chênh ghi lại để đối chiếu. Xác nhận 2 lần -> 409.
+   */
+  async confirmSteelReturn(
+    actor: CancelActor,
+    returnId: string,
+    countedBars: number,
+    warehouseScope: string | null,
+  ): Promise<PendingSteelReturnDto[]> {
+    const id = parseBigIntId(returnId);
+    if (!Number.isInteger(countedBars) || countedBars < 0) {
+      throw new BadRequestException('Số cây đếm được phải là số nguyên không âm');
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `steel-return-confirm:${id}`);
+      const row = await tx.steelReturn.findUnique({ where: { id } });
+      if (!row) throw new NotFoundException(`Không tìm thấy dòng trả sắt ${returnId}`);
+      if (row.status !== SteelReturnStatus.PENDING) {
+        throw new ConflictException('Dòng trả sắt này đã được xác nhận rồi');
+      }
+      const wh = await tx.warehouse.findUniqueOrThrow({
+        where: { id: row.warehouseId },
+        select: { id: true, code: true },
+      });
+      if (warehouseScope && warehouseScope !== wh.code) {
+        throw new ForbiddenException('Bạn chỉ xác nhận được sắt trả về kho mình phụ trách');
+      }
+      if (countedBars > row.bars) {
+        throw new BadRequestException(
+          `Đếm được ${countedBars} cây - nhiều hơn số QLSX ghi trả (${row.bars} cây). Báo QLSX ghi lại.`,
+        );
+      }
+      await tx.steelReturn.update({
+        where: { id },
+        data: {
+          status: SteelReturnStatus.CONFIRMED,
+          confirmedBars: countedBars,
+          confirmedById: actor.id,
+          confirmedAt: new Date(),
+        },
+      });
+      if (countedBars > 0) {
+        const production = await tx.warehouse.findUniqueOrThrow({ where: { code: 'PRODUCTION' } });
+        await this.stockLedger.postEntry(
+          {
+            fromWarehouseId: production.id,
+            toWarehouseId: wh.id,
+            materialId: row.materialId,
+            qty: countedBars,
+            refType: StockLedgerRefType.STEEL_RETURN,
+            refId: row.id.toString(),
+            createdById: actor.id,
+            idempotencyKey: `steel-return:${row.id}`,
+            stockLengthMm: row.lengthMm,
+            note:
+              `Tổ cắt trả cây - ngưng cắt SKU đã huỷ (đề nghị ${row.cancelRequestId}), thủ kho xác nhận` +
+              (countedBars < row.bars ? ` ${countedBars}/${row.bars} cây` : ''),
+          },
+          tx,
+        );
+      }
+    });
+    return this.listPendingSteelReturns(warehouseScope);
   }
 
   // ─── KHSX đề nghị / rút lại ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -845,6 +968,8 @@ export class OrderCancellationService {
     await this.afterApproved(outcome, actor.id);
     // Q6 (anh Nhân 26/11/2026): khung đã đan của SKU vừa huỷ thành tồn khung đan kho thành phẩm - cấp ngay cho lệnh đang chạy cần
     // đúng mảnh + màu dây (best-effort, lỗi chỉ log).
+    // Lệnh vừa huỷ đang chờ nhận khung đan từ kho thành phẩm khác (chưa nhận) -> bỏ, khung về lại tồn ở kho nguồn rồi cấp lại.
+    await this.wovenStock?.revertPendingIncoming(row.productionOrderId, actor.id);
     await this.wovenStock?.allocateAll(actor.id);
 
     await this.resolvePending(row.productionOrderId, id);

@@ -6,8 +6,11 @@ import { BUSINESS_ROLES, DEFAULT_ROLES } from '../../../common/constants/roles.c
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../../common/decorators/require-permissions.decorator';
 import { RequireRole } from '../../../common/decorators/require-role.decorator';
+import { RequireAssignedWarehouse } from '../../../common/decorators/require-assigned-warehouse.decorator';
 import { AuthenticatedUser } from '../../../common/interfaces/jwt-payload.interface';
 import {
+  ConfirmSteelReturnDto,
+  ConfirmWovenReceivedDto,
   CreateOrderCancelRequestDto,
   DecideCutDto,
   TransferCancelledGoodsDto,
@@ -25,6 +28,8 @@ const ORDER_UPDATE = {
   action: PermissionAction.UPDATE,
 };
 const APPROVE = { module: PERMISSION_MODULES.PRODUCTION_INVOICE, action: PermissionAction.APPROVE };
+const STOCK_VIEW = { module: PERMISSION_MODULES.STOCK, action: PermissionAction.VIEW };
+const STOCK_UPDATE = { module: PERMISSION_MODULES.STOCK, action: PermissionAction.UPDATE };
 
 const actorOf = (user: AuthenticatedUser) => ({ id: user.id, roles: user.roles });
 
@@ -71,6 +76,44 @@ export class OrderCancellationController {
   }
 
   /** Q3 (anh Nhân 24/11/2026): SKU đã huỷ còn sắt ở tổ cắt - QLSX quyết cắt tiếp hay ngưng + nhập trả cây. */
+  /** Nhân 26/11 câu 2: sắt tổ cắt trả về chờ thủ kho Phôi xác nhận. */
+  @Get('steel-returns/pending')
+  @RequirePermissions(STOCK_VIEW)
+  pendingSteelReturns(@CurrentUser('warehouseScope') warehouseScope: string | null) {
+    return this.service.listPendingSteelReturns(warehouseScope);
+  }
+
+  @Post('steel-returns/:id/confirm')
+  @RequireAssignedWarehouse()
+  @RequirePermissions(STOCK_UPDATE)
+  confirmSteelReturn(
+    @Param('id') id: string,
+    @Body() dto: ConfirmSteelReturnDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @CurrentUser('warehouseScope') warehouseScope: string | null,
+  ) {
+    return this.service.confirmSteelReturn(actorOf(user), id, dto.countedBars, warehouseScope);
+  }
+
+  /** Nhân 26/11 câu 1: khung đan lấy khác kho thành phẩm - đang chuyển, chờ thủ kho nơi nhận xác nhận. */
+  @Get('woven-transfers/pending')
+  @RequirePermissions(STOCK_VIEW)
+  wovenInTransit(@CurrentUser('warehouseScope') warehouseScope: string | null) {
+    return this.goods.listWovenInTransit(warehouseScope);
+  }
+
+  @Post('woven-transfers/:id/receive')
+  @RequireAssignedWarehouse()
+  @RequirePermissions(STOCK_UPDATE)
+  confirmWovenReceived(
+    @Param('id') id: string,
+    @Body() dto: ConfirmWovenReceivedDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('warehouseScope') warehouseScope: string | null,
+  ) {
+    return this.goods.confirmWovenReceived(userId, id, dto.signedSlipUrls, warehouseScope);
+  }
+
   @Get('cut-steel')
   @RequirePermissions(VIEW)
   @RequireRole(BUSINESS_ROLES.PRODUCTION_MANAGER, DEFAULT_ROLES.ADMIN)

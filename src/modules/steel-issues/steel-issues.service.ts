@@ -248,8 +248,8 @@ type OrderForBom = {
   floorStage: ProductionOrderFloorStage;
   /** Huỷ lệnh theo SKU (23/11/2026). Mock cũ có thể thiếu -> coi như chưa huỷ. */
   status?: ProductionOrderStatus;
-  /** Q3: SKU đã huỷ mà QLSX cho cắt tiếp - có số cần cũ trong tiến độ Cắt (màn quét báo được), không cộng vào số của cỡ đoạn,
-   *  không có ở công đoạn phụ (review IT 26/11 mục 2.1). */
+  /** Q3: SKU đã huỷ mà QLSX cho cắt tiếp - có số cần cũ trong tiến độ Cắt + công đoạn phụ (màn quét báo được), không cộng vào số
+   *  của cỡ đoạn (review IT 26/11 mục 2.1; Nhân 26/11 câu 3: làm đủ công đoạn). Cắt còn bị chặn theo sắt còn lại. */
   cutContinued?: boolean;
 };
 
@@ -1076,6 +1076,30 @@ export class SteelIssuesService {
               mm: specById.get(parseBigIntId(seg.segmentSpecId).toString())!.cutLengthMm.toString(),
             })),
           });
+          if (continuedCut) {
+            // Nhân 26/11 câu 3: cắt tiếp SKU huỷ chỉ trong phần sắt đã xuất còn lại. Khoá cùng khoá cân đối sắt.
+            await lockBusinessKey(tx, `cut-steel:${issue.productionInvoiceId}:${issue.materialId}`);
+            const { roomMm, kerfMm } = await this.continuedCutRoomMm(tx, {
+              piId: issue.productionInvoiceId,
+              materialId: issue.materialId,
+              piOrders,
+            });
+            const addMm = dto.segments.reduce(
+              (t, seg) =>
+                t +
+                seg.qty *
+                  (specById
+                    .get(parseBigIntId(seg.segmentSpecId).toString())!
+                    .cutLengthMm.toNumber() +
+                    kerfMm),
+              0,
+            );
+            if (addMm > roomMm + 1e-6) {
+              throw new BadRequestException(
+                `SKU đã huỷ chỉ được cắt tiếp trong phần sắt đã xuất còn lại: còn khoảng ${Math.round(roomMm)} mm, lần này cần ${Math.round(addMm)} mm. Sắt còn lại nhập trả kho Phôi (QLSX chọn "Ngưng").`,
+              );
+            }
+          }
           // Giao nhận giữa tổ (3.3b, chốt 24/11/2026): bật công tắc thì CHẶN báo cắt làm mm đoạn đã báo vượt 102% mm sắt
           // đã nhận của (lệnh, loại sắt) - trước chỉ cảnh báo (steelBalance.overMm). Tắt công tắc: không đọc gì thêm.
           if (isStageHandoverEnabled()) {
@@ -1394,6 +1418,60 @@ export class SteelIssuesService {
     throw new BadRequestException(
       `Sắt ${material?.code ?? p.materialId}: đã nhận ${usage.receivedBarCount} cây (dùng được ${r(usage.usableMm)} mm), đoạn đã báo ${r(usage.reportedMm)} mm + lần này ${r(addMm)} mm = ${r(usage.reportedMm + addMm)} mm - vượt ${Math.round(PHOI_STEEL_TOLERANCE * 100)}% sắt đã nhận (tối đa ${r(limitMm)} mm). Đếm lại số đoạn. Sắt thừa / cây lẻ dưới xưởng phải nhập lại kho rồi xuất qua phiếu; số sắt nhận sai thì báo QLSX mở chặn.`,
     );
+  }
+
+  /**
+   * Nhân trả lời 26/11 câu 3: SKU đã huỷ được cắt tiếp chỉ cắt hết phần sắt ĐÃ XUẤT cho tổ, không cắt đủ số cần cũ. Sắt còn cho cắt
+   * tiếp = sắt đã nhận dùng được − cây đã nhập trả − đoạn đã báo (mọi SKU) − phần SKU còn chạy còn phải cắt (giữ sắt cho SKU đó).
+   * Cùng công thức steelUsage với cân đối sắt ở tiến độ Phôi.
+   */
+  private async continuedCutRoomMm(
+    db: PrismaTx,
+    p: {
+      piId: bigint;
+      materialId: bigint;
+      piOrders: readonly OrderForBom[];
+    },
+  ): Promise<{ roomMm: number; kerfMm: number }> {
+    const [usage, returned] = await Promise.all([
+      loadSteelUsage(db, p.piId, p.materialId),
+      db.steelReturn.findMany({
+        where: { productionInvoiceId: p.piId, materialId: p.materialId },
+        select: { lengthMm: true, bars: true },
+      }),
+    ]);
+    const returnedMm = returned.reduce((t, r) => t + r.lengthMm * r.bars, 0);
+    const live = p.piOrders.filter((o) => o.status !== ProductionOrderStatus.CANCELLED);
+    let remainingLiveMm = 0;
+    if (live.length > 0) {
+      const specs = await db.segmentSpec.findMany({
+        where: {
+          materialId: p.materialId,
+          pieceBoms: { some: { bomRevisionId: { in: live.map((o) => o.bomRevisionId) } } },
+        },
+        select: { id: true, cutLengthMm: true },
+      });
+      for (const order of live) {
+        const index = await this.loadNeedIndex(db, {
+          piId: p.piId,
+          materialId: p.materialId,
+          order,
+          piOrders: p.piOrders,
+          specIds: specs.map((s) => s.id),
+        });
+        for (const s of specs) {
+          const input = index.get(order.id.toString(), s.id.toString());
+          if (!input) continue;
+          const n = computePhoiStep(input, 'CAT');
+          remainingLiveMm +=
+            Math.max(0, n.required - n.counted) * (s.cutLengthMm.toNumber() + usage.kerfMm);
+        }
+      }
+    }
+    return {
+      roomMm: Math.max(0, usage.usableMm - returnedMm - usage.reportedMm - remainingLiveMm),
+      kerfMm: usage.kerfMm,
+    };
   }
 
   /** Chặn báo CẮT vượt số cần (hợp đồng v2 mục 11): lần báo > maxNow của (SKU, cỡ) -> 400 + ghi log cảnh báo. */
@@ -1940,9 +2018,11 @@ export class SteelIssuesService {
     const gateLabel = opts?.gateLabel ?? 'gửi KCS công đoạn';
     const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
     const materialBigId = parseBigIntId(materialId);
+    // KCS chốt để chấm (câu 4), hoặc SKU đã huỷ được cắt tiếp - đoạn làm đủ công đoạn rồi qua KCS (Nhân 26/11 câu 3).
     const kcsOnCancelled =
-      opts?.allowCancelled === true &&
-      (await isOrderCancelledById(this.prisma, parseBigIntId(productionOrderId)));
+      (await isOrderCancelledById(this.prisma, parseBigIntId(productionOrderId))) &&
+      (opts?.allowCancelled === true ||
+        (await isCutContinuedForOrder(this.prisma, parseBigIntId(productionOrderId))));
     if (!kcsOnCancelled) await assertPiHasActiveFloor(this.prisma, invoice.id, gateLabel);
     // Gửi KCS theo TỪNG SKU (2026-09-21): chỉ gom các đợt gia công của SKU này.
     const piOrders = await this.findOrdersForInvoice(invoice.id);
@@ -2476,8 +2556,9 @@ export class SteelIssuesService {
           })),
       });
       step.set(piKey, {
-        // Công đoạn phụ: chỉ SKU còn chạy (cắt tiếp SKU huỷ chỉ là Cắt - mục 2.5).
-        orders: orders.filter((o) => !o.cutContinued),
+        // Nhân 26/11 câu 3: đoạn cắt tiếp của SKU huỷ làm đủ công đoạn - SKU cắt tiếp có cả ở công đoạn phụ (không cộng vào số
+        // của cỡ đoạn, như ở Cắt).
+        orders,
         bomPieces: piBomPieces,
         pieceBoms: piPieceBoms,
         issues: piIssues,
@@ -2846,6 +2927,14 @@ export class SteelIssuesService {
         ? null
         : held.reduce((t, r) => t + r.remaining * r.stockLengthMm, 0);
       const leftoverReceivedMm = Math.max(0, Math.round(usableMm) - Math.round(reportedMm));
+      // Nhân 26/11 câu 3: SKU huỷ cắt tiếp chỉ cắt trong phần sắt còn lại sau khi giữ đủ cho SKU còn chạy (cùng continuedCutRoomMm).
+      const continuedRoomMm = Math.max(0, usableMm - reportedMm - remainingNeedMm);
+      for (const sg of item.segments) {
+        for (const o of sg.byOrder) {
+          if (!o.cutContinued) continue;
+          o.maxNow = Math.min(o.maxNow, Math.floor(continuedRoomMm / (sg.cutLengthMm + kerfMm)));
+        }
+      }
       item.steelBalance = new PhoiSteelBalanceDto({
         receivedBarCount,
         usableMm: Math.round(usableMm),
@@ -2940,7 +3029,6 @@ export class SteelIssuesService {
     if (replay) return this.replayStepReport(replay.stepBatchId);
     const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
     const materialBigId = parseBigIntId(dto.materialId);
-    await assertPiHasActiveFloor(this.prisma, invoice.id, 'nhập công đoạn chi tiết');
     // 1 đợt = đúng 1 SKU (2026-09-21) - SKU phải thuộc PI này.
     const piOrders = await this.findOrdersForInvoice(invoice.id);
     const order = piOrders.find((o) => o.id === parseBigIntId(dto.productionOrderId));
@@ -2949,8 +3037,14 @@ export class SteelIssuesService {
         `SKU (lệnh sản xuất ${dto.productionOrderId}) không thuộc PI này`,
       );
     }
-    // Huỷ lệnh theo SKU (23/11/2026)
-    assertLoadedOrderNotCancelled(order, 'nhập công đoạn chi tiết');
+    // Nhân trả lời 26/11 câu 3: đoạn cắt tiếp của SKU đã huỷ làm đủ công đoạn như lệnh gốc - qua cổng xưởng + cổng huỷ.
+    const continuedStep =
+      order.status === 'CANCELLED' && (await isCutContinuedForOrder(this.prisma, order.id));
+    if (!continuedStep) {
+      await assertPiHasActiveFloor(this.prisma, invoice.id, 'nhập công đoạn chi tiết');
+      // Huỷ lệnh theo SKU (23/11/2026)
+      assertLoadedOrderNotCancelled(order, 'nhập công đoạn chi tiết');
+    }
     const requiredSteps = await this.resolveRequiredSteps(invoice.id, materialBigId);
     if (!requiredSteps.includes(dto.step)) {
       throw new BadRequestException(
@@ -3002,7 +3096,9 @@ export class SteelIssuesService {
             tx,
             `step-batch:${invoice.id}:${materialBigId}:${dto.step}:${order.id}`,
           );
-          await assertPiHasActiveFloorLocked(tx, invoice.id, 'nhập công đoạn chi tiết');
+          if (!continuedStep) {
+            await assertPiHasActiveFloorLocked(tx, invoice.id, 'nhập công đoạn chi tiết');
+          }
 
           // P1: chặn theo SỐ CẦN (kể cả phần làm bù cho đoạn KCS bỏ) và theo GIỚI HẠN VẬT LÝ (đoạn cắt thực có - đoạn đã
           // dùng), cùng hàm với số "còn báo được" hiện ở màn quét. Đọc ngay trong khoá step-batch.

@@ -144,7 +144,12 @@ export class SegmentStockService {
         segmentSpecId: cell.segmentSpecId,
         segmentSteps: cell.segmentSteps,
       },
-      select: { productionInvoiceId: true, reservedQty: true, consumedQty: true },
+      select: {
+        productionInvoiceId: true,
+        cuttingProposalId: true,
+        reservedQty: true,
+        consumedQty: true,
+      },
     });
     const q = quant ? quant.qty.toNumber() : 0;
     const remainingByOrder = new Map<string, number>();
@@ -152,7 +157,10 @@ export class SegmentStockService {
     for (const r of reservations) {
       const remaining = round4(r.reservedQty.toNumber() - r.consumedQty.toNumber());
       held += remaining;
-      remainingByOrder.set(r.productionInvoiceId.toString(), remaining);
+      // Dòng giữ của phương án tính trước (chưa có lệnh) cũng trừ khỏi dư - Nhân 26/11 câu 4.
+      if (r.productionInvoiceId != null) {
+        remainingByOrder.set(r.productionInvoiceId.toString(), remaining);
+      }
     }
     held = round4(held);
     return {
@@ -787,7 +795,10 @@ export class SegmentStockService {
         },
       },
     });
-    const net = new Map<string, { cell: CellRef & { id: bigint; pi: bigint }; qty: number }>();
+    const net = new Map<
+      string,
+      { cell: CellRef & { id: bigint; pi: bigint | null }; qty: number }
+    >();
     for (const l of logs) {
       const r = l.reservation;
       const cur = net.get(r.id.toString()) ?? {
@@ -835,6 +846,129 @@ export class SegmentStockService {
       released = round4(released + amount);
     }
     return released;
+  }
+
+  /**
+   * Nhân trả lời 26/11 câu 4: phương án cắt tính TRƯỚC khi có lệnh giữ đoạn dư ngay lúc tính - lệnh khác không thấy nữa. Dòng giữ
+   * không có PI (productionInvoiceId null, cuttingProposalId = phương án), nhật ký SURPLUS_IN refType CUTTING_PROPOSAL như lúc duyệt.
+   * Giữ tối đa bằng dư hiện có (đọc sau khoá ô). Nhả: releaseProposalAllocations; tạo lệnh: attachProposalHolds.
+   */
+  async holdForProposal(
+    tx: PrismaTx,
+    input: {
+      warehouseId: bigint;
+      segmentSpecId: bigint;
+      segmentSteps: string;
+      cuttingProposalId: bigint;
+      qty: number;
+      actorId?: string | null;
+    },
+  ): Promise<number> {
+    assertSegmentSteps(input.segmentSteps);
+    if (!(input.qty > 0)) return 0;
+    const cell: CellRef = input;
+    const { state } = await this.lockAndReadCell(tx, cell);
+    const qty = round4(Math.min(input.qty, state.surplus));
+    if (qty <= EPS) return 0;
+    const existing = await tx.segmentReservation.findFirst({
+      where: {
+        warehouseId: cell.warehouseId,
+        segmentSpecId: cell.segmentSpecId,
+        segmentSteps: cell.segmentSteps,
+        productionInvoiceId: null,
+        cuttingProposalId: input.cuttingProposalId,
+      },
+      select: { id: true },
+    });
+    const row = existing
+      ? await tx.segmentReservation.update({
+          where: { id: existing.id },
+          data: { reservedQty: { increment: qty } },
+          select: { id: true },
+        })
+      : await tx.segmentReservation.create({
+          data: {
+            warehouseId: cell.warehouseId,
+            productionInvoiceId: null,
+            cuttingProposalId: input.cuttingProposalId,
+            segmentSpecId: cell.segmentSpecId,
+            segmentSteps: cell.segmentSteps,
+            reservedQty: qty,
+            consumedQty: 0,
+          },
+          select: { id: true },
+        });
+    await tx.segmentReservationLog.create({
+      data: {
+        reservationId: row.id,
+        kind: SegmentReservationLogKind.SURPLUS_IN,
+        qty,
+        refType: CUTTING_PROPOSAL_SEGMENT_REF,
+        refId: input.cuttingProposalId.toString(),
+        note: 'Phương án cắt tính trước giữ đoạn dư trong kho ngay lúc tính',
+        createdById: input.actorId ?? null,
+      },
+    });
+    return qty;
+  }
+
+  /**
+   * Tạo lệnh (PI) từ phương án tính trước: các dòng giữ của phương án gắn sang PI. Trùng ô với dòng giữ sẵn có của PI (hiếm - PI vừa
+   * tạo) thì cộng dồn vào dòng của PI và chuyển nhật ký sang. Trả tổng đoạn đã gắn.
+   */
+  async attachProposalHolds(
+    tx: PrismaTx,
+    cuttingProposalId: bigint,
+    productionInvoiceId: bigint,
+  ): Promise<number> {
+    const rows = await tx.segmentReservation.findMany({
+      where: { cuttingProposalId, productionInvoiceId: null },
+      select: {
+        id: true,
+        warehouseId: true,
+        segmentSpecId: true,
+        segmentSteps: true,
+        reservedQty: true,
+        consumedQty: true,
+      },
+    });
+    let total = 0;
+    for (const r of [...rows].sort(compareCells)) {
+      await lockBusinessKey(
+        tx,
+        segmentBucketLockKey(r.warehouseId, r.segmentSpecId, r.segmentSteps),
+      );
+      const remaining = round4(r.reservedQty.toNumber() - r.consumedQty.toNumber());
+      const target = await tx.segmentReservation.findUnique({
+        where: {
+          warehouseId_productionInvoiceId_segmentSpecId_segmentSteps: {
+            warehouseId: r.warehouseId,
+            productionInvoiceId,
+            segmentSpecId: r.segmentSpecId,
+            segmentSteps: r.segmentSteps,
+          },
+        },
+        select: { id: true },
+      });
+      if (target) {
+        await tx.segmentReservation.update({
+          where: { id: target.id },
+          data: { reservedQty: { increment: remaining } },
+        });
+        await tx.segmentReservationLog.updateMany({
+          where: { reservationId: r.id },
+          data: { reservationId: target.id },
+        });
+        await tx.segmentReservation.delete({ where: { id: r.id } });
+      } else {
+        await tx.segmentReservation.update({
+          where: { id: r.id },
+          data: { productionInvoiceId, cuttingProposalId: null },
+        });
+      }
+      total = round4(total + remaining);
+    }
+    return total;
   }
 
   /** Chia chủ động `qty` đoạn từ cột dư của xưởng sang giữ cho 1 lệnh (tối đa bằng dư hiện có). Không ghi sổ kho (đoạn vẫn nằm trong kho). */

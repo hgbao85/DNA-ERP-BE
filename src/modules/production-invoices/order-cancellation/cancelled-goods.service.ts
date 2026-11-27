@@ -1,12 +1,14 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import {
   CancelledGoodsKind,
+  CancelledGoodsReceiveStatus,
   ProductionOrderCancelStatus,
   ProductionOrderStatus,
 } from '../../../generated/prisma/client';
@@ -15,7 +17,7 @@ import { loadLenhDisplayCodes } from '../../../common/utils/lenh-code.util';
 import { parseBigIntId } from '../../../common/utils/parse-bigint-id.util';
 import { PRISMA_SERVICE, PrismaServiceType, PrismaTx } from '../../../prisma/prisma.service';
 import { RealtimeService } from '../../../realtime/realtime.service';
-import { TransferCancelledGoodsDto } from './order-cancellation.dto';
+import { TransferCancelledGoodsDto, WovenInTransitDto } from './order-cancellation.dto';
 import { WovenStockService, tpWarehouseOf } from '../../woven-stock/woven-stock.service';
 
 /** 1 dòng SKU đang chạy nhận được hàng của SKU đã huỷ. */
@@ -389,5 +391,145 @@ export class CancelledGoodsService {
       actorId,
     });
     return this.buildRow(this.prisma, id);
+  }
+
+  // ─── Nhân 26/11 câu 1: khung đan lấy khác kho thành phẩm - thủ kho nơi nhận xác nhận ─────────────────────────────────────
+
+  /** Khung đan đang chuyển giữa 2 kho thành phẩm (lấy tồn khác kho), chờ thủ kho nơi nhận xác nhận. Phạm vi kho của người xem. */
+  async listWovenInTransit(warehouseScope: string | null): Promise<WovenInTransitDto[]> {
+    const rows = await this.prisma.cancelledGoodsTransfer.findMany({
+      where: {
+        kind: CancelledGoodsKind.WOVEN,
+        receiveStatus: CancelledGoodsReceiveStatus.PENDING,
+        ...(warehouseScope ? { toWarehouseCode: warehouseScope } : {}),
+      },
+      orderBy: { id: 'asc' },
+      take: 200,
+      select: {
+        id: true,
+        qty: true,
+        pieceId: true,
+        targetItemId: true,
+        sourceItemId: true,
+        fromWarehouseCode: true,
+        toWarehouseCode: true,
+        createdAt: true,
+      },
+    });
+    if (rows.length === 0) return [];
+    const itemIds = [...new Set(rows.flatMap((r) => [r.targetItemId, r.sourceItemId]))];
+    const [items, pieces, warehouses] = await Promise.all([
+      this.prisma.productionInvoiceItem.findMany({
+        where: { id: { in: itemIds } },
+        select: {
+          id: true,
+          productionInvoiceId: true,
+          lsxCode: true,
+          mfgProduct: { select: { factoryCode: true } },
+        },
+      }),
+      this.prisma.piece.findMany({
+        where: {
+          id: {
+            in: [...new Set(rows.map((r) => r.pieceId).filter((p): p is bigint => p != null))],
+          },
+        },
+        select: { id: true, code: true, name: true },
+      }),
+      this.prisma.warehouse.findMany({
+        where: {
+          code: {
+            in: [...new Set(rows.flatMap((r) => [r.fromWarehouseCode, r.toWarehouseCode]))].filter(
+              (c): c is string => !!c,
+            ),
+          },
+        },
+        select: { code: true, name: true },
+      }),
+    ]);
+    const itemById = new Map(items.map((i) => [i.id.toString(), i]));
+    const pieceById = new Map(pieces.map((p) => [p.id.toString(), p]));
+    const whName = new Map(warehouses.map((w) => [w.code, w.name]));
+    const lenh = await loadLenhDisplayCodes(
+      this.prisma,
+      items.map((i) => i.productionInvoiceId).filter((x): x is bigint => x != null),
+    );
+    const lenhOf = (id: bigint) => {
+      const it = itemById.get(id.toString());
+      return (
+        (it?.productionInvoiceId != null ? lenh.get(it.productionInvoiceId.toString()) : null) ??
+        it?.lsxCode ??
+        ''
+      );
+    };
+    return rows.map((r) => {
+      const piece = r.pieceId != null ? pieceById.get(r.pieceId.toString()) : undefined;
+      return {
+        id: r.id.toString(),
+        qty: r.qty,
+        pieceCode: piece?.code ?? '',
+        pieceName: piece?.name ?? '',
+        targetLenhCode: lenhOf(r.targetItemId),
+        targetFactoryCode: itemById.get(r.targetItemId.toString())?.mfgProduct.factoryCode ?? '',
+        sourceLenhCode: lenhOf(r.sourceItemId),
+        sourceFactoryCode: itemById.get(r.sourceItemId.toString())?.mfgProduct.factoryCode ?? '',
+        fromWarehouseName: whName.get(r.fromWarehouseCode ?? '') ?? r.fromWarehouseCode ?? '',
+        toWarehouseName: whName.get(r.toWarehouseCode ?? '') ?? r.toWarehouseCode ?? '',
+        createdAt: r.createdAt.toISOString(),
+      };
+    });
+  }
+
+  /** Thủ kho thành phẩm nơi nhận xác nhận đã nhận khung (bắt buộc ảnh phiếu chuyển đã ký, cùng luật phiếu CK) -> Chuyền kiểm đếm. */
+  async confirmWovenReceived(
+    actorId: string,
+    transferId: string,
+    signedSlipUrls: string[],
+    warehouseScope: string | null,
+  ): Promise<WovenInTransitDto[]> {
+    const id = parseBigIntId(transferId);
+    const urls = (signedSlipUrls ?? []).map((u) => u.trim()).filter(Boolean);
+    if (urls.length === 0) {
+      throw new BadRequestException('Phải tải lên ít nhất 1 ảnh phiếu chuyển đã ký');
+    }
+    const targetOrderId = await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `woven-receive:${id}`);
+      const row = await tx.cancelledGoodsTransfer.findUnique({
+        where: { id },
+        select: { receiveStatus: true, toWarehouseCode: true, targetItemId: true, pieceId: true },
+      });
+      if (!row) throw new NotFoundException(`Không tìm thấy dòng chuyển khung ${transferId}`);
+      if (row.receiveStatus !== CancelledGoodsReceiveStatus.PENDING) {
+        throw new ConflictException(
+          'Dòng chuyển khung này không còn chờ nhận (đã nhận rồi hoặc không cần chuyển)',
+        );
+      }
+      if (warehouseScope && warehouseScope !== row.toWarehouseCode) {
+        throw new ForbiddenException('Bạn chỉ xác nhận được khung chuyển về kho mình phụ trách');
+      }
+      await tx.cancelledGoodsTransfer.update({
+        where: { id },
+        data: {
+          receiveStatus: CancelledGoodsReceiveStatus.RECEIVED,
+          receivedById: actorId,
+          receivedAt: new Date(),
+          signedSlipUrls: urls,
+        },
+      });
+      const order = await tx.productionOrder.findFirst({
+        where: { productionInvoiceItemId: row.targetItemId },
+        select: { id: true },
+      });
+      return order?.id ?? null;
+    });
+    if (targetOrderId != null) {
+      this.realtime.publishEntityChanged({
+        entity: 'PRODUCTION_ORDER',
+        entityId: targetOrderId,
+        action: 'UPDATED',
+        actorId,
+      });
+    }
+    return this.listWovenInTransit(warehouseScope);
   }
 }
