@@ -426,6 +426,7 @@ export class CancelledGoodsService {
           productionInvoiceId: true,
           lsxCode: true,
           mfgProduct: { select: { factoryCode: true } },
+          productionOrder: { select: { status: true } },
         },
       }),
       this.prisma.piece.findMany({
@@ -476,27 +477,44 @@ export class CancelledGoodsService {
         fromWarehouseName: whName.get(r.fromWarehouseCode ?? '') ?? r.fromWarehouseCode ?? '',
         toWarehouseName: whName.get(r.toWarehouseCode ?? '') ?? r.toWarehouseCode ?? '',
         createdAt: r.createdAt.toISOString(),
+        targetCancelled:
+          itemById.get(r.targetItemId.toString())?.productionOrder?.status ===
+          ProductionOrderStatus.CANCELLED,
       };
     });
   }
 
-  /** Thủ kho thành phẩm nơi nhận xác nhận đã nhận khung (bắt buộc ảnh phiếu chuyển đã ký, cùng luật phiếu CK) -> Chuyền kiểm đếm. */
+  /**
+   * Thủ kho thành phẩm nơi nhận xác nhận số khung thực nhận (nhận > 0 thì bắt buộc ảnh phiếu chuyển đã ký, cùng luật phiếu CK).
+   * Dòng chỉ còn đúng số thực nhận; phần không nhận về lại tồn kho nguồn (nhận 0 = bỏ dòng) rồi cấp tồn lại. Lệnh nhận đã huỷ
+   * trong lúc khung đang chuyển (Nhân 27/11 cách 2): phần nhận thành tồn của lệnh đó ở kho này.
+   */
   async confirmWovenReceived(
     actorId: string,
     transferId: string,
     signedSlipUrls: string[],
     warehouseScope: string | null,
+    receivedQty?: number,
   ): Promise<WovenInTransitDto[]> {
     const id = parseBigIntId(transferId);
     const urls = (signedSlipUrls ?? []).map((u) => u.trim()).filter(Boolean);
-    if (urls.length === 0) {
+    if (receivedQty != null && (!Number.isInteger(receivedQty) || receivedQty < 0)) {
+      throw new BadRequestException('Số khung thực nhận phải là số nguyên ≥ 0');
+    }
+    if (urls.length === 0 && receivedQty !== 0) {
       throw new BadRequestException('Phải tải lên ít nhất 1 ảnh phiếu chuyển đã ký');
     }
-    const targetOrderId = await this.prisma.$transaction(async (tx) => {
+    const done = await this.prisma.$transaction(async (tx) => {
       await lockBusinessKey(tx, `woven-receive:${id}`);
       const row = await tx.cancelledGoodsTransfer.findUnique({
         where: { id },
-        select: { receiveStatus: true, toWarehouseCode: true, targetItemId: true, pieceId: true },
+        select: {
+          receiveStatus: true,
+          toWarehouseCode: true,
+          targetItemId: true,
+          pieceId: true,
+          qty: true,
+        },
       });
       if (!row) throw new NotFoundException(`Không tìm thấy dòng chuyển khung ${transferId}`);
       if (row.receiveStatus !== CancelledGoodsReceiveStatus.PENDING) {
@@ -507,25 +525,43 @@ export class CancelledGoodsService {
       if (warehouseScope && warehouseScope !== row.toWarehouseCode) {
         throw new ForbiddenException('Bạn chỉ xác nhận được khung chuyển về kho mình phụ trách');
       }
-      await tx.cancelledGoodsTransfer.update({
-        where: { id },
-        data: {
-          receiveStatus: CancelledGoodsReceiveStatus.RECEIVED,
-          receivedById: actorId,
-          receivedAt: new Date(),
-          signedSlipUrls: urls,
-        },
-      });
+      const got = receivedQty ?? row.qty;
+      if (got > row.qty) {
+        throw new BadRequestException(
+          `Số khung thực nhận (${got}) không được vượt số đang chuyển (${row.qty})`,
+        );
+      }
+      if (got === 0) {
+        await tx.cancelledGoodsTransfer.delete({ where: { id } });
+      } else {
+        await tx.cancelledGoodsTransfer.update({
+          where: { id },
+          data: {
+            qty: got,
+            receiveStatus: CancelledGoodsReceiveStatus.RECEIVED,
+            receivedById: actorId,
+            receivedAt: new Date(),
+            signedSlipUrls: urls,
+          },
+        });
+      }
       const order = await tx.productionOrder.findFirst({
         where: { productionInvoiceItemId: row.targetItemId },
-        select: { id: true },
+        select: { id: true, status: true },
       });
-      return order?.id ?? null;
+      return { order, pieceId: row.pieceId, short: got < row.qty };
     });
-    if (targetOrderId != null) {
+    // Phần không nhận về lại kho nguồn; lệnh nhận đã huỷ thì phần nhận thành tồn kho này - cả hai cần cấp tồn lại.
+    if (done.short || done.order?.status === ProductionOrderStatus.CANCELLED) {
+      await this.wovenStock.allocateAll(
+        actorId,
+        done.pieceId != null ? { pieceId: done.pieceId } : {},
+      );
+    }
+    if (done.order) {
       this.realtime.publishEntityChanged({
         entity: 'PRODUCTION_ORDER',
-        entityId: targetOrderId,
+        entityId: done.order.id,
         action: 'UPDATED',
         actorId,
       });

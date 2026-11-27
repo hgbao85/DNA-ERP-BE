@@ -238,19 +238,22 @@ describe('WovenStockService', () => {
     );
   });
 
-  it('lệnh nhận bị huỷ khi khung còn đang chuyển: bỏ dòng chờ nhận, khung về lại tồn nguồn', async () => {
-    const { svc, db } = make({});
-    db.productionOrder.findUnique = jest.fn().mockResolvedValue({ productionInvoiceItemId: 9n });
-    db.cancelledGoodsTransfer.deleteMany = jest.fn().mockResolvedValue({ count: 2 });
-    await expect(svc.revertPendingIncoming(70n, 'u1')).resolves.toBe(2);
-    expect(db.cancelledGoodsTransfer.deleteMany).toHaveBeenCalledWith({
-      where: { kind: 'WOVEN', targetItemId: 9n, receiveStatus: 'PENDING' },
-    });
-  });
-
-  it('bỏ dòng đang chuyển lỗi thì không chặn huỷ lệnh', async () => {
-    const { svc, db } = make({});
-    db.productionOrder.findUnique = jest.fn().mockRejectedValue(new Error('db'));
-    await expect(svc.revertPendingIncoming(70n, 'u1')).resolves.toBe(0);
+  it('Nhân 27/11 cách 2: lệnh huỷ chỉ có thêm tồn từ khung đã lấy vào khi thủ kho nơi nhận đã xác nhận (đang chuyển chưa tính)', async () => {
+    const { svc, db } = make({ reqs: [req(1n, 70n, 109n, 'thanh-pham-2', null)] });
+    await svc.loadStock(db);
+    const inArgs = db.cancelledGoodsTransfer.groupBy.mock.calls.find(
+      (c: any[]) => c[0].by[0] === 'targetItemId',
+    )[0];
+    expect(inArgs.where).toEqual(
+      expect.objectContaining({
+        targetItemId: { in: [109n] },
+        OR: [{ receiveStatus: null }, { receiveStatus: 'RECEIVED' }],
+      }),
+    );
+    // phần lấy ra (trừ nguồn) vẫn tính mọi dòng kể cả đang chuyển
+    const outArgs = db.cancelledGoodsTransfer.groupBy.mock.calls.find(
+      (c: any[]) => c[0].by[0] === 'sourceItemId',
+    )[0];
+    expect(outArgs.where.OR).toBeUndefined();
   });
 });

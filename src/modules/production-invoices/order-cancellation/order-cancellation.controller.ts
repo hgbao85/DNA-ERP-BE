@@ -111,7 +111,13 @@ export class OrderCancellationController {
     @CurrentUser('id') userId: string,
     @CurrentUser('warehouseScope') warehouseScope: string | null,
   ) {
-    return this.goods.confirmWovenReceived(userId, id, dto.signedSlipUrls, warehouseScope);
+    return this.goods.confirmWovenReceived(
+      userId,
+      id,
+      dto.signedSlipUrls,
+      warehouseScope,
+      dto.receivedQty,
+    );
   }
 
   @Get('cut-steel')

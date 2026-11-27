@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment -- expect.objectContaining trả any */
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { CancelledGoodsService } from './cancelled-goods.service';
 
 /**
@@ -178,5 +178,84 @@ describe('CancelledGoodsService.transfer (Q5/Q6)', () => {
     expect(realtime.publishEntityChanged).toHaveBeenCalledWith(
       expect.objectContaining({ entity: 'PRODUCTION_ORDER', entityId: 66n }),
     );
+  });
+});
+
+/** Khung đan lấy khác kho TP: thủ kho nơi nhận nhập số thực nhận; phần không nhận về lại kho nguồn (Nhân 27/11 cách 2). */
+describe('CancelledGoodsService.confirmWovenReceived', () => {
+  function setup(opts: { qty?: number; status?: string; orderStatus?: string } = {}) {
+    const tx = {
+      $executeRaw: jest.fn(),
+      cancelledGoodsTransfer: {
+        findUnique: jest.fn().mockResolvedValue({
+          receiveStatus: opts.status ?? 'PENDING',
+          toWarehouseCode: 'thanh-pham-2',
+          targetItemId: 109n,
+          pieceId: 334n,
+          qty: opts.qty ?? 3,
+        }),
+        update: jest.fn(),
+        delete: jest.fn(),
+      },
+      productionOrder: {
+        findFirst: jest.fn().mockResolvedValue({ id: 70n, status: opts.orderStatus ?? 'RELEASED' }),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn((fn: (t: typeof tx) => Promise<unknown>) => fn(tx)),
+    };
+    const realtime = { publishEntityChanged: jest.fn() };
+    const wovenStock = { allocateAll: jest.fn() };
+    const svc = new CancelledGoodsService(prisma as never, realtime as never, wovenStock as never);
+    (svc as unknown as { listWovenInTransit: jest.Mock }).listWovenInTransit = jest
+      .fn()
+      .mockResolvedValue([]);
+    return { svc, tx, wovenStock };
+  }
+  const SLIP = ['https://x/phieu.jpg'];
+
+  it('bỏ trống số = nhận đủ, không cấp tồn lại khi lệnh nhận còn chạy', async () => {
+    const { svc, tx, wovenStock } = setup();
+    await svc.confirmWovenReceived('u1', '5', SLIP, 'thanh-pham-2');
+    expect(tx.cancelledGoodsTransfer.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ qty: 3, receiveStatus: 'RECEIVED' }),
+      }),
+    );
+    expect(wovenStock.allocateAll).not.toHaveBeenCalled();
+  });
+
+  it('nhận thiếu: dòng còn đúng số thực nhận, phần thiếu về kho nguồn rồi cấp tồn lại', async () => {
+    const { svc, tx, wovenStock } = setup();
+    await svc.confirmWovenReceived('u1', '5', SLIP, 'thanh-pham-2', 1);
+    expect(tx.cancelledGoodsTransfer.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ qty: 1 }) }),
+    );
+    expect(wovenStock.allocateAll).toHaveBeenCalledWith('u1', { pieceId: 334n });
+  });
+
+  it('lệnh nhận đã huỷ: phần nhận thành tồn kho này, cấp tồn lại', async () => {
+    const { svc, wovenStock } = setup({ orderStatus: 'CANCELLED' });
+    await svc.confirmWovenReceived('u1', '5', SLIP, 'thanh-pham-2', 3);
+    expect(wovenStock.allocateAll).toHaveBeenCalledWith('u1', { pieceId: 334n });
+  });
+
+  it('nhận 0: bỏ dòng, không cần ảnh phiếu', async () => {
+    const { svc, tx } = setup({ orderStatus: 'CANCELLED' });
+    await svc.confirmWovenReceived('u1', '5', [], 'thanh-pham-2', 0);
+    expect(tx.cancelledGoodsTransfer.delete).toHaveBeenCalledWith({ where: { id: 5n } });
+    expect(tx.cancelledGoodsTransfer.update).not.toHaveBeenCalled();
+  });
+
+  it('chặn: nhận > 0 mà không ảnh phiếu, nhận vượt số đang chuyển, dòng đã nhận', async () => {
+    await expect(
+      setup().svc.confirmWovenReceived('u1', '5', [], 'thanh-pham-2', 2),
+    ).rejects.toThrow(BadRequestException);
+    await expect(
+      setup().svc.confirmWovenReceived('u1', '5', SLIP, 'thanh-pham-2', 4),
+    ).rejects.toThrow(BadRequestException);
+    await expect(
+      setup({ status: 'RECEIVED' }).svc.confirmWovenReceived('u1', '5', SLIP, 'thanh-pham-2'),
+    ).rejects.toThrow(ConflictException);
   });
 });

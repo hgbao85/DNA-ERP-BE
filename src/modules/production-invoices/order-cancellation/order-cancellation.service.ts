@@ -968,8 +968,8 @@ export class OrderCancellationService {
     await this.afterApproved(outcome, actor.id);
     // Q6 (anh Nhân 26/11/2026): khung đã đan của SKU vừa huỷ thành tồn khung đan kho thành phẩm - cấp ngay cho lệnh đang chạy cần
     // đúng mảnh + màu dây (best-effort, lỗi chỉ log).
-    // Lệnh vừa huỷ đang chờ nhận khung đan từ kho thành phẩm khác (chưa nhận) -> bỏ, khung về lại tồn ở kho nguồn rồi cấp lại.
-    await this.wovenStock?.revertPendingIncoming(row.productionOrderId, actor.id);
+    // Khung đang chuyển tới lệnh vừa huỷ (chưa nhận) vẫn chờ thủ kho nơi nhận nhập số thực nhận; chưa tính vào tồn của lệnh
+    // huỷ này cho tới khi xác nhận.
     await this.wovenStock?.allocateAll(actor.id);
 
     await this.resolvePending(row.productionOrderId, id);
