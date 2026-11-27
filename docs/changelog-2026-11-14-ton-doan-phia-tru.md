@@ -1,6 +1,6 @@
-# 14/11/2026 - Tồn đoạn theo lệnh: phía trừ, sổ báo vượt, đổi xưởng, kiểm kê đoạn, chuyển đổi dữ liệu cũ (Bảo)
+# 14/11/2026 - Tồn đoạn theo lệnh: phía trừ, sổ báo vượt, đổi xưởng, kiểm kê đoạn, chuyển đổi dữ liệu cũ (IT)
 
-Nối tiếp `changelog-2026-11-13-ton-doan-theo-lenh.md` (khung + phía cộng của Sang). Vẫn **mặc định TẮT** (`SEGMENT_STOCK_ENABLED`):
+Nối tiếp `changelog-2026-11-13-ton-doan-theo-lenh.md` (khung + phía cộng của IT). Vẫn **mặc định TẮT** (`SEGMENT_STOCK_ENABLED`):
 công tắc tắt thì Hàn / Sơn trừ đoạn y như cũ, đổi xưởng không đụng tồn đoạn. Riêng kiểm kê đoạn và sổ báo vượt chạy cả khi tắt
 (sổ trống vì chưa có gì ghi vào).
 
@@ -17,8 +17,8 @@ công tắc tắt thì Hàn / Sơn trừ đoạn y như cũ, đổi xưởng kh�
 3. **Sổ báo vượt** - module mới `segment-overages`:
    - `GET /segment-overages?status=open|resolved|all&productionInvoiceId=` (PRODUCTION_BATCH VIEW). QLSX gắn xưởng chỉ thấy lệnh xưởng mình.
    - `POST /segment-overages/:id/resolve {reason}` (QLSX / Admin, lý do ≥ 3 ký tự): đóng có điều kiện `resolvedAt IS NULL` (2 người bấm cùng lúc → 409), ghi audit log, chặn QLSX xưởng khác.
-   - Chưa có thông báo cho QLSX khi phát sinh dòng mới - chờ anh Nhân trả lời ý 2.
-4. **Đổi xưởng** (câu 8): `SegmentStockService.transferOrderHoldings` (hàm mới trong file của Sang), gọi trong transaction đổi xưởng
+   - Chưa có thông báo cho QLSX khi phát sinh dòng mới - chờ quản lý trả lời ý 2.
+4. **Đổi xưởng** (câu 8): `SegmentStockService.transferOrderHoldings` (hàm mới trong file của IT), gọi trong transaction đổi xưởng
    (`WorkshopMoveService.afterWorkshopChanged`) khi bật công tắc:
    - phần lệnh CÒN GIỮ ở kho Phôi khác → bút toán WAREHOUSE_TRANSFER sang kho Phôi xưởng mới + giữ cho lệnh ở kho mới; nhật ký TRANSFER 2 chiều;
    - kho cũ không đủ tồn thật (dữ liệu cũ) → chỉ chuyển phần có, phần còn lại nhả (RELEASE);
@@ -28,7 +28,7 @@ công tắc tắt thì Hàn / Sơn trừ đoạn y như cũ, đổi xưởng kh�
    phía cộng / phía trừ. Không đụng phần giữ của lệnh - chênh vào / ra cột Dư.
 6. **Chuyển đổi dữ liệu cũ** (câu 10): `POST /segment-stock/legacy-conversion {dryRun}` (chỉ Admin, mặc định xem thử):
    - 1 transaction: ô đoạn cũ (trừ PRODUCTION / OPENING_BALANCE) về 0 bằng ADJUST → phía cộng mọi lệnh chưa kết thúc
-     (`SegmentProductionService.recomputeInTx`, tách từ `recomputeForPi` - file của Sang) → phát lại phía trừ theo mã đoạn cho đợt
+     (`SegmentProductionService.recomputeInTx`, tách từ `recomputeForPi` - file của IT) → phát lại phía trừ theo mã đoạn cho đợt
      Hàn / Sơn cũ có bút toán SEGMENT_CONSUME khoá cũ, của lệnh chưa kết thúc (không ghi sổ báo vượt, thiếu trả trong báo cáo);
    - xem thử chạy y hệt rồi rollback; chạy thật cần bật công tắc và bảng giữ đoạn / phía cộng còn trống (chạy đúng 1 lần).
    - Xem thử trên DB dev 14/11: 6 ô âm về 0 (−30, −30, −30, −60, −10, −20), 2 lệnh PB đang chạy, 3 đợt Hàn trừ lại, thiếu 180 (dữ liệu thử chưa có KCS Phôi). Chạy lại ra đúng số cũ → rollback đúng.
@@ -63,13 +63,13 @@ công tắc tắt thì Hàn / Sơn trừ đoạn y như cũ, đổi xưởng kh�
    đó KCS chấm lỗi làm giảm số của lệnh, phía cộng trừ nhầm ở kho mới và kho cũ còn dư ảo. Tránh đổi xưởng lệnh đã cắt dư cho
    tới khi sửa (tách dòng `SegmentProduction` theo kho - cần migration).
 
-## Bổ sung 14/11 chiều - anh Nhân trả lời ý 2 (sổ báo vượt)
+## Bổ sung 14/11 chiều - quản lý trả lời ý 2 (sổ báo vượt)
 
 - Thông báo mới `SEGMENT_OVERAGE_REPORTED` (ACTION_REQUIRED, WARNING) cho QLSX khi đợt Hàn / Sơn ghi sổ báo vượt: gửi SAU khi
   transaction trừ đoạn commit, 1 thông báo / đợt (dedupeKey theo đợt), QLSX xưởng khác tự bị bỏ (piCode), tiêu đề hiện số LSX.
   Bấm vào mở tab "Sổ báo vượt đoạn". Tự đóng khi QLSX đóng hết dòng của đợt.
 - KHSX: tab "Sổ báo vượt đoạn" chỉ xem (Giám đốc đã có ở MfgApp).
-- Ý 3 (cộng dần sau mỗi lần KCS đạt) khớp code đã có. Ý 1 (mã đoạn) Sang đang đề xuất lại với anh Nhân.
+- Ý 3 (cộng dần sau mỗi lần KCS đạt) khớp code đã có. Ý 1 (mã đoạn) Sang đang đề xuất lại với quản lý.
 
 ## Thử bật công tắc trên bản sao DB local (14/11)
 
@@ -91,4 +91,4 @@ chung KHÔNG bị ghi. Đã xoá bản sao sau khi thử. Đạt:
 Lỗi tìm được (đã sửa FE): màn Kho phôi hiện kho ảo "Cân đối tồn kho" (OPENING_BALANCE) thành 1 kho số âm sau khi kiểm kê / chuyển
 đổi - nay bỏ mọi kho ảo.
 
-Chưa thử ở đây (phần của Sang, Sang đã thử bản sao hôm 13/11): phía cộng từ KCS Phôi thật, nhả giữ khi QLSX Kết thúc lệnh.
+Chưa thử ở đây (phần của IT đã thử bản sao hôm 13/11): phía cộng từ KCS Phôi thật, nhả giữ khi QLSX Kết thúc lệnh.

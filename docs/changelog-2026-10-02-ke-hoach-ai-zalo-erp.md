@@ -40,15 +40,15 @@ rủi ro/cách xử lý, phân vai, phương án thay thế, và 5 việc cần 
 - ERP đã theo dõi đúng loại số này ở màn QLSX "Tiến độ Phôi theo loại sắt" (Cắt/Uốn/Dập/Tán theo cỡ đoạn) → đích ghi là báo cắt/báo công đoạn Phôi.
 - Đã sửa trang kế hoạch (version 2, cùng URL): thay mục "quy ước tin nhắn" bằng mục báo cáo thực tế, cập nhật bước 1/3, rủi ro, lộ trình, quyết định.
 
-## 6. Review lịch sử trao đổi anh Nhân – Claude (4/10 → 10/10/2026) và đối chiếu với ERP hiện tại (2026-10-10)
-> Trạng thái: **CHỈ REVIEW, CHƯA SỬA CODE.** Nguồn: `LICH_SU_TRAO_DOI_CLAUDE_den_10-10-2026.md` (12.519 dòng, 333 tin anh Nhân).
+## 6. Review lịch sử trao đổi quản lý – Claude (4/10 → 10/10/2026) và đối chiếu với ERP hiện tại (2026-10-10)
+> Trạng thái: **CHỈ REVIEW, CHƯA SỬA CODE.** Nguồn: `LICH_SU_TRAO_DOI_CLAUDE_den_10-10-2026.md` (12.519 dòng, 333 tin quản lý).
 > Đối chiếu với `prisma/schema.prisma`, `cutting-proposals`, `production-invoices`, `purchase-proposals`, `weaving-*`.
 
 **Bối cảnh rút ra:** cả tuần, việc điều hành (tiến độ xưởng, kế hoạch LSX, cắt sắt, đề xuất mua, booking) chạy hoàn toàn bằng
-Zalo + Excel + một phiên Claude trên máy anh Nhân. Log không nhắc ERP lần nào. Nhiều lỗi trong log đến từ việc trộn nhiều nguồn
-(file chị Ngân, chị Nhớ, Thảo Trinh, nhóm Tiến Độ Tổng chưa quét) và tự đoán (LSX308 vs 312, màu dây, logo Patiojoy, "N8").
+Zalo + Excel + một phiên Claude trên máy quản lý. Log không nhắc ERP lần nào. Nhiều lỗi trong log đến từ việc trộn nhiều nguồn
+(file của các bộ phận, nhóm Tiến Độ Tổng chưa quét) và tự đoán (LSX308 vs 312, màu dây, logo Patiojoy, "N8").
 
-### 6.1 Quy tắc nghiệp vụ anh Nhân đã chốt trong log (bản cuối)
+### 6.1 Quy tắc nghiệp vụ quản lý đã chốt trong log (bản cuối)
 - **Lịch LSX theo ngày N (bắt đầu phôi):** Phú An 1 lệnh/ngày; Phước An cách 3 ngày. Phú An: VT nhóm 1–2 (sắt, dây đan, đinh, nút…)
   về hết N−1 (sớm nhất N−5); phôi/xuất đan xong N+2; VT còn lại về hết N+8; thu mảnh N+9→N+12; chuyền kiểm N+12; đóng gói N+14.
   Phước An = Phú An +2 (N+4, N+10, N+11→N+14, N+14, N+16). Không cho VT về sớm quá 4 ngày (kho chật). MY-324/325 (sofa): +10 ngày từ VT còn lại trở đi.
@@ -57,7 +57,7 @@ Zalo + Excel + một phiên Claude trên máy anh Nhân. Log không nhắc ERP l
 - **Cắt sắt:** mỗi quy cách 1 chiều dài cây chung cho mọi lệnh và cả 2 xưởng; tròn đuôi 0/5 cm; tối đa 6,5 m; mỗi kiểu cắt hao < 1%
   (nhát cưa không tính hao, tề đầu 10 mm có tính); nhiều kiểu cắt được nhưng ít nhất; gộp tối đa **2** lệnh (đổi từ 3), cùng xưởng, cùng quy cách,
   ưu tiên hạn giao gần nhau (riêng 20×20 cho gộp bàn I3 mới với bàn J55); đoạn dư chuyển nhóm sau, cây cuối cắt vừa đủ, phần còn lại giữ nguyên thanh nhập kho.
-  kg/m lấy theo phiếu so sánh giá của chị Nhàn, không theo công thức lý thuyết.
+  kg/m lấy theo phiếu so sánh giá của người mua A, không theo công thức lý thuyết.
 - **Đề xuất mua:** hao hụt sắt ống/hộp theo file cắt; la tấm/pass/thép dây 1%; bì zipper 1%; dây đan/dây hàn/CO2/nhãn số/HDLR/poster 0%;
   còn lại 1,5%. La tấm làm tròn tới 0,1 tấm. Màu dây theo đơn khách (ô tiếng Việt), không theo định mức. Phải trừ tồn và loại lệnh đã có đề xuất. Chia file theo 3 người mua.
 - **Báo cáo:** phân biệt rõ "nhập kho (thu mảnh về)" và "chuyền kiểm"; booking phải ghi thiếu bao nhiêu, ở công đoạn nào, mảnh nào ở điểm đan nào.
@@ -66,9 +66,9 @@ Zalo + Excel + một phiên Claude trên máy anh Nhân. Log không nhắc ERP l
 | Nhu cầu trong log | ERP hiện tại | Đánh giá |
 |---|---|---|
 | Mốc kế hoạch theo N, tự tính | `ProductionInvoiceItemStage` (FRAME, FRAME_PHOI/HAN/SON, WEAVING, TRANSFER_CHECK, PACKAGING) + `materialDeadline`/`deliveryDeadline` — **nhập tay**, không có ngày N, không có mốc "VT còn lại" | THIẾU: không có ngày bắt đầu phôi và công thức mốc theo xưởng |
-| Xưởng cơ khí Phú An / Phước An, tách bàn–ghế | Không có khái niệm xưởng. `warehouseCode` trên PI item là kho **thành phẩm/đóng gói**, không phải xưởng cơ khí | THIẾU — anh Nhân dùng 2 cột riêng "xưởng chính" và "kho đóng gói" (8/10) |
+| Xưởng cơ khí Phú An / Phước An, tách bàn–ghế | Không có khái niệm xưởng. `warehouseCode` trên PI item là kho **thành phẩm/đóng gói**, không phải xưởng cơ khí | THIẾU — quản lý dùng 2 cột riêng "xưởng chính" và "kho đóng gói" (8/10) |
 | Hàng gỗ (không phôi/đan) | Luồng LSX giả định có phôi sắt | THIẾU luồng riêng |
-| 1 chiều dài/quy cách cho **mọi** lệnh | `solverStockLengthsByMaterial` ở **từng PI (đợt)** — quyết định 2026-09-16 cố ý KHÔNG đặt ở Material | **MÂU THUẪN** với ràng buộc anh Nhân chốt 8/10 → cần anh Nhân/KHSX quyết lại |
+| 1 chiều dài/quy cách cho **mọi** lệnh | `solverStockLengthsByMaterial` ở **từng PI (đợt)** — quyết định 2026-09-16 cố ý KHÔNG đặt ở Material | **MÂU THUẪN** với ràng buộc quản lý chốt 8/10 → cần quản lý/KHSX quyết lại |
 | Dải chiều dài 5–6,5 m, tròn 0/5 cm | `solverMinLengthMm=5000`, `solverMaxLengthMm=6000`, `solverLengthStepMm=10` (mặc định) | LỆCH: max 6000 vs 6500; bước 10 mm vs 50 mm (chỉ là cấu hình, chỉnh qua SystemConfig) |
 | Hao < 1%, nhát cưa không tính hao, tề đầu tính | `solverMaxWastePercentage=1`, `trim=10`, kerf tính là "sắt đã dùng" (best-fill.util) | KHỚP (nhát cưa log dùng 3 mm, ERP mặc định 1 mm — cần xác nhận) |
 | Gộp tối đa 2 lệnh, cùng xưởng | PI gộp (`isMerged`) không giới hạn số SKU, không biết xưởng | THIẾU ràng buộc |
@@ -81,7 +81,7 @@ Zalo + Excel + một phiên Claude trên máy anh Nhân. Log không nhắc ERP l
 | Màu dây theo đơn khách | `ProductVariant.colorCode` + `customerId` | KHỚP một phần (định mức dây cần theo variant) |
 | Mảnh nào ở điểm đan nào | `WeavingIssue`/`WeavingReceipt` theo LSX × mảnh × điểm đan | KHỚP — trả lời được ngay nếu xưởng nhập liệu |
 | Nhập kho vs chuyền kiểm | `WeavingReceipt` (thu mảnh) tách với `TransferCheckResult` (chuyền kiểm) | KHỚP — ERP đã tách đúng chỗ log bị nhầm |
-| Booking / cont (số booking, ngày lấy cont, cut-off, ETD) ↔ LSX, bù hàng giữa lệnh | Không có model Booking; chỉ `SalesOrderItem.shippedQty` + `PackagingRecord.boxesPacked` | THIẾU — đây là việc anh Nhân hỏi nhiều nhất 9–10/10 |
+| Booking / cont (số booking, ngày lấy cont, cut-off, ETD) ↔ LSX, bù hàng giữa lệnh | Không có model Booking; chỉ `SalesOrderItem.shippedQty` + `PackagingRecord.boxesPacked` | THIẾU — đây là việc quản lý hỏi nhiều nhất 9–10/10 |
 | Tồn thành phẩm theo khách | `StockQuant.productVariantId` (kho thành phẩm) | KHỚP |
 
 ### 6.3 Đề xuất thứ tự (chưa làm, chờ quyết)

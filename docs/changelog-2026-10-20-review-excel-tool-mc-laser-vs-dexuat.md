@@ -976,7 +976,7 @@ Replay requestParams 190/191/192 (đợt 2 SKU GHE-J55 + BAN-8-MEIYING-J55) qua 
 Bối cảnh, giao diện và kết quả trình duyệt: changelog chính `D:\DNA-ERP-BE\docs\changelog-2026-10-21-review-du-lieu-test-solve.md` mục 32. Ở đây
 chỉ ghi phần BE trong worktree.
 - `src/common/utils/merge-rules.util.ts` (mới): `ownSteelDeadlineOf` (materialDeadline ?? stage FRAME, KHÔNG lấy hạn PI), `maxGapDays(N) = N − 1`
-  (khung tính cả ngày đầu, Sếp Nhân "ngày 1 gộp được ngày 3, ko được gộp với ngày 4"), `checkMergeRules(items, {windowDays, maxSkus}, 'batch' |
+  (khung tính cả ngày đầu, quản lý "ngày 1 gộp được ngày 3, ko được gộp với ngày 4"), `checkMergeRules(items, {windowDays, maxSkus}, 'batch' |
   'invoice')`, `skuLabel(factoryCode, orderCode)` (nhãn câu báo kèm mã PO). Spec 7 test.
 - Schema/migration: `solverMergeWindowDays` (20261024100000 thêm, mặc định 7 → 20261024110000 đổi 3) và `solverMergeMaxSkus` (20261024110000 thêm,
   mặc định 5 → 20261024120000 đổi 2; UPDATE giá trị cũ còn đúng mặc định). Đã áp DB test bằng `scratchpad/migrate-solver-test.ps1`. DTO cập nhật:

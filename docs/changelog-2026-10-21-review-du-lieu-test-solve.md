@@ -22,8 +22,8 @@ Script trích + kiểm: scratchpad `bench/parse_bom.py` (openpyxl, đọc cả g
 
 ## 2. Phát hiện
 
-### 2.1 Nghi sai số liệu (ảnh hưởng trực tiếp số sắt cần cắt/mua)
-1. **`LSX133 SL 1048`: FI 4 = 6 mm (r20, r28) và Fi 6 = 12 mm (r36)**; mọi sheet J55 khác ghi 60 mm và 150 mm. Nghi gõ
+### 2.1 người mua C sai số liệu (ảnh hưởng trực tiếp số sắt cần cắt/mua)
+1. **`LSX133 SL 1048`: FI 4 = 6 mm (r20, r28) và Fi 6 = 12 mm (r36)**; mọi sheet J55 khác ghi 60 mm và 150 mm. Người mua C gõ
    thiếu số 0 / sai.
 2. **I41 (cả sheet) và I42 khối Mê ngồi: SL cần = Số đoạn × SỐ LƯỢNG, bỏ qua cột Số ghế** (F = 2 hoặc 4), trong khi I42
    khối Tựa lưng và mọi file khác dùng E × F × SỐ LƯỢNG. Nếu F là số chi tiết/bộ thật thì 33 dòng đang **thiếu 1/2 đến
@@ -801,10 +801,10 @@ người dùng chọn: **"Ít hao hụt nhất trong cửa sổ hạn giao"** (A
     7 ngày giới hạn lại; nếu vẫn quá lớn cần thêm trần số đơn/đợt — chưa làm, chờ người dùng.
   - Khi deploy: chạy thêm migration `20261024100000_add_solver_merge_window_days`.
 
-## 31. 2026-10-24 — Review tin nhắn Sếp Nhân về gộp SKU + chốt luật gộp — ĐÃ LÀM ở mục 32 (trần mặc định đổi 5 → 2, khung tính cả ngày đầu)
+## 31. 2026-10-24 — Review tin nhắn quản lý về gộp SKU + chốt luật gộp — ĐÃ LÀM ở mục 32 (trần mặc định đổi 5 → 2, khung tính cả ngày đầu)
 
 Người dùng hỏi trong nhóm: "chỗ gộp SKU có nên giới hạn số SKU gộp không, ví dụ chỉ được gộp tối đa 5 hoặc 10 sku" và "gộp SKU xong thì sẽ
-hiển thị deadline theo cái gần nhất hay trễ nhất". Sếp Nhân trả lời: "gộp xong vẫn phải tách riêng thời gian ra", "chắc chắn chỉ được gom các lệnh
+hiển thị deadline theo cái gần nhất hay trễ nhất". Quản lý trả lời: "gộp xong vẫn phải tách riêng thời gian ra", "chắc chắn chỉ được gom các lệnh
 cách nhau khoảng 3 ngày đổ lại", "không được gộp 2 lệnh cách nhau quá xa", "sẽ kiểm soát lúc lên kế hoạch". Người dùng chốt tiêu chí gợi ý: "ít hao
 hụt nhất, nhưng giới hạn chỉ được gộp tối đa bao nhiêu đó SKU". Trước đó người dùng cũng làm rõ mục đích gộp: chỉ gộp khi đơn cắt riêng ở cây 6m
 vượt 1 % mà không muốn dùng chế độ đơn gấp (muốn vẫn mua 6m, hao hụt ≤ 1 %).
@@ -827,7 +827,7 @@ vượt 1 % mà không muốn dùng chế độ đơn gấp (muốn vẫn mua 6m
 
 Người dùng duyệt (nguyên văn): "Làm theo luật đã chốt (3 ngày theo mốc cần sắt là luật cứng, ít hao hụt nhất trong giới hạn, trần mặc định 5 SKU
 Admin sửa, lệnh gộp hiện khoảng hạn, sửa hạn sau gộp cũng kiểm 3 ngày, giao diện theo mockup Đợt đang chọn). Kiểm trên trình duyệt." Giữa chừng
-Sếp Nhân chỉnh: "bắt buộc chỉ được gộp tối đa 2 lệnh có ngày cắt sắt cách nhau ko quá 3 ngày (ví dụ: ngày 1 gộp được ngày 3, ngày 1 ko được gộp
+Quản lý chỉnh: "bắt buộc chỉ được gộp tối đa 2 lệnh có ngày cắt sắt cách nhau ko quá 3 ngày (ví dụ: ngày 1 gộp được ngày 3, ngày 1 ko được gộp
 với ngày 4)" → **khung tính cả ngày đầu** (3 = chênh tối đa 2 ngày) và **trần mặc định 2 SKU** (thay 5).
 
 ### 32.1 Luật (BE là nơi chặn thật, FE chặn sớm cho dễ thấy)

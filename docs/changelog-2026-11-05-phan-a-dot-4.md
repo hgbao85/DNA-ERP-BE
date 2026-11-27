@@ -58,7 +58,7 @@ Nhánh `dot-4-vat-tu-can-ve` ở 2 worktree: BE `D:\DNA-ERP-BE-dot4` (cắt từ
   Người nhận + dedupe + đóng tin hôm trước giữ như cũ. Lỗi nguồn vật tư thì lần kiểm 10 phút sau thử lại, không chặn tin tiến độ.
 - **Cảnh báo mới `MATERIALS_DEADLINE_ALERT`** (ALERT, CRITICAL → Sếp tự được thêm; người nhận KHSX): từ 07:00, 1 tin/ngày khi toàn hệ thống
   có dòng quá hạn / hạn chót hôm nay; tiêu đề "Vật tư tới hạn chót chưa về đủ: 1 hạn chót hôm nay, 1 quá hạn", tối đa 5 câu theo lệnh kèm
-  người mua; tự đóng trong ngày khi hàng về hết; tin hôm trước đóng khi gửi tin mới; không gửi lại trong ngày. Chạy ngoài bước Bảng mốc.
+  Người mua; tự đóng trong ngày khi hàng về hết; tin hôm trước đóng khi gửi tin mới; không gửi lại trong ngày. Chạy ngoài bước Bảng mốc.
 
 ### 2.2 FE
 - Màn mới `src/modules/pages/MaterialsDue/VatTuCanVePage.tsx` (+ hàm thuần `vatTuCanVe.ts` + test): nút lọc Quá hạn / Hôm nay (mặc định)

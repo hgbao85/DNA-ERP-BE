@@ -137,7 +137,7 @@ khoá ngoại và `onDelete: Cascade`.
   `sortBy` chuỗi tự do (đã ghi nhận lỗi 500 khi truyền field lạ ở changelog 2026-09-25 mục 2.1); feed
   dùng offset sẽ trùng/sót bài khi có bài mới chen vào.
 - Mỗi bài trả kèm: 3 bình luận mới nhất, `myReaction`, `isSaved`, top 3 loại cảm xúc + tên 2 người
-  đầu ("Bạn, Trần Thị Mai và 15 người khác").
+  đầu ("Bạn, Người A và 15 người khác").
 
 ### 4.3 Quyền
 

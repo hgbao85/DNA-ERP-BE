@@ -729,7 +729,7 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
   <div class="module">
     <h2><span class="badge b-be">BE</span> 16. Phát hiện lỗ hổng lớn hơn: 3 nhóm vật tư còn lại CHƯA TỪNG có đề xuất mua tự động</h2>
     <p class="module-note">
-      Người dùng báo 2 tài khoản Mua hàng ("Nghi", "Trâm") vào màn của họ thấy <b>trống trơn</b> dù
+      Người dùng báo 2 tài khoản Mua hàng ("người mua C", "người mua B") vào màn của họ thấy <b>trống trơn</b> dù
       định mức đã gán vật tư cho họ mua, và SKU liên quan đã được Sếp duyệt. Vật tư của họ
       <b>không phải</b> sắt, cũng không phải thanh nhôm/tấm sắt lá.
     </p>
@@ -784,7 +784,7 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
   <div class="module">
     <h2><span class="badge b-fe">FE</span> 17. Vá bug FE: đề xuất mua "hiện rồi biến mất" ở 3 màn Mua hàng</h2>
     <p class="module-note">
-      Người dùng chụp màn "Lệnh mua vật tư" (acc Trâm) thấy 1 đề xuất hiện ra rồi biến mất ngay
+      Người dùng chụp màn "Lệnh mua vật tư" (acc người mua B) thấy 1 đề xuất hiện ra rồi biến mất ngay
       sau đó - báo thêm màn "Theo dõi mua hàng" cũng bị y hệt. Đây là bug FE có sẵn từ trước,
       <b>không liên quan gì tới backend/tính năng mới</b> - phát hiện tình cờ khi người dùng thử
       luồng vừa vá ở mục 16.
@@ -808,7 +808,7 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
     <div class="callout warn">
       <b>Chưa xác nhận hết:</b> fix này chỉ chặn hiện tượng "hiện rồi biến mất". Nếu sau khi
-      <code>materials</code> tải xong mà đề xuất VẪN không hiện cho acc Trâm/Nghi (không còn flash,
+      <code>materials</code> tải xong mà đề xuất VẪN không hiện cho acc người mua B/người mua C (không còn flash,
       chỉ đơn giản trống từ đầu), đó là dấu hiệu 1 bug KHÁC (lệch giá trị/kiểu giữa
       <code>User.id</code> và <code>Material.buyerId</code>) - chưa điều tra, cần dữ liệu thật để
       xác nhận.
@@ -820,7 +820,7 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
   <div class="module">
     <h2><span class="badge b-db">DB</span><span class="badge b-be">BE</span> 18. Phát hiện + khôi phục: định mức thật của 1 SKU khách hàng bị đè bởi endpoint admin không qua kiểm soát, rồi vá lỗ hổng tận gốc</h2>
     <p class="module-note">
-      Trong lúc dò tiếp lý do acc Trâm vẫn trống sau khi vá bug flash (mục 17), đối chiếu lại
+      Trong lúc dò tiếp lý do acc người mua B vẫn trống sau khi vá bug flash (mục 17), đối chiếu lại
       <code>BomRevision</code> của sản phẩm "Ghế J55" (khách hàng MEIJING, đang sản xuất thật) thì
       phát hiện đây <b>không phải</b> bug buyerId như đã ngờ ở mục 17 - vấn đề nặng hơn nhiều.
     </p>
@@ -893,7 +893,7 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
       <li><b>Chưa commit</b><span> — toàn bộ thay đổi (2 repo + migration + vá lỗ hổng activate) vẫn nằm ở working tree, chờ người dùng xem lại.</span></li>
       <li><b>Đề xuất ẩn cột "Số lượng" (mục 12) — chưa code</b><span> — mới dừng ở mức đề xuất đã trao đổi với người dùng, chờ xác nhận trước khi sửa <code>SpecSteelPage.tsx</code>.</span></li>
       <li><b>Cần xác nhận lại nhóm vật tư của "Thanh nhôm" (<code>SAT-012</code>)</b><span> — chưa rõ đã bị tự động gán nhầm sang nhóm Sắt hay chưa (mục 11), cần kiểm tra/sửa trong Admin &gt; Vật tư trước khi nhập định mức chính thức.</span></li>
-      <li><b>Cần tạo + duyệt thử 1 SKU mới cho "Ghế J55" sau khi khôi phục (mục 18)</b><span> — xác nhận rev 20 hiển thị đúng định mức đầy đủ, VÀ acc Nghi/Trâm nhận được đề xuất mua qua <code>ConsumableMaterialPurchaseService</code>/<code>PieceMaterialYieldPurchaseService</code> như kỳ vọng.</span></li>
+      <li><b>Cần tạo + duyệt thử 1 SKU mới cho "Ghế J55" sau khi khôi phục (mục 18)</b><span> — xác nhận rev 20 hiển thị đúng định mức đầy đủ, VÀ acc người mua C/người mua B nhận được đề xuất mua qua <code>ConsumableMaterialPurchaseService</code>/<code>PieceMaterialYieldPurchaseService</code> như kỳ vọng.</span></li>
       <li><b>PO-35/36/37 (tạo trước khi khôi phục) vẫn thiếu đề xuất mua Dây/Đinh/Sơn/Phụ kiện</b><span> — ghim cứng rev cũ gần-trống, không tự vá được (xem cảnh báo mục 18); cần quyết định có xử lý bù thủ công hay không.</span></li>
       <li><b>Chưa test qua UI thật với dữ liệu đã khai đúng</b><span> — cần duyệt SKU thật, xác nhận CẢ 3 loại đề xuất mua (sắt, vật tư thành phẩm, vật tư tiêu hao phẳng - mục 16) tự sinh đúng trong màn Theo dõi mua hàng. Rồi Phôi báo cắt + KCS duyệt thử với mảnh "Chân nhôm" (và "pat" khi có dữ liệu thật), xác nhận tồn nguyên liệu tự trừ đúng (cùng giới hạn đã chấp nhận ở tính năng Phôi/KCS 2026-08-21).</span></li>
       <li><b><code>skuId</code> ở <code>purchasing-api.ts</code> vẫn là placeholder hỏng từ trước</b><span> — <code>Number(be.cuttingProposalId)</code> ra <code>NaN</code> cho nguồn mới, nhưng đã ghi chú rõ trong code là bug có sẵn, không thuộc phạm vi lần sửa này (xem comment tại <code>ThongKePagePlan.tsx</code>).</span></li>

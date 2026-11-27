@@ -15,7 +15,7 @@ commit giữa lúc tra và lúc ghi → vẫn xuất (và trừ tồn) ở kho x
   - `lockPisForIssue(tx, piIds)` — khoá dòng `production_invoices` FOR UPDATE (theo id tăng, bỏ trùng) rồi đọc lại xưởng +
     `cuttingRecheckRequired` SAU khoá.
   - `workshopsOfPis()` — chụp xưởng không khoá; `assertWorkshopUnchanged()` — xưởng sau khoá khác lúc tra kho → 409.
-- **Đổi xưởng** (`ProductionInvoicesService.changeWorkshop`, phần của Sang — chỉ thêm 1 dòng): gọi `lockPisForIssue` làm việc
+- **Đổi xưởng** (`ProductionInvoicesService.changeWorkshop`, phần của IT — chỉ thêm 1 dòng): gọi `lockPisForIssue` làm việc
   ĐẦU TIÊN trong transaction. Lượt xuất đang chạy xong trước thì `assertNoMaterialIssued` thấy và chặn đổi xưởng như cũ.
 - **Xuất sắt** (`SteelIssuesService`): `PreparedSteelIssue.workshopId` = xưởng đã dùng để tra kho (cùng resolver).
   `createInTx` khoá dòng lệnh TRƯỚC mọi khoá khác, rồi: cờ kiểm lại bật → 409 (`CUTTING_RECHECK_MESSAGE`); xưởng khác → 409.
