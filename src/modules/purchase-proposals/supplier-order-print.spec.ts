@@ -109,6 +109,10 @@ describe('buildPrintRows (bản v8 mục 7.8, 3 cột số theo anh chốt 23/11
 });
 
 describe('renderPrintWorkbook', () => {
+  // Đọc mẫu Excel + ghi file mất ~1 s khi máy rảnh, nhưng chạy chung cả bộ test (máy bận) có lần quá 5 s mặc định -> đỏ dù code đúng.
+  // jest.setTimeout gọi lúc nạp file nên áp cho cả file (các test khác chạy tức thì, không ảnh hưởng).
+  jest.setTimeout(30_000);
+
   const header = {
     supplierName: 'Kim Phát',
     orderCode: '53/2026',
