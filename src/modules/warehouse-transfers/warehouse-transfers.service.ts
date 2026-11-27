@@ -262,7 +262,7 @@ export class WarehouseTransfersService {
     // họ chỉ nhận vật tư qua mua hàng/nhập kho. Chặn cứng ở đây vì assertWarehouseScope() chỉ xét
     // kho NGUỒN, không có gì cản 1 request hợp lệ khác (vd vat-tu-tp gửi ngược) chọn phoi-son-han
     // làm đích qua thẳng API.
-    // Đợt 7 (anh Nhân 07/11): ngoại lệ DUY NHẤT - kho Phôi chuyển sang kho Hàn CÙNG XƯỞNG (đá cắt mua về kho Phôi, Hàn
+    // Đợt 7 (nghiệp vụ 07/11): ngoại lệ DUY NHẤT - kho Phôi chuyển sang kho Hàn CÙNG XƯỞNG (đá cắt mua về kho Phôi, Hàn
     // dùng một phần).
     const phoiToHanSameWorkshop =
       fromWarehouse.kind === WarehouseKind.PHOI &&
@@ -274,8 +274,8 @@ export class WarehouseTransfersService {
         `Không được chuyển kho tự do tới "${toWarehouse.name}" - kho Phôi Sơn Hàn chỉ nhận vật tư qua mua hàng/nhập kho`,
       );
     }
-    // Test toàn hệ thống 19/11 (việc Bảo nhận từ Sang): chiều ngược lại - kho Phôi CHỈ được chuyển tự do sang kho Hàn cùng xưởng
-    // (Đợt 7, anh Nhân 07/11). Trước đây chỉ màn ChuyenKhoTuDoPage lọc, gọi thẳng API thì kho Phôi gửi được sang Phụ kiện /
+    // Test toàn hệ thống 19/11 (việc chia lại trong IT): chiều ngược lại - kho Phôi CHỈ được chuyển tự do sang kho Hàn cùng xưởng
+    // (Đợt 7, nghiệp vụ 07/11). Trước đây chỉ màn ChuyenKhoTuDoPage lọc, gọi thẳng API thì kho Phôi gửi được sang Phụ kiện /
     // Thành phẩm.
     if (fromWarehouse.kind === WarehouseKind.PHOI && !phoiToHanSameWorkshop) {
       throw new BadRequestException(
@@ -404,7 +404,7 @@ export class WarehouseTransfersService {
           undefined,
           item.spec,
         );
-        // Test toàn hệ thống 19/11 (việc Bảo nhận từ Sang): xin vượt khả dụng thì BÁO, không âm thầm cắt bớt - trước đây phiếu
+        // Test toàn hệ thống 19/11 (việc chia lại trong IT): xin vượt khả dụng thì BÁO, không âm thầm cắt bớt - trước đây phiếu
         // tạo ra ít hơn số đã nhập (FE chỉ đối chiếu được dòng đầu), thủ kho tưởng đã chuyển đủ.
         if (item.quantity > available) {
           shortages.push(
@@ -513,7 +513,7 @@ export class WarehouseTransfersService {
 
     const orderIds = [...new Set(dto.pieceItems.map((i) => i.productionOrderId))];
     if (!toPaint) {
-      // Kho Thành phẩm của lệnh (anh Nhân 09/11): QLSX đã chọn kho cho từng SKU - phiếu phải về đúng kho đó.
+      // Kho Thành phẩm của lệnh (nghiệp vụ 09/11): QLSX đã chọn kho cho từng SKU - phiếu phải về đúng kho đó.
       const items = await this.prisma.productionOrder.findMany({
         where: { id: { in: orderIds.map((id) => parseBigIntId(id)) } },
         select: {
@@ -559,7 +559,7 @@ export class WarehouseTransfersService {
         quantity: number;
         note?: string;
       }[] = [];
-      // Test toàn hệ thống 19/11 (việc Bảo nhận từ Sang): xin vượt số được chuyển thì BÁO, không âm thầm cắt bớt (cả 2 trần: số
+      // Test toàn hệ thống 19/11 (việc chia lại trong IT): xin vượt số được chuyển thì BÁO, không âm thầm cắt bớt (cả 2 trần: số
       // đã qua KCS dưới đây và tồn mảnh thật ở kho gửi bên dưới).
       const shortages: string[] = [];
       const labelOf = (orderId: string, pieceId: string) => {
@@ -741,7 +741,7 @@ export class WarehouseTransfersService {
 
     const items: PieceTransferPlanItemResponseDto[] = [];
     for (const order of orders) {
-      // Huỷ lệnh theo SKU (23/11/2026): mảnh của SKU đã huỷ giữ nguyên ở kho công đoạn (anh Nhân câu 6/7) - không đề xuất chuyển;
+      // Huỷ lệnh theo SKU (23/11/2026): mảnh của SKU đã huỷ giữ nguyên ở kho công đoạn (nghiệp vụ câu 6/7) - không đề xuất chuyển;
       // lập phiếu cho SKU này vì thế cũng bị chặn ở bước so số (suggestedQty 0).
       if (isCancelledOrder(order)) continue;
       const pieces = bomPiecesByRevision.get(order.bomRevisionId.toString()) ?? [];
@@ -751,7 +751,7 @@ export class WarehouseTransfersService {
         if (!bp.needsHan && bp.needsSon) continue;
         // Chặng Hàn -> Sơn chỉ có ý nghĩa với mảnh cần CẢ hàn lẫn sơn.
         if (leg === 'TO_PAINT' && !(bp.needsHan && bp.needsSon)) continue;
-        // Mảnh cần đan không chuyển kho - xuất đan thẳng từ kho giữ mảnh bằng phiếu XK (anh Nhân 09/11/2026).
+        // Mảnh cần đan không chuyển kho - xuất đan thẳng từ kho giữ mảnh bằng phiếu XK (nghiệp vụ 09/11/2026).
         if (leg === 'OUT' && bp.isWoven) continue;
 
         // needsHan=false ("vật tư thành phẩm") → PHOI (Phôi tự báo cắt xong, không qua Hàn/Sơn).
@@ -877,7 +877,7 @@ export class WarehouseTransfersService {
         );
       }
 
-      // Rà soát 14/11 CK4 + mảnh sang Sơn (nhóm B 16/11, anh Nhân chốt): kho gửi phải còn đủ tồn thật cho số nhận - thiếu thì
+      // Rà soát 14/11 CK4 + mảnh sang Sơn (nhóm B 16/11, nghiệp vụ chốt): kho gửi phải còn đủ tồn thật cho số nhận - thiếu thì
       // chặn để kiểm tra, không cho nhận thiếu. Khoá stock_quant kho gửi trước khi ghi sổ.
       await this.assertSourceStockInTx(tx, transfer, received);
 
@@ -946,7 +946,7 @@ export class WarehouseTransfersService {
         data: { status: ReservationStatus.RELEASED },
       });
 
-      // Phiếu chuyển hàng của lệnh đổi xưởng (10/11/2026, Sang dặn): giữ chỗ của lệnh chuyển theo sang kho mới, đúng số thực nhận
+      // Phiếu chuyển hàng của lệnh đổi xưởng (10/11/2026, IT dặn): giữ chỗ của lệnh chuyển theo sang kho mới, đúng số thực nhận
       // - số "Cần" ở Xuất sắt và sắt giữ cho lệnh vẫn khớp. Phần thiếu vẫn giữ ở kho cũ, kho cũ lập phiếu bù.
       if (transfer.productionInvoiceId) {
         await this.workshopMove.moveReservationsInTx(
@@ -979,7 +979,7 @@ export class WarehouseTransfersService {
         confirmed.productionInvoiceId,
         confirmed.fromWarehouseId,
       );
-      // (c) anh Nhân 16/11 câu 1: hàng đã nhập kho đích mà lệnh đã đổi xưởng tiếp - nhắc thủ kho kho đích lập phiếu chuyển tiếp.
+      // (c) nghiệp vụ 16/11 câu 1: hàng đã nhập kho đích mà lệnh đã đổi xưởng tiếp - nhắc thủ kho kho đích lập phiếu chuyển tiếp.
       await this.workshopMove.notifyMovesNeeded(
         confirmed.productionInvoiceId,
         confirmed.toWarehouseId,
@@ -1051,7 +1051,7 @@ export class WarehouseTransfersService {
   }
 
   /**
-   * (a) anh Nhân 16/11 câu 1: phiếu chuyển hàng của lệnh chưa nhận mà hàng chưa rời kho (hoặc xe quay về) - THỦ KHO KHO GỬI huỷ
+   * (a) nghiệp vụ 16/11 câu 1: phiếu chuyển hàng của lệnh chưa nhận mà hàng chưa rời kho (hoặc xe quay về) - THỦ KHO KHO GỬI huỷ
    * phiếu. Hàng và giữ chỗ vẫn ở kho gửi, không ghi sổ gì. Lệnh đã sang xưởng khác thì "Hàng cần chuyển do đổi xưởng" hiện lại
    * để lập phiếu mới. Ghi như từ chối (status REJECTED, lý do ghi rõ "Kho gửi huỷ").
    */
@@ -1099,7 +1099,7 @@ export class WarehouseTransfersService {
   }
 
   /**
-   * (b) anh Nhân 16/11 câu 1: hàng đang trên đường, chở thẳng tới xưởng mới - THỦ KHO KHO GỬI đổi nơi nhận của phiếu sang kho
+   * (b) nghiệp vụ 16/11 câu 1: hàng đang trên đường, chở thẳng tới xưởng mới - THỦ KHO KHO GỬI đổi nơi nhận của phiếu sang kho
    * cùng loại của xưởng hiện tại của lệnh. Chỉ khi kho đích không còn thuộc xưởng của lệnh; lệnh về lại đúng xưởng của kho
    * gửi thì phải huỷ phiếu (a). Phần sắt vẫn chờ KHSX "Đã kiểm" phương án cắt như lúc lập phiếu. Khoá dòng lệnh (chung với
    * đổi xưởng) rồi đọc xưởng hiện tại sau khoá.
@@ -1183,7 +1183,7 @@ export class WarehouseTransfersService {
     return this.toResponseDto(updated);
   }
 
-  /** Cảnh báo lúc đổi xưởng (anh Nhân 16/11): phiếu chuyển hàng của lệnh còn chờ nhận. */
+  /** Cảnh báo lúc đổi xưởng (nghiệp vụ 16/11): phiếu chuyển hàng của lệnh còn chờ nhận. */
   async findPendingWorkshopMoves(productionInvoiceId: string) {
     const rows = await this.prisma.warehouseTransfer.findMany({
       where: {
@@ -1272,7 +1272,7 @@ export class WarehouseTransfersService {
 
   /**
    * Kho gửi còn đủ tồn thật cho số nhận từng dòng (vật tư theo chiều dài + quy cách, mảnh theo mảnh) - khoá FOR UPDATE các dòng
-   * stock_quant theo thứ tự cố định rồi mới so. Thiếu thì 409 kèm số còn thật (anh Nhân 16/11: không cho nhận thiếu).
+   * stock_quant theo thứ tự cố định rồi mới so. Thiếu thì 409 kèm số còn thật (nghiệp vụ 16/11: không cho nhận thiếu).
    */
   private async assertSourceStockInTx(
     tx: PrismaTx,
@@ -1501,7 +1501,7 @@ export class WarehouseTransfersService {
   /**
    * Lập phiếu chuyển hàng của lệnh đổi xưởng (10/11/2026): mọi dòng đang giữ cho lệnh ở kho cũ (vật tư + chiều dài cây + quy
    * cách) thuộc 1 phần (sắt / vật tư khác), trừ phần đã nằm trên phiếu chờ nhận, sang kho cùng loại của xưởng mới. Phần sắt
-   * chặn khi KHSX chưa kiểm lại phương án cắt; vật tư khác chuyển ngay (anh Nhân 10/11).
+   * chặn khi KHSX chưa kiểm lại phương án cắt; vật tư khác chuyển ngay (nghiệp vụ 10/11).
    */
   async createWorkshopMove(
     productionInvoiceId: string,

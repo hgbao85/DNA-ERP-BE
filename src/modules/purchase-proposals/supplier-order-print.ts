@@ -3,7 +3,7 @@ import ExcelJS from 'exceljs';
 
 /**
  * Phiếu đề xuất mua theo ĐƠN ĐẶT HÀNG NCC (2026-11-04, bản v8 mục 7.6, 7.8, 7.11) - điền vào đúng
- * mẫu PHIEU_DE_XUAT_MAU_TRONG_IEA.xlsx anh Nhân gửi 30/10 (templates/phieu-de-xuat-mau.xlsx), giữ
+ * mẫu PHIEU_DE_XUAT_MAU_TRONG_IEA.xlsx nghiệp vụ gửi 30/10 (templates/phieu-de-xuat-mau.xlsx), giữ
  * nguyên định dạng mẫu.
  *
  * - Mỗi vật tư (cùng mã + quy cách + chiều dài cây) 1 dòng, cộng dồn qua mọi lệnh trong đơn; cột

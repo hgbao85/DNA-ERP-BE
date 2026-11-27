@@ -23,7 +23,7 @@ export interface ProposeRequest {
   max_waste_percentage_by_material?: Record<string, number | string>;
   stock_lengths_by_material?: Record<string, string | number | Array<number | string>>;
   /**
-   * CS2 (anh Nhân 20/11/2026): cây lẻ đang có ở kho Phôi của xưởng làm lệnh, khoá như `stock_lengths_by_material`:
+   * CS2 (nghiệp vụ 20/11/2026): cây lẻ đang có ở kho Phôi của xưởng làm lệnh, khoá như `stock_lengths_by_material`:
    * `{ "<mã sắt>": [{ length: 5450, count: 1 }, ...] }`. Bộ giải dùng cây lẻ trước (tối đa đúng số cây), phần còn thiếu cắt
    * từ chiều dài mua (1 chiều dài / loại sắt như cũ).
    */
@@ -324,7 +324,7 @@ export interface SolveStats {
    * MC Tự động đi đường "thu hẹp" (highs-solver.ts solveBundled): bài không-bó lấy tập pattern, bài bó thu
    * hẹp, bài bó đầy đủ - số pattern, trạng thái từng bài và nghiệm cuối lấy từ bài nào.
    */
-  /** Anh Nhân câu 9-11 (24/11/2026): cắt thường vô nghiệm, đã giải lại với 1 cây mua cuối cắt tự do khúc thừa thành đoạn dư */
+  /** Nghiệp vụ câu 9-11 (24/11/2026): cắt thường vô nghiệm, đã giải lại với 1 cây mua cuối cắt tự do khúc thừa thành đoạn dư */
   last_bar_filled?: boolean;
   bundle_narrow?: {
     relaxSeconds: number;

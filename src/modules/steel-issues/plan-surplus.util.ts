@@ -3,7 +3,7 @@ import { normalizeSegmentSteps } from '../../common/utils/segment-code.util';
 import { PlanSurplusRow } from './phoi-need.util';
 
 /**
- * Đoạn DƯ theo phương án cắt đã duyệt (anh Nhân câu 9-13, 24/11/2026): cây mua cuối được cắt khúc thừa thành đoạn dư, đoạn dư làm
+ * Đoạn DƯ theo phương án cắt đã duyệt (nghiệp vụ câu 9-13, 24/11/2026): cây mua cuối được cắt khúc thừa thành đoạn dư, đoạn dư làm
  * đủ công đoạn như đoạn của lệnh rồi qua KCS, đạt thì vào phần dư chung kho Phôi. Trước đây tổ cắt / công đoạn phụ bị chặn ở số
  * cần (đoạn dư "để riêng dưới xưởng, không báo").
  *

@@ -30,7 +30,7 @@ export class WeavingPointsService {
   constructor(@Inject(PRISMA_SERVICE) private readonly prisma: PrismaServiceType) {}
 
   /**
-   * Test toàn hệ thống 19/11 (việc Bảo nhận từ Sang): chỉ Admin và thủ kho Phụ kiện (kho giao vật tư đan - màn "Quản lý điểm
+   * Test toàn hệ thống 19/11 (việc chia lại trong IT): chỉ Admin và thủ kho Phụ kiện (kho giao vật tư đan - màn "Quản lý điểm
    * đan" chỉ mở cho kho này) được thêm / sửa / xoá điểm đan. Trước đây quyền WEAVING_POINT:ALL đi theo vai nền "Nhân viên" của
    * mọi tài khoản văn phòng nên thủ kho nào / người mua nào cũng sửa xoá được qua API. Xem vẫn như cũ.
    */

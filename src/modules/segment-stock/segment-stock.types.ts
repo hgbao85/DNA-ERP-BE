@@ -60,7 +60,7 @@ export interface SyncOrderProductionResult {
   changes: SegmentSyncChange[];
 }
 
-/** Phía trừ (phần của Bảo nối vào): lệnh dùng đoạn. */
+/** Phía trừ (phần nối vào sau): lệnh dùng đoạn. */
 export interface ConsumeForOrderInput extends SegmentCodeRef {
   warehouseId: bigint;
   productionInvoiceId: bigint;

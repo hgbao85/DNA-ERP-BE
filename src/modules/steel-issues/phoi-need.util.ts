@@ -43,7 +43,7 @@ export interface PhoiNeedInput {
   lineSteps: readonly (readonly string[])[];
   counts: Partial<Record<PhoiStep, PhoiStepCounts>>;
   /**
-   * Đoạn DƯ theo phương án cắt đã duyệt (anh Nhân câu 12b/13a, 24/11/2026) theo công đoạn: được báo THÊM ngoài số cần (cắt + làm đủ
+   * Đoạn DƯ theo phương án cắt đã duyệt (nghiệp vụ câu 12b/13a, 24/11/2026) theo công đoạn: được báo THÊM ngoài số cần (cắt + làm đủ
    * công đoạn của dòng định mức, KCS chấm, đạt vào phần dư chung). KHÔNG cộng vào `required` - tiến độ / "xong" vẫn theo số cần.
    */
   openedByStep?: Partial<Record<PhoiStep, number>>;

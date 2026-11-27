@@ -77,14 +77,14 @@ export interface TwoStageInput {
    */
   stage1Only?: boolean;
   /**
-   * CS2 (anh Nhân 20/11/2026): cây lẻ trong kho - mỗi nhóm là các pattern cắt trên MỘT chiều dài cây lẻ, tổng số cây của nhóm
+   * CS2 (nghiệp vụ 20/11/2026): cây lẻ trong kho - mỗi nhóm là các pattern cắt trên MỘT chiều dài cây lẻ, tổng số cây của nhóm
    * ≤ `max` (số cây đang có). Có mặt thì giải thêm "tầng 0" (xem solveWithLengthCaps): xếp đoạn lên cây lẻ trước (min chiều dài
-   * cắt trên cây mua), rồi ít cây mua nhất - anh Nhân chốt 23/11 dùng cây lẻ kể cả khi không bớt được cây mua. Chỉ đường 'direct'
+   * cắt trên cây mua), rồi ít cây mua nhất - nghiệp vụ chốt 23/11 dùng cây lẻ kể cả khi không bớt được cây mua. Chỉ đường 'direct'
    * (nhiều chiều dài cây).
    */
   lengthCaps?: Array<{ patterns: number[]; max: number }>;
   /**
-   * CS2 "cây mua cuối" (anh Nhân 23/11): khi có cây lẻ, cho tối đa 1 cây mua cắt tự do (không theo ngưỡng hao hụt) phần còn thiếu
+   * CS2 "cây mua cuối" (nghiệp vụ 23/11): khi có cây lẻ, cho tối đa 1 cây mua cắt tự do (không theo ngưỡng hao hụt) phần còn thiếu
    * sau khi xếp cây lẻ - chỉ khi có cắt cây lẻ. `usableS` = phần dùng được của chiều dài mua (đã scale); `maxSizes` = số cỡ tối đa
    * trên 1 cây (null = không giới hạn). Cần cutCostS. Có bó: là 1 cây cắt tay. Nghiệm trả ở TwoStageResult.tail.
    */
@@ -92,12 +92,12 @@ export interface TwoStageInput {
     usableS: number;
     maxSizes: number | null;
     /**
-     * Anh Nhân câu 9b (24/11/2026): cây mua cuối có ở MỌI lệnh, không chỉ khi có cắt cây lẻ - bỏ hàng gate "z ≤ Σ cây lẻ đã dùng".
+     * Nghiệp vụ câu 9b (24/11/2026): cây mua cuối có ở MỌI lệnh, không chỉ khi có cắt cây lẻ - bỏ hàng gate "z ≤ Σ cây lẻ đã dùng".
      * Không có cây lẻ thì giải tầng 0b (ít cây mua nhất) rồi 2 tầng thường, bỏ tầng 0a (không có gì để dồn lên cây lẻ).
      */
     ungated?: boolean;
     /**
-     * Anh Nhân câu 11a: riêng cây mua cuối KHÔNG giới hạn maxSurplus đoạn dư mỗi cỡ - cắt hết khúc thừa (câu 10a: tầng 1 min cùi
+     * Nghiệp vụ câu 11a: riêng cây mua cuối KHÔNG giới hạn maxSurplus đoạn dư mỗi cỡ - cắt hết khúc thừa (câu 10a: tầng 1 min cùi
      * tự chọn cỡ cho cùi nhỏ nhất). Các kiểu cắt khác vẫn giữ demand + maxSurplus (thêm hàng riêng chỉ gồm cột kiểu cắt).
      */
     unlimitedSurplus?: boolean;
@@ -238,7 +238,7 @@ interface Built {
   purchaseRow: number;
   /** CS2: số cây mua một cột dùng (factor nếu pattern KHÔNG thuộc nhóm cây lẻ, 0 nếu thuộc) */
   purchaseCoef: number[];
-  /** CS2 (anh Nhân 23/11): hàng "Σ chiều dài cắt trên cây MUA" (đoạn + lưỡi); -1 khi không có cây lẻ hoặc thiếu cutCostS */
+  /** CS2 (nghiệp vụ 23/11): hàng "Σ chiều dài cắt trên cây MUA" (đoạn + lưỡi); -1 khi không có cây lẻ hoặc thiếu cutCostS */
   purchaseLenRow: number;
   /** CS2: chiều dài (đoạn + lưỡi, đã scale) một cột cắt trên cây mua; 0 với pattern cây lẻ */
   purchaseLenCoef: number[];
@@ -246,7 +246,7 @@ interface Built {
   leftoverLenRow: number;
   leftoverLenCoef: number[];
   /**
-   * CS2 "cây mua cuối" (anh Nhân 23/11): chỉ số cột t_0 (số đoạn cỡ k trên cây mua cuối, n cột liền nhau, ngay sau là cột z = có
+   * CS2 "cây mua cuối" (nghiệp vụ 23/11): chỉ số cột t_0 (số đoạn cỡ k trên cây mua cuối, n cột liền nhau, ngay sau là cột z = có
    * dùng cây mua cuối hay không); -1 khi không có. Các cột này nằm SAU mọi cột pattern.
    */
   tailCol0: number;
@@ -1773,7 +1773,7 @@ function solveBundled(highs: Highs, inp: TwoStageInput): TwoStageResult {
 }
 
 /**
- * CS2 - cây lẻ kho Phôi dùng TRƯỚC (anh Nhân chốt 23/11/2026, câu 1 chọn B: "phải xếp cắt trên số cây còn tồn trong kho Phôi trước,
+ * CS2 - cây lẻ kho Phôi dùng TRƯỚC (nghiệp vụ chốt 23/11/2026, câu 1 chọn B: "phải xếp cắt trên số cây còn tồn trong kho Phôi trước,
  * phần đoạn còn thiếu mới tính sang cây 6 m mua mới; các cây 6 m đó cũng phải tính cắt cho hết để giảm số cây phải mua"):
  *  - tầng 0a: min Σ chiều dài cắt trên cây MUA (đoạn + lưỡi) = xếp được nhiều đoạn nhất lên cây lẻ (trong giới hạn số cây lẻ từng
  *    chiều dài), kể cả khi không bớt được cây mua nào (để dọn kho cây lẻ). Tối thiểu chiều dài cây MUA chứ không tối đa chiều dài
@@ -1782,9 +1782,9 @@ function solveBundled(highs: Highs, inp: TwoStageInput): TwoStageResult {
  *  - tầng 0b: min Σ cây MUA (phần còn thiếu cắt gọn trên ít cây mua nhất);
  *  - chốt cả 2 rồi 2 tầng thường (min khúc thừa, rồi min đoạn dư).
  * Phần còn thiếu thường không vừa khít các kiểu cắt trong ngưỡng: cho thêm 1 "cây mua cuối" cắt tự do (TwoStageInput.tailBar) -
- * ví dụ anh Nhân chọn: cắt cây lẻ 5,8 m, phần còn thiếu cắt sang 1 cây 6 m còn thừa khúc dài.
- * Lịch sử: 20/11 tối đa số CÂY lẻ -> cắt 1 đoạn/cây phá hết cây lẻ (review Sang 21/11); 21-23/11 chỉ min cây mua -> cây lẻ không bớt
- * được cây mua thì bỏ không (anh Nhân không chọn). Thiếu cutCostS (chỉ test cũ) thì bỏ tầng 0a.
+ * ví dụ nghiệp vụ chọn: cắt cây lẻ 5,8 m, phần còn thiếu cắt sang 1 cây 6 m còn thừa khúc dài.
+ * Lịch sử: 20/11 tối đa số CÂY lẻ -> cắt 1 đoạn/cây phá hết cây lẻ (review IT 21/11); 21-23/11 chỉ min cây mua -> cây lẻ không bớt
+ * được cây mua thì bỏ không (nghiệp vụ không chọn). Thiếu cutCostS (chỉ test cũ) thì bỏ tầng 0a.
  * Hao hụt vượt ngưỡng do cây lẻ / cây mua cuối thì phía trên báo như thường (KHSX xin đặc cách - câu 2b). Tầng 0a vô nghiệm = cả bài
  * vô nghiệm.
  */
@@ -1813,7 +1813,7 @@ function solveWithLengthCaps(highs: Highs, b: Built, inp: TwoStageInput): TwoSta
     });
     if (!s0a.y) return fail(s0a.status, s0a.seconds);
     // Chiều dài cây lẻ phải dùng = ít nhất có thể khi cây mua chỉ cắt L* (bỏ đoạn dư "trung tính" nằm trên cây lẻ ở nghiệm 0a), rồi
-    // CHỐT CẬN DƯỚI chiều dài cây lẻ thay vì cận trên chiều dài cây mua: cây mua sau đó được cắt thêm đoạn dư cho hết cây (anh Nhân:
+    // CHỐT CẬN DƯỚI chiều dài cây lẻ thay vì cận trên chiều dài cây mua: cây mua sau đó được cắt thêm đoạn dư cho hết cây (nghiệp vụ:
     // "các cây 6 m đó cũng phải tính cắt cho hết") trong giới hạn đoạn dư như thường.
     const L = sum(b.purchaseLenCoef, s0a.y);
     const capLen = b.rowUpper.slice();
@@ -1871,7 +1871,7 @@ function remapColumns(r: TwoStageResult, idx: number[]): TwoStageResult {
 }
 
 /**
- * CS2 + MC Tự động (review Sang 21/11, đo 23/11): có cây lẻ mà đi thẳng solveWithLengthCaps trên bài bó đầy đủ thì loại sắt lớn hết giờ
+ * CS2 + MC Tự động (review IT 21/11, đo 23/11): có cây lẻ mà đi thẳng solveWithLengthCaps trên bài bó đầy đủ thì loại sắt lớn hết giờ
  * không ra nghiệm (I5 V15 12 cỡ / 27.300 đoạn + 3 cây lẻ 5800: 20 s không nghiệm; không cây lẻ 1801 cây nhờ đường thu hẹp). Nên:
  * (1) giải bài CÂY MUA bằng đường thường (thu hẹp bó); (2) giải bài có cây lẻ trên tập nhỏ = pattern (1) dùng + mọi pattern cây lẻ.
  * Nghiệm (1) nằm trong tập (2) (cây lẻ = 0) nên (2) luôn khả thi; (2) không ra nghiệm thì dùng (1) - không cây lẻ. Giới hạn: tập (2)

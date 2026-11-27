@@ -788,7 +788,7 @@ export class ProductionBatchesService {
    * báo cùng lúc, xem comment process-steps.constant.ts).
    *
    * KHÔNG còn chặn "bước sau vượt bước liền trước" (2026-09-07, BỎ so với bản gốc 2026-09-04) -
-   * quyết định nghiệp vụ của Sếp Trương Văn Nhân (chat nội bộ): "để cho đơn giản thì không cần
+   * quyết định nghiệp vụ của quản lý (chat nội bộ): "để cho đơn giản thì không cần
    * ràng buộc, cứ để thoải mái, xảy ra vấn đề mình sẽ xử lí" - công đoạn nào xong trước cứ báo
    * trước, không cần đợi công đoạn "trước" nó theo processSteps. Piece không có PieceMaterialYield
    * hoặc processSteps rỗng vẫn ⇒ BadRequest, bắt buộc dùng luồng cũ (báo thẳng qua create()) - đây
@@ -1378,7 +1378,7 @@ export class ProductionBatchesService {
   }
 
   /**
-   * Phía trừ tồn đoạn theo lệnh (13/11/2026, anh Nhân - lựa chọn D + 11 câu). Mỗi MÃ ĐOẠN (cỡ đoạn + bộ công đoạn đã chuẩn hoá) của
+   * Phía trừ tồn đoạn theo lệnh (13/11/2026, nghiệp vụ - lựa chọn D + 11 câu). Mỗi MÃ ĐOẠN (cỡ đoạn + bộ công đoạn đã chuẩn hoá) của
    * mảnh: SegmentStockService.consumeForOrder lấy phần giữ của lệnh, thiếu thì lấy dư, còn thiếu trả shortageQty (KHÔNG ghi sổ kho -
    * tồn không âm). Hàn / Sơn KHÔNG bị chặn (câu 2, 7): ghi 1 dòng sổ báo vượt (segment_overages) khi
    *  - thiếu đoạn (shortageQty > 0), và / hoặc
@@ -1563,7 +1563,7 @@ export class ProductionBatchesService {
   }
 
   /**
-   * Chuyển đổi dữ liệu tồn đoạn cũ (anh Nhân 13/11 câu 10, SegmentLegacyConversionService): trừ lại theo MÃ ĐOẠN phần đoạn 1 đợt
+   * Chuyển đổi dữ liệu tồn đoạn cũ (nghiệp vụ 13/11 câu 10, SegmentLegacyConversionService): trừ lại theo MÃ ĐOẠN phần đoạn 1 đợt
    * Hàn / Sơn cũ đã trừ theo cách cũ (vào dòng trơn). Không ghi sổ báo vượt (thiếu của dữ liệu cũ trả về để báo cáo). Đợt không
    * dùng đoạn sắt (không có PieceBom) hoặc không phải công đoạn trừ đoạn của mảnh thì trả 0.
    */

@@ -626,7 +626,7 @@ describe('Lỗi test toàn hệ thống 19/11 (e2e, DB test thật)', () => {
 
     it('POST /warehouse-transfers/1/confirm có dòng thiếu receivedQty -> "Dòng 1: thiếu ...", không tên tiếng Anh', async () => {
       // Từ 20/11 ảnh phiếu ký phải là tệp hệ thống đã tải lên (IsSystemUploadUrl) - dùng URL hợp lệ để chỉ còn đúng lỗi thiếu số
-      // thực nhận (Sang báo 23/11: URL giả làm ra thêm câu "ảnh phiếu đã ký phải là tệp đã tải lên...").
+      // thực nhận (IT báo 23/11: URL giả làm ra thêm câu "ảnh phiếu đã ký phải là tệp đã tải lên...").
       const prevCloud = process.env.CLOUDINARY_CLOUD_NAME;
       process.env.CLOUDINARY_CLOUD_NAME = 'dna-test-cloud-1911';
       let res: Awaited<ReturnType<typeof call>>;

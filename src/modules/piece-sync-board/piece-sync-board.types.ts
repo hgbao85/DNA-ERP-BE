@@ -2,14 +2,14 @@
  * Khuôn dữ liệu trả về của GET /piece-sync-board ("Đồng bộ Phôi – Hàn", 2026-11-04, changelog-2026-10-08 mục 59). FE
  * D:\DNA-ERP src/services/piece-sync-board-api.ts là bản sao - sửa 1 bên thì sửa cả bên kia.
  *
- * ĐỦ CÔNG ĐOẠN (anh Nhân 04/11, changelog-2026-10-08 mục 63 ý 2 → làm ở mục 64; thay "chỉ tính theo Cắt" của mục 61): 1 đoạn chỉ
+ * ĐỦ CÔNG ĐOẠN (nghiệp vụ 04/11, changelog-2026-10-08 mục 63 ý 2 → làm ở mục 64; thay "chỉ tính theo Cắt" của mục 61): 1 đoạn chỉ
  * vào đồng bộ khi đã qua Cắt + MỌI công đoạn phụ ghi ở dòng định mức (PieceBom.processSteps: uốn, dập, tán, nhấn…). Đếm theo
  * PIECE_SYNC_COUNT_MODE bên dưới.
  */
 import type { ProcessStepValue } from '../../common/constants/process-steps.constant';
 
 /**
- * Cách đếm đoạn "thành phẩm" ở mỗi công đoạn - câu 1.4 file `docs/cau-hoi-xac-nhan-anh-nhan-2026-11-04.docx` CHỜ anh Nhân, đang theo
+ * Cách đếm đoạn "thành phẩm" ở mỗi công đoạn - câu 1.4 file `docs/cau-hoi-xac-nhan-anh-nhan-2026-11-04.docx` CHỜ nghiệp vụ, đang theo
  * đề xuất của IT:
  *  'PASSED_QC' = chỉ đoạn đã ĐẠT KCS ở công đoạn đó = đã báo − KCS lỗi − chưa gửi KCS − đang chờ KCS (≥ 0)  ← đang dùng
  *  'REPORTED'  = đã báo − KCS lỗi (gồm cả chưa gửi / đang chờ KCS) - cách đếm của mục 59.

@@ -637,7 +637,7 @@ export class PurchaseProposalsService {
    * 'image' hay 'raw' (Cloudinary) - `deleteByUrl()` best-effort, gọi cả 2 loại là an toàn
    * (Cloudinary trả "not found" im lặng cho loại sai, không throw).
    *
-   * 2026-09-11 lần 3 (theo Sếp Trương Văn Nhân: "cho người nhập được sửa luôn"): mở thêm cho
+   * 2026-09-11 lần 3 (theo quản lý: "cho người nhập được sửa luôn"): mở thêm cho
    * CHÍNH người đã duyệt/đính kèm file này (`item.approvedById === actorUserId`), không chỉ
    * ADMIN/BOSS (`isPrivilegedActor()` sẵn có) - route bỏ `@RequireRole(ADMIN)`, check chuyển vào
    * service vì cần đọc dữ liệu record.

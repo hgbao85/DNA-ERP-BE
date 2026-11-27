@@ -765,7 +765,7 @@ export class BookingsService {
       select: PII_SELECT,
     });
     const piiById = new Map(piiRows.map((p) => [p.id.toString(), p]));
-    // Huỷ lệnh - câu 7 file 24/11 (anh Nhân chọn a): SKU đang có đề nghị huỷ chờ Sếp thì không xếp booking (trước đây xếp được, tới lúc
+    // Huỷ lệnh - câu 7 file 24/11 (nghiệp vụ chọn a): SKU đang có đề nghị huỷ chờ Sếp thì không xếp booking (trước đây xếp được, tới lúc
     // Sếp duyệt mới bị báo "gỡ khỏi booking trước").
     const pendingCancelPiiIds = new Set(
       (

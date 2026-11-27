@@ -68,7 +68,7 @@ export async function notifyPurchaseProposalCreated(
 }
 
 /**
- * Câu 3 với người A (anh Nhân chốt 07/11, câu 2b): phần TÍNH LẠI đề xuất mua (người A) gọi hàm này khi nhu cầu 1 vật tư của lệnh
+ * Câu 3 với người A (nghiệp vụ chốt 07/11, câu 2b): phần TÍNH LẠI đề xuất mua (người A) gọi hàm này khi nhu cầu 1 vật tư của lệnh
  * giảm XUỐNG DƯỚI số đã có phiếu Giám đốc ký (`gross < firmed` trong CuttingProposalsService.computeNetRequirementByMaterial và
  * các luồng tính lại vật tư khác). Không sửa gì - chỉ báo người mua phụ trách vật tư + Giám đốc. Gọi SAU khi transaction tính lại
  * đã commit (best-effort, lỗi chỉ ghi log). Cùng (lệnh, vật tư) gộp vào 1 thông báo (dedupe), cập nhật số mới mỗi lần tính lại.

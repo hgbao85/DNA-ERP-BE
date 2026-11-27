@@ -165,7 +165,7 @@ export interface PreparedSteelIssue {
   warehouse: { id: bigint; code: string };
   /** Xưởng của lệnh lúc tra `warehouse` - createInTx() so lại SAU khoá dòng lệnh (rà soát 14/11 CK6). */
   workshopId: bigint | null;
-  /** CS2: số cây phương án cần theo từng chiều dài khi loại sắt có cây lẻ - createInTx() kiểm lại SAU khoá dòng lệnh (review Sang
+  /** CS2: số cây phương án cần theo từng chiều dài khi loại sắt có cây lẻ - createInTx() kiểm lại SAU khoá dòng lệnh (review IT
    *  21/11: kiểm ở prepareIssue nằm ngoài transaction, 2 người xuất cùng lúc / 1 phiếu 2 dòng trùng đều lọt). null = không kiểm. */
   lengthCap?: Map<number, number> | null;
 }
@@ -249,7 +249,7 @@ type OrderForBom = {
   /** Huỷ lệnh theo SKU (23/11/2026). Mock cũ có thể thiếu -> coi như chưa huỷ. */
   status?: ProductionOrderStatus;
   /** Q3: SKU đã huỷ mà QLSX cho cắt tiếp - có số cần cũ trong tiến độ Cắt + công đoạn phụ (màn quét báo được), không cộng vào số
-   *  của cỡ đoạn (review IT 26/11 mục 2.1; Nhân 26/11 câu 3: làm đủ công đoạn). Cắt còn bị chặn theo sắt còn lại. */
+   *  của cỡ đoạn (review IT 26/11 mục 2.1; nghiệp vụ 26/11 câu 3: làm đủ công đoạn). Cắt còn bị chặn theo sắt còn lại. */
   cutContinued?: boolean;
 };
 
@@ -457,7 +457,7 @@ export class SteelIssuesService {
     const materialId = parseBigIntId(dto.materialId);
     const orders = await this.findOrdersForInvoice(invoice.id);
     this.assertOrdersHaveActiveFloor(orders, invoice.id);
-    // Đổi xưởng (anh Nhân 10/11/2026): KHSX chưa bấm "Đã kiểm" phương án cắt thì chưa xuất sắt.
+    // Đổi xưởng (nghiệp vụ 10/11/2026): KHSX chưa bấm "Đã kiểm" phương án cắt thì chưa xuất sắt.
     if (await isCuttingRecheckPending(this.prisma, invoice.id)) {
       throw new ConflictException(CUTTING_RECHECK_MESSAGE);
     }
@@ -472,7 +472,7 @@ export class SteelIssuesService {
         `Phương án cắt đã duyệt dùng cây dài ${stockLengthsMm.join(' / ')}mm - không xuất cây ${dto.barLengthMm}mm cho lệnh này`,
       );
     }
-    // CS2 (anh Nhân 20/11/2026): phương án dùng cả cây lẻ kho Phôi lẫn cây chiều dài mua -> mỗi chiều dài chỉ xuất tới đúng số
+    // CS2 (nghiệp vụ 20/11/2026): phương án dùng cả cây lẻ kho Phôi lẫn cây chiều dài mua -> mỗi chiều dài chỉ xuất tới đúng số
     // cây phương án cần. Giữ chỗ rút theo TỔNG cây nên không tự chặn được: xuất dư chiều dài này sẽ ăn mất phần của chiều dài
     // kia. Cũng áp dụng khi CẢ loại sắt chỉ cắt cây lẻ (1 chiều dài nhưng khác chiều dài mua) - không xuất cây chiều dài mua
     // không được giữ chỗ cho lệnh. Phương án 1 chiều dài mua (cũ) giữ nguyên như trước (giữ chỗ chặn tổng).
@@ -518,7 +518,7 @@ export class SteelIssuesService {
   }
 
   /**
-   * CS2 (anh Nhân 20/11/2026): phương án dùng cả cây lẻ kho Phôi lẫn cây chiều dài mua (hoặc chỉ cây lẻ) -> mỗi chiều dài chỉ xuất tới
+   * CS2 (nghiệp vụ 20/11/2026): phương án dùng cả cây lẻ kho Phôi lẫn cây chiều dài mua (hoặc chỉ cây lẻ) -> mỗi chiều dài chỉ xuất tới
    * đúng số cây phương án cần. Giữ chỗ giờ rút đúng chiều dài (drainPool stockLengthMm) nhưng phần giữ cây mua còn gồm hàng mua về
    * cho cả lệnh, nên vẫn chặn theo số cây phương án ở đây. `db` = tx khi gọi từ createInTx (đếm cả dòng vừa ghi trong cùng phiếu).
    */
@@ -669,7 +669,7 @@ export class SteelIssuesService {
       materialId: input.materialId,
       qty: input.barCount,
       warehouseId: input.expectedWarehouseId,
-      // CS2 (review Sang 21/11): rút đúng giữ chỗ của chiều dài cây đang xuất (cây lẻ / cây mua tách riêng).
+      // CS2 (review IT 21/11): rút đúng giữ chỗ của chiều dài cây đang xuất (cây lẻ / cây mua tách riêng).
       stockLengthMm: input.barLengthMm,
     });
 
@@ -1077,7 +1077,7 @@ export class SteelIssuesService {
             })),
           });
           if (continuedCut) {
-            // Nhân 26/11 câu 3: cắt tiếp SKU huỷ chỉ trong phần sắt đã xuất còn lại. Khoá cùng khoá cân đối sắt.
+            // Nghiệp vụ 26/11 câu 3: cắt tiếp SKU huỷ chỉ trong phần sắt đã xuất còn lại. Khoá cùng khoá cân đối sắt.
             await lockBusinessKey(tx, `cut-steel:${issue.productionInvoiceId}:${issue.materialId}`);
             const { roomMm, kerfMm } = await this.continuedCutRoomMm(tx, {
               piId: issue.productionInvoiceId,
@@ -1421,7 +1421,7 @@ export class SteelIssuesService {
   }
 
   /**
-   * Nhân trả lời 26/11 câu 3: SKU đã huỷ được cắt tiếp chỉ cắt hết phần sắt ĐÃ XUẤT cho tổ, không cắt đủ số cần cũ. Sắt còn cho cắt
+   * Nghiệp vụ trả lời 26/11 câu 3: SKU đã huỷ được cắt tiếp chỉ cắt hết phần sắt ĐÃ XUẤT cho tổ, không cắt đủ số cần cũ. Sắt còn cho cắt
    * tiếp = sắt đã nhận dùng được − cây đã nhập trả − đoạn đã báo (mọi SKU) − phần SKU còn chạy còn phải cắt (giữ sắt cho SKU đó).
    * Cùng công thức steelUsage với cân đối sắt ở tiến độ Phôi.
    */
@@ -1865,7 +1865,7 @@ export class SteelIssuesService {
    * đúng dù giờ nguồn sự thật THẬT SỰ (chặn hành động, KCS chấm) nằm ở CutBundle.status.
    *
    * KHÔNG còn chặn theo "công đoạn phụ chưa xong" (2026-09-07, BỎ so với bản gốc 2026-09-05) -
-   * quyết định nghiệp vụ của Sếp Trương Văn Nhân: "Cắt xong thì qua KCS, qua từng công đoạn thì
+   * quyết định nghiệp vụ của quản lý: "Cắt xong thì qua KCS, qua từng công đoạn thì
    * đều phải qua KCS" - Cắt (đợt này) tự gửi KCS ngay khi Phôi báo xong, KHÔNG chờ Uốn/Dập/Tán...
    * xong trước. Các công đoạn phụ giờ tự gửi KCS riêng qua submitStepBundle() (xem StepBundle doc
    * comment schema), độc lập hoàn toàn với vòng đời CutBundle này.
@@ -2018,7 +2018,7 @@ export class SteelIssuesService {
     const gateLabel = opts?.gateLabel ?? 'gửi KCS công đoạn';
     const invoice = await this.findInvoiceOrThrow(productionInvoiceId);
     const materialBigId = parseBigIntId(materialId);
-    // KCS chốt để chấm (câu 4), hoặc SKU đã huỷ được cắt tiếp - đoạn làm đủ công đoạn rồi qua KCS (Nhân 26/11 câu 3).
+    // KCS chốt để chấm (câu 4), hoặc SKU đã huỷ được cắt tiếp - đoạn làm đủ công đoạn rồi qua KCS (nghiệp vụ 26/11 câu 3).
     const kcsOnCancelled =
       (await isOrderCancelledById(this.prisma, parseBigIntId(productionOrderId))) &&
       (opts?.allowCancelled === true ||
@@ -2556,7 +2556,7 @@ export class SteelIssuesService {
           })),
       });
       step.set(piKey, {
-        // Nhân 26/11 câu 3: đoạn cắt tiếp của SKU huỷ làm đủ công đoạn - SKU cắt tiếp có cả ở công đoạn phụ (không cộng vào số
+        // Nghiệp vụ 26/11 câu 3: đoạn cắt tiếp của SKU huỷ làm đủ công đoạn - SKU cắt tiếp có cả ở công đoạn phụ (không cộng vào số
         // của cỡ đoạn, như ở Cắt).
         orders,
         bomPieces: piBomPieces,
@@ -2927,7 +2927,7 @@ export class SteelIssuesService {
         ? null
         : held.reduce((t, r) => t + r.remaining * r.stockLengthMm, 0);
       const leftoverReceivedMm = Math.max(0, Math.round(usableMm) - Math.round(reportedMm));
-      // Nhân 26/11 câu 3: SKU huỷ cắt tiếp chỉ cắt trong phần sắt còn lại sau khi giữ đủ cho SKU còn chạy (cùng continuedCutRoomMm).
+      // Nghiệp vụ 26/11 câu 3: SKU huỷ cắt tiếp chỉ cắt trong phần sắt còn lại sau khi giữ đủ cho SKU còn chạy (cùng continuedCutRoomMm).
       const continuedRoomMm = Math.max(0, usableMm - reportedMm - remainingNeedMm);
       for (const sg of item.segments) {
         for (const o of sg.byOrder) {
@@ -2990,7 +2990,7 @@ export class SteelIssuesService {
 
   /**
    * Ghi 1 đợt "đã gia công" cho công đoạn chi tiết SAU Cắt (Uốn/Dập/...) CHO CẢ PI + loại sắt
-   * (2026-09-07, đổi scope lần 2 theo Sếp Trương Văn Nhân - xem changelog "Bù đủ dồn về bảng
+   * (2026-09-07, đổi scope lần 2 theo quản lý - xem changelog "Bù đủ dồn về bảng
    * tổng": Phôi làm các công đoạn SONG SONG, không cần biết đúng đợt cắt nào ra đoạn đó, mirror
    * ProductionBatchesService.recordPieceStepBatch() bên VTTP). "Đã cắt" (catDone) đối chiếu giờ
    * tính TỔNG cả PI cho loại sắt này (Σ mọi CutBundle), không còn giới hạn trong 1 đợt cắt cụ thể.
@@ -3037,7 +3037,7 @@ export class SteelIssuesService {
         `SKU (lệnh sản xuất ${dto.productionOrderId}) không thuộc PI này`,
       );
     }
-    // Nhân trả lời 26/11 câu 3: đoạn cắt tiếp của SKU đã huỷ làm đủ công đoạn như lệnh gốc - qua cổng xưởng + cổng huỷ.
+    // Nghiệp vụ trả lời 26/11 câu 3: đoạn cắt tiếp của SKU đã huỷ làm đủ công đoạn như lệnh gốc - qua cổng xưởng + cổng huỷ.
     const continuedStep =
       order.status === 'CANCELLED' && (await isCutContinuedForOrder(this.prisma, order.id));
     if (!continuedStep) {

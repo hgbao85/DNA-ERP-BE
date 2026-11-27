@@ -331,7 +331,7 @@ export class PieceMaterialYieldPurchaseService {
           include: { items: true },
         });
       } else {
-        // Gom MỌI dòng của cùng vật tư; `planPurchaseRecompute` quyết định ghi dòng nào (anh Nhân 07/11): dòng ĐÃ ký
+        // Gom MỌI dòng của cùng vật tư; `planPurchaseRecompute` quyết định ghi dòng nào (nghiệp vụ 07/11): dòng ĐÃ ký
         // (PURCHASING) giữ nguyên, dòng chưa ký bỏ orderQty khi nhu cầu giảm, dòng PURCHASED chỉ tách phần thiếu.
         const itemsByMaterial = new Map<string, (typeof found.items)[number][]>();
         for (const it of sortItemsById(found.items)) {

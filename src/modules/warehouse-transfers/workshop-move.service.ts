@@ -39,7 +39,7 @@ export interface WorkshopMoveLine {
 }
 
 /**
- * Phần của phiếu (anh Nhân 10/11/2026 chọn "chỉ chặn sắt"): STEEL = vật tư nhóm Sắt (STEEL_BAR) - chờ KHSX bấm "Đã kiểm" phương
+ * Phần của phiếu (nghiệp vụ 10/11/2026 chọn "chỉ chặn sắt"): STEEL = vật tư nhóm Sắt (STEEL_BAR) - chờ KHSX bấm "Đã kiểm" phương
  * án cắt; OTHER = vật tư khác (vật tư hàn, vật tư phụ...) - chuyển ngay. Cùng 1 kho cũ có cả 2 thì lập 2 phiếu.
  */
 export type WorkshopMovePart = 'STEEL' | 'OTHER';
@@ -60,13 +60,13 @@ export interface WorkshopMovePlan {
 }
 
 /**
- * Đổi xưởng khi lệnh đã giữ hàng / đang mua (anh Nhân 09-10/11/2026, Sang trả lời 10/11):
+ * Đổi xưởng khi lệnh đã giữ hàng / đang mua (nghiệp vụ 09-10/11/2026, IT trả lời 10/11):
  *  - afterWorkshopChanged(): chạy TRONG transaction đổi xưởng của ProductionInvoicesService.changeWorkshop() - dòng mua chưa
  *    về của lệnh mà kho nhận là kho Phôi/Hàn xưởng cũ thì đổi sang kho cùng loại xưởng mới; thông báo người mua + thủ kho kho
  *    cũ gửi SAU commit (hàm trả về).
  *  - getPlans(): hàng đang giữ cho lệnh (StockReservation ACTIVE) còn nằm ở kho Phôi/Hàn không thuộc xưởng hiện tại của lệnh -
  *    thủ kho kho cũ lập phiếu chuyển (WarehouseTransfersService.createWorkshopMove), kho mới nhận thì giữ chỗ chuyển theo.
- * Cờ "cần kiểm lại" phương án cắt do Sang bật trong changeWorkshop(); ở đây chỉ đọc (cutting-recheck.util.ts).
+ * Cờ "cần kiểm lại" phương án cắt được bật trong changeWorkshop(); ở đây chỉ đọc (cutting-recheck.util.ts).
  */
 @Injectable()
 export class WorkshopMoveService {
@@ -136,7 +136,7 @@ export class WorkshopMoveService {
       });
     }
 
-    // Tồn đoạn theo lệnh (anh Nhân 13/11 câu 8): phần đoạn lệnh còn giữ ở kho Phôi xưởng cũ tự chuyển sang kho Phôi xưởng mới,
+    // Tồn đoạn theo lệnh (nghiệp vụ 13/11 câu 8): phần đoạn lệnh còn giữ ở kho Phôi xưởng cũ tự chuyển sang kho Phôi xưởng mới,
     // không cần phiếu / thủ kho chỉnh tay. Công tắc tắt thì không làm gì.
     if (isSegmentStockEnabled()) {
       const toPhoi = await resolver.phoiWarehouseOf(toWorkshopId);
@@ -190,7 +190,7 @@ export class WorkshopMoveService {
   }
 
   /**
-   * Nhắc thủ kho kho đang giữ hàng của lệnh mà kho đó không thuộc xưởng hiện tại của lệnh lập phiếu chuyển (anh Nhân 16/11 câu 1):
+   * Nhắc thủ kho kho đang giữ hàng của lệnh mà kho đó không thuộc xưởng hiện tại của lệnh lập phiếu chuyển (nghiệp vụ 16/11 câu 1):
    * (c) kho đích vừa nhận phiếu chuyển của lần đổi xưởng trước mà lệnh đã đổi xưởng tiếp; (a) kho gửi vừa huỷ phiếu mà lệnh
    * đã sang xưởng thứ 3. Chỉ kho `fromWarehouseId` (bỏ trống = mọi kho). Best-effort, gọi sau commit.
    *

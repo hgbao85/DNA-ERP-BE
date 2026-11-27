@@ -756,7 +756,7 @@ describe('SteelIssuesService', () => {
       expect(prisma.steelIssue.create).not.toHaveBeenCalled();
     });
 
-    // CS2 review Sang 21/11: kiểm số cây theo chiều dài ở prepareIssue nằm ngoài transaction - 2 người xuất cùng lúc / 1 phiếu 2 dòng
+    // CS2 review IT 21/11: kiểm số cây theo chiều dài ở prepareIssue nằm ngoài transaction - 2 người xuất cùng lúc / 1 phiếu 2 dòng
     // trùng đều lọt. createInTx kiểm lại SAU khoá dòng lệnh, đếm bằng tx (thấy cả dòng vừa ghi trong cùng phiếu).
     it('có cây lẻ: kiểm lại số cây theo chiều dài SAU khoá, bằng tx; vượt -> 400, không ghi', async () => {
       (lockPisForIssue as jest.Mock).mockResolvedValueOnce(
@@ -863,7 +863,7 @@ describe('SteelIssuesService', () => {
         materialId: 30n,
         qty: 12,
         warehouseId: 800n, // rà soát 14/11 CK3: chỉ rút giữ chỗ ở kho Phôi của xưởng làm lệnh
-        stockLengthMm: 6000, // CS2 review Sang 21/11: rút đúng chiều dài cây đang xuất
+        stockLengthMm: 6000, // CS2 review IT 21/11: rút đúng chiều dài cây đang xuất
       });
       expect(stockLedgerService.postEntry).toHaveBeenCalledWith(
         {
@@ -3049,7 +3049,7 @@ describe('SteelIssuesService', () => {
   });
 
   // 2026-09-07 lần 2: viết lại hoàn toàn, đổi scope từ cutBundleId sang PI + vật tư (Sếp Trương
-  // Văn Nhân - công đoạn phụ làm SONG SONG, không cần biết đúng đợt cắt nào). catDone giờ tính
+  // Văn nghiệp vụ - công đoạn phụ làm SONG SONG, không cần biết đúng đợt cắt nào). catDone giờ tính
   // TỔNG cả PI (Σ mọi CutBundle của vật tư này), không còn giới hạn 1 đợt cắt cụ thể.
   describe('recordStepBatch (viết lại theo PI + vật tư, 2026-09-07 lần 2)', () => {
     const dto = {

@@ -10,7 +10,7 @@ const logger = new Logger('PurchaseRecompute');
 const EPS = 1e-9;
 
 /**
- * Tính lại số mua khi nhu cầu 1 vật tư đổi (anh Nhân chốt 07/11, áp cho MỌI vật tư): ranh giới là "Giám đốc đã ký".
+ * Tính lại số mua khi nhu cầu 1 vật tư đổi (nghiệp vụ chốt 07/11, áp cho MỌI vật tư): ranh giới là "Giám đốc đã ký".
  *  - CHƯA ký = NEW / QUOTING / SUBMITTED / REJECTED: số mua người mua đã tăng (orderQty) bị bỏ khi nhu cầu GIẢM, quay về số mới
  *    tính và báo người mua nhập lại (dòng đã nằm trong đơn đặt hàng - hoặc SUBMITTED dữ liệu cũ - là phiếu đã in -> phiếu cần
  *    in lại). Nhu cầu TĂNG thì giữ orderQty. Số mới = 0 thì dòng tự đóng "đủ tồn" VÀ rời khỏi đơn nháp (caller ghi
@@ -57,7 +57,7 @@ export interface PurchaseRecomputePlan {
 }
 
 /**
- * Huỷ lệnh theo SKU (đợt 1, 23/11/2026 - anh Nhân câu 3): dòng mua ĐÃ ký NCC mà nhu cầu giảm vì huỷ SKU thì người mua liên hệ NCC
+ * Huỷ lệnh theo SKU (đợt 1, 23/11/2026 - nghiệp vụ câu 3): dòng mua ĐÃ ký NCC mà nhu cầu giảm vì huỷ SKU thì người mua liên hệ NCC
  * - bớt được thì "Đóng phần thiếu", không bớt được thì hàng về vào TỒN CHUNG. Hai việc đó chỉ đúng khi buyQty (số CẦN cho lệnh) của
  * dòng đã ký hạ xuống nhu cầu mới: phân bổ nhận hàng chỉ cộng vào giữ chỗ của lệnh tới buyQty (phần vượt thành tồn chung), và
  * "Đóng phần thiếu" tạo dòng mua bù = buyQty − đã nhận. Số ĐÃ ký với NCC (effectiveOrderQty) giữ nguyên: orderQty trống thì ghi

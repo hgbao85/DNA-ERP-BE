@@ -279,7 +279,7 @@ export interface PurchaseOrderQtyResetParams {
   buyerIds: string[];
 }
 
-/** Nhu cầu 1 vật tư của lệnh tính lại GIẢM xuống dưới số đã có phiếu Giám đốc ký (anh Nhân chốt 07/11, câu 2b). */
+/** Nhu cầu 1 vật tư của lệnh tính lại GIẢM xuống dưới số đã có phiếu Giám đốc ký (nghiệp vụ chốt 07/11, câu 2b). */
 export interface PurchaseDemandDroppedParams {
   piCode: string;
   materialCode: string;
@@ -593,7 +593,7 @@ export interface WeavingIssueNotificationParams {
   outstandingQty: number;
 }
 
-/** Phiếu mảnh xuất đan vừa lập (anh Nhân 09/11/2026): kho giữ dây, gỗ, đinh, nút (kho Phụ kiện) lập phiếu vật tư kèm cho cùng
+/** Phiếu mảnh xuất đan vừa lập (nghiệp vụ 09/11/2026): kho giữ dây, gỗ, đinh, nút (kho Phụ kiện) lập phiếu vật tư kèm cho cùng
  *  điểm đan. `warehouseCodes` = kho của các vật tư cần cấp (người nhận), không hiển thị. */
 export interface WeavingMaterialsNeededParams {
   slipCode: string;
@@ -1030,7 +1030,7 @@ const notificationTypeDefinitions = {
   } satisfies NotificationTypeDef<PiNotificationParams>,
 
   /** Bước tự tạo dòng mua NGOÀI SẮT sau khi Giám đốc duyệt bị lỗi ở 1-3 khối (pat / vật tư tiêu hao / chân nhôm) - đề xuất
-   *  số 2 của Sang (13/11/2026). Trước đây chỉ ghi log máy chủ, IT phải chạy SQL tim-lenh-thieu-dong-mua-ngoai-sat.sql mới
+   *  số 2 của IT (13/11/2026). Trước đây chỉ ghi log máy chủ, IT phải chạy SQL tim-lenh-thieu-dong-mua-ngoai-sat.sql mới
    *  biết. CHỈ báo Admin (người bấm được "Tạo lại dòng mua ngoài sắt" ở Admin > Module nghiệp vụ > Lệnh sản xuất). WARNING
    *  (không CRITICAL) để không tự thêm Sếp - sự cố kỹ thuật, Admin tự khắc phục được. 1 thông báo/PI (dedupe), tự đóng khi
    *  lần tính lại sau chạy đủ 3 khối. `count` = số khối lỗi, `errorMessage` = tên các khối. */
@@ -1204,7 +1204,7 @@ const notificationTypeDefinitions = {
       p.buyerIds.length > 0 ? { userIds: p.buyerIds } : { roles: [BUSINESS_ROLES.PURCHASER] },
   } satisfies NotificationTypeDef<PurchaseOverReceivedParams>,
 
-  /** Tính lại làm nhu cầu 1 vật tư giảm dưới số đã có phiếu Giám đốc ký (anh Nhân chốt 07/11): phần mềm không tự sửa vì đơn
+  /** Tính lại làm nhu cầu 1 vật tư giảm dưới số đã có phiếu Giám đốc ký (nghiệp vụ chốt 07/11): phần mềm không tự sửa vì đơn
    *  có thể đã gửi NCC - báo người mua phụ trách + Giám đốc; người mua tự quyết làm phiếu thay thế hoặc nhận đủ (dư vào tồn tự
    *  do). Người A gọi `notifyPurchaseDemandDropped()` từ phần tính lại. Chưa gán người mua thì báo mọi Mua hàng. */
   PURCHASE_DEMAND_DROPPED: {
@@ -1222,7 +1222,7 @@ const notificationTypeDefinitions = {
         : { roles: [BUSINESS_ROLES.PURCHASER, BUSINESS_ROLES.BOSS] },
   } satisfies NotificationTypeDef<PurchaseDemandDroppedParams>,
 
-  /** Nhu cầu 1 vật tư giảm khi dòng mua CHƯA có Giám đốc ký (anh Nhân chốt 07/11): phần mềm bỏ số người mua đã tăng, quay về số
+  /** Nhu cầu 1 vật tư giảm khi dòng mua CHƯA có Giám đốc ký (nghiệp vụ chốt 07/11): phần mềm bỏ số người mua đã tăng, quay về số
    *  mới tính và báo người mua nhập lại. Dòng đã in phiếu (chờ ký) thì phiếu cần in lại. Chưa gán người mua thì báo mọi Mua hàng. */
   PURCHASE_ORDER_QTY_RESET: {
     category: 'ACTION_REQUIRED',
@@ -1569,7 +1569,7 @@ const notificationTypeDefinitions = {
     recipients: () => ({ roles: [BUSINESS_ROLES.KCS_STAFF] }),
   } satisfies NotificationTypeDef<QcSubmittedNotificationParams>,
 
-  /** Hàn / Sơn báo vượt tồn đoạn (13/11/2026, anh Nhân trả lời ý 2 ngày 14/11: có báo vượt thì hệ thống báo QLSX). 1 thông báo
+  /** Hàn / Sơn báo vượt tồn đoạn (13/11/2026, nghiệp vụ trả lời ý 2 ngày 14/11: có báo vượt thì hệ thống báo QLSX). 1 thông báo
    *  / đợt báo (dedupeKey theo đợt). QLSX gắn xưởng khác tự bị bỏ (piCode trong params). Tự đóng khi QLSX đóng hết dòng sổ của đợt
    *  (SegmentOveragesService.resolve). */
   SEGMENT_OVERAGE_REPORTED: {
@@ -2396,7 +2396,7 @@ const notificationTypeDefinitions = {
     recipients: (p: PoCancelDecidedNotificationParams) => ({ userIds: [p.requestedById] }),
   } satisfies NotificationTypeDef<PoCancelDecidedNotificationParams>,
 
-  /** SKU đã bị huỷ - xưởng dừng làm, Mua hàng xử lý dòng đã ký NCC (anh Nhân câu 3: bớt được thì Đóng phần thiếu, không bớt
+  /** SKU đã bị huỷ - xưởng dừng làm, Mua hàng xử lý dòng đã ký NCC (nghiệp vụ câu 3: bớt được thì Đóng phần thiếu, không bớt
    *  được thì nhận về tồn chung). */
   PO_CANCELLED: {
     category: 'INFO',

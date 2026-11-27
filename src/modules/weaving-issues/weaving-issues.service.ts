@@ -182,7 +182,7 @@ export class WeavingIssuesService {
   }
 
   /**
-   * Phiếu 1 xuất đan (anh Nhân 09/11/2026): mảnh đã xong công đoạn cuối xuất THẲNG từ kho đang giữ mảnh (thường là kho Sơn) ra
+   * Phiếu 1 xuất đan (nghiệp vụ 09/11/2026): mảnh đã xong công đoạn cuối xuất THẲNG từ kho đang giữ mảnh (thường là kho Sơn) ra
    * điểm đan, không còn đi qua kho Phụ kiện. Kiểm trước khi cấp số phiếu (IssueSlipsService.create) và kiểm lại lúc xác nhận.
    * Trần số lượng thật (định mức, số mảnh đã qua KCS còn ở kho) tính trong transaction có khoá - xem assertPieceCapInTx().
    */
@@ -478,7 +478,7 @@ export class WeavingIssuesService {
   }
 
   /**
-   * Phiếu 2 xuất đan: dây, gỗ, đinh, nút cấp kèm (anh Nhân 09/11) - phiếu riêng của kho giữ vật tư (kho Phụ kiện), cùng điểm đan
+   * Phiếu 2 xuất đan: dây, gỗ, đinh, nút cấp kèm (nghiệp vụ 09/11) - phiếu riêng của kho giữ vật tư (kho Phụ kiện), cùng điểm đan
    * với phiếu mảnh. Chỉ nhận vật tư nằm trong danh sách "đi kèm khi đan" của đúng mảnh trong định mức lệnh (Dây/Đinh luôn đi kèm,
    * Nút nhựa/Vật tư thành phẩm khi có tick); loại dây/nệm lệnh không chọn thì chặn.
    */
@@ -759,7 +759,7 @@ export class WeavingIssuesService {
     }
 
     const order = await this.findOrderOrThrow(productionOrderId);
-    // Q6 câu 2a (anh Nhân 26/11/2026): khung của SKU đã huỷ còn ở điểm đan vẫn nhận về bình thường (thành tồn khung đan kho thành
+    // Q6 câu 2a (nghiệp vụ 26/11/2026): khung của SKU đã huỷ còn ở điểm đan vẫn nhận về bình thường (thành tồn khung đan kho thành
     // phẩm) - bỏ cổng "lệnh đang chạy" cho lệnh đã huỷ; trần nhận vẫn là số điểm đan còn giữ.
     const cancelled = isCancelledOrder(order);
     if (!cancelled) {

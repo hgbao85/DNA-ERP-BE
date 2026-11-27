@@ -75,7 +75,7 @@ describe('SystemConfigService', () => {
       user: {
         findUnique: jest
           .fn()
-          .mockResolvedValue({ firstName: 'Sang', lastName: 'Trần', username: 'khsx' }),
+          .mockResolvedValue({ firstName: 'A', lastName: 'KHSX', username: 'khsx' }),
       },
     };
     notifications = { emit: jest.fn().mockResolvedValue(undefined) };
@@ -711,7 +711,7 @@ describe('SystemConfigService', () => {
       expect(notifications.emit).toHaveBeenCalledWith('CUTTING_WASTE_DEFAULT_CHANGED', {
         entityId: 'system-config',
         actorId: 'user-khsx',
-        params: { actorName: 'Trần Sang', previous: 5, next: 2, reason: 'Đơn Goplus gấp' },
+        params: { actorName: 'KHSX A', previous: 5, next: 2, reason: 'Đơn Goplus gấp' },
       });
     });
 

@@ -51,13 +51,13 @@ export interface OptimizeMaterialOptions {
    */
   laserMinTailMm?: number;
   /**
-   * CS2 (anh Nhân 20/11/2026): cây lẻ trong kho Phôi của xưởng làm lệnh - { chiều dài (mm): số cây đang có }. Chiều dài này phải
-   * có trong `stockLengths`; số cây dùng ≤ số đang có, đoạn được xếp lên cây lẻ trước rồi mới tới cây mua (anh Nhân 23/11,
+   * CS2 (nghiệp vụ 20/11/2026): cây lẻ trong kho Phôi của xưởng làm lệnh - { chiều dài (mm): số cây đang có }. Chiều dài này phải
+   * có trong `stockLengths`; số cây dùng ≤ số đang có, đoạn được xếp lên cây lẻ trước rồi mới tới cây mua (nghiệp vụ 23/11,
    * xem TwoStageInput.lengthCaps).
    */
   lengthCaps?: Record<number, number>;
   /**
-   * Anh Nhân câu 9-11 (24/11/2026): cây mua cuối của MỌI lệnh được cắt khúc thừa thành đoạn dư, không giới hạn maxSurplus, chọn cỡ
+   * Nghiệp vụ câu 9-11 (24/11/2026): cây mua cuối của MỌI lệnh được cắt khúc thừa thành đoạn dư, không giới hạn maxSurplus, chọn cỡ
    * cho cùi nhỏ nhất. Bật thì: (1) cây mua cuối CS2 (có cây lẻ) không còn giới hạn đoạn dư; (2) lệnh không cây lẻ mà cắt thường vô
    * nghiệm (mọi cây ≤ ngưỡng + dư ≤ maxSurplus) thì giải lại cho 1 cây mua cuối cắt tự do (ít cây mua nhất trước). Lệnh cắt thường
    * ra nghiệm thì giữ nguyên (mọi cây đã ≤ ngưỡng, khúc thừa đã nhỏ).
@@ -140,7 +140,7 @@ export function fillTailReserve(
 }
 
 /**
- * Nhân trả lời 26/11 câu 5 + 8: cây mua cuối ưu tiên cắt ĐOẠN DÀI trước nếu hao hụt vẫn thấp, chỉ thêm đoạn ngắn khi không còn cách
+ * Nghiệp vụ trả lời 26/11 câu 5 + 8: cây mua cuối ưu tiên cắt ĐOẠN DÀI trước nếu hao hụt vẫn thấp, chỉ thêm đoạn ngắn khi không còn cách
  * đạt ngưỡng; giữ giới hạn số cỡ / cây (MC Tự động 5 cỡ). Giữ nguyên các đoạn cây cuối phải cắt cho nhu cầu, bỏ phần đoạn DƯ bộ giải
  * đã xếp (bộ giải chỉ tối thiểu cùi nên hay lấp bằng nhiều đoạn ngắn) rồi xếp lại phần trống:
  *   1. trong các cách có cùi ≤ ngưỡng 1 cây (`allowedS`) và đúng luật laze: ÍT đoạn nhất, hoà thì cùi nhỏ hơn;
@@ -299,7 +299,7 @@ export function optimizeMaterial(
     .map(([len, max]) => [Number(len), Math.trunc(max)] as const)
     .filter(([len, max]) => max > 0 && stockLengths.includes(len));
   const hasCaps = cappedLengths.length > 0;
-  // CS2 (anh Nhân câu 2b, review Sang 21/11): chỉ kiểu cắt trên CÂY LẺ được vượt ngưỡng hao hụt từng cây (cây lẻ dùng trước kể cả
+  // CS2 (nghiệp vụ câu 2b, review IT 21/11): chỉ kiểu cắt trên CÂY LẺ được vượt ngưỡng hao hụt từng cây (cây lẻ dùng trước kể cả
   // khi làm vượt ngưỡng - KHSX xin đặc cách); kiểu cắt trên cây MUA giữ đúng ngưỡng như thường.
   const cappedSet = new Set(cappedLengths.map(([len]) => len));
   const ratioOf = (S: number) => (cappedSet.has(S) ? 1.0 : maxWasteRatio);
@@ -458,7 +458,7 @@ export function optimizeMaterial(
       max,
     }))
     .filter((g) => g.patterns.length > 0);
-  // CS2 cây mua cuối (anh Nhân 23/11): phần còn thiếu sau khi xếp cây lẻ được cắt trên 1 cây mua tự do (không theo ngưỡng). Chỉ khi
+  // CS2 cây mua cuối (nghiệp vụ 23/11): phần còn thiếu sau khi xếp cây lẻ được cắt trên 1 cây mua tự do (không theo ngưỡng). Chỉ khi
   // có đúng 1 chiều dài mua. MC Tự động: cây đó cắt tay (tính vào số cây cắt tay tối đa).
   const purchaseLengths = stockLengths.filter((S) => !cappedSet.has(S));
   let tailLength =
@@ -605,7 +605,7 @@ export function optimizeMaterial(
   }
   let tailManualBars = 0;
   if (res.tail && tailLength !== null && opts.lastBarFill) {
-    // Nhân 26/11 câu 5 + 8: cây mua cuối ưu tiên đoạn dài, ít đoạn; đoạn ngắn chỉ khi cần để đạt ngưỡng.
+    // Nghiệp vụ 26/11 câu 5 + 8: cây mua cuối ưu tiên đoạn dài, ít đoạn; đoạn ngắn chỉ khi cần để đạt ngưỡng.
     const prodAll = cutLengths.map((_, k) => {
       let prod = res.tail!.counts[k];
       for (let p = 0; p < allPatterns.length; p++)

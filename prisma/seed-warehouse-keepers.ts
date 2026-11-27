@@ -1,5 +1,5 @@
 /**
- * Tạo / cập nhật tài khoản thủ kho theo 9 kho (Đợt 7, người giữ kho anh Nhân chốt 02-10/11/2026). Chạy lại được: tài khoản đã có
+ * Tạo / cập nhật tài khoản thủ kho theo 9 kho (Đợt 7, người giữ kho nghiệp vụ chốt 02-10/11/2026). Chạy lại được: tài khoản đã có
  * (theo username) thì cập nhật họ tên, kho, quyền thủ kho; mật khẩu CHỈ đặt khi tạo mới (không ghi đè mật khẩu người dùng đã đổi).
  *
  *   npx ts-node --transpile-only prisma/seed-warehouse-keepers.ts           # xem trước (không ghi gì)
@@ -32,7 +32,7 @@ const TP3 = 'thanh-pham-1792489603061';
 const KEEPERS: Keeper[] = [
   { username: 'kieulinh', name: 'Kiều Linh', warehouses: ['phoi-son-han', 'phoi-son-han-han-pa'] },
   { username: 'hung', name: 'Hùng', warehouses: ['phoi-son-han-phoi-pha', 'phoi-son-han-han-pha'] },
-  // Kho Phụ kiện trước mắt do chị Quanh giữ; chị Diễm giữ thêm để thay khi chị Quanh nghỉ (anh Nhân 10/11).
+  // Kho Phụ kiện trước mắt do chị Quanh giữ; chị Diễm giữ thêm để thay khi chị Quanh nghỉ (nghiệp vụ 10/11).
   { username: 'diem', name: 'Diễm', warehouses: ['phoi-son-han-son-pa', 'vat-tu-tp'] },
   { username: 'quanh', name: 'Quanh', warehouses: ['vat-tu-tp'] },
   { username: 'trinh', name: 'Trinh', warehouses: [TP1, TP2] },

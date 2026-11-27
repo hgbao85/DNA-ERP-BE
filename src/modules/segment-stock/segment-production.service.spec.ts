@@ -219,7 +219,7 @@ describe('SegmentProductionService', () => {
     await expect(service.recomputeForPi(900n, { reason: 'x' })).rejects.toThrow(ConflictException);
   });
 
-  // Huỷ lệnh đợt 2 - Q2 (anh Nhân 24/11/2026): đoạn của SKU huỷ tự vào dư kho Phôi.
+  // Huỷ lệnh đợt 2 - Q2 (nghiệp vụ 24/11/2026): đoạn của SKU huỷ tự vào dư kho Phôi.
   it('Q2: SKU đã huỷ không tính số cần - đích giữ chỉ theo SKU còn hiệu lực', async () => {
     setData({
       orders: [

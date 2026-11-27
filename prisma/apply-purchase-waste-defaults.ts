@@ -1,5 +1,5 @@
 /**
- * Nạp bảng % hao hụt khi mua mặc định (bản yêu cầu v8 mục 7.9, anh Nhân chốt vòng 3–4) vào
+ * Nạp bảng % hao hụt khi mua mặc định (bản yêu cầu v8 mục 7.9, nghiệp vụ chốt vòng 3–4) vào
  * Material.purchaseWastePercentage.
  *
  *   Sắt (trừ sắt cắt bằng phần mềm), la tấm, thép dây ........ 1%

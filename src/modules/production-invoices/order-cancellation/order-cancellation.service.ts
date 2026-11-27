@@ -132,7 +132,7 @@ export interface CancelWipSnapshot {
 }
 
 /**
- * Câu 8 (anh Nhân 24/11/2026): hộp duyệt huỷ của Sếp cần thấy đã xuất bao nhiêu sắt, dòng mua đã ký (kèm tiền) và hàng đã làm ở
+ * Câu 8 (nghiệp vụ 24/11/2026): hộp duyệt huỷ của Sếp cần thấy đã xuất bao nhiêu sắt, dòng mua đã ký (kèm tiền) và hàng đã làm ở
  * từng công đoạn. Sắt và dòng mua đi theo CẢ lệnh (PI) - lệnh gộp thì gồm cả phần của SKU khác. Đề nghị đã duyệt thì số công đoạn
  * lấy từ wipSnapshot lúc duyệt; đề nghị chưa duyệt thì đếm ngay lúc xem.
  */
@@ -200,7 +200,7 @@ const fullName = (u: { firstName: string; lastName: string } | null | undefined)
   u ? `${u.lastName} ${u.firstName}`.trim() : '';
 
 /**
- * Huỷ lệnh theo SKU - đợt 1 (23/11/2026, anh Nhân trả lời 7 câu + user chốt):
+ * Huỷ lệnh theo SKU - đợt 1 (23/11/2026, nghiệp vụ trả lời 7 câu + user chốt):
  *  - câu 1: KHSX bấm "Đề nghị huỷ" kèm lý do, Sếp duyệt mới huỷ.
  *  - câu 2: huỷ theo TỪNG SKU (1 lệnh SX); SKU còn lại chạy tiếp. Lệnh gộp chưa xuất sắt thì tính lại phương án cắt cho phần còn
  *    lại; đã xuất sắt thì GIỮ phương án, tổ cắt cắt hết, phần của SKU huỷ thành dư (user chốt 23/11).
@@ -211,7 +211,7 @@ const fullName = (u: { firstName: string; lastName: string } | null | undefined)
  *  - câu 5: huỷ được bất kỳ lúc nào trước khi giao hàng (chưa có booking nào xuất SKU này).
  *  - câu 6/7: hàng đã làm ra GIỮ NGUYÊN tại kho công đoạn, chụp số lượng vào wipSnapshot - đợt 2 mới cho lệnh khác dùng lại.
  */
-/** Khoá theo lệnh (PI) của luồng duyệt huỷ - mọi lượt duyệt huỷ SKU của cùng lệnh xếp hàng (lỗi Cao 1, review Sang 23/11). */
+/** Khoá theo lệnh (PI) của luồng duyệt huỷ - mọi lượt duyệt huỷ SKU của cùng lệnh xếp hàng (lỗi Cao 1, review IT 23/11). */
 export const orderCancelPiLockKey = (piId: bigint) => `order-cancel:pi:${piId}`;
 
 @Injectable()
@@ -573,7 +573,7 @@ export class OrderCancellationService {
   }
 
   /**
-   * Q3 (anh Nhân 24/11/2026): QLSX quyết từng trường hợp. CONTINUE = tổ cắt cắt tiếp cho SKU đã huỷ (tới số cần cũ), đoạn vào dư
+   * Q3 (nghiệp vụ 24/11/2026): QLSX quyết từng trường hợp. CONTINUE = tổ cắt cắt tiếp cho SKU đã huỷ (tới số cần cũ), đoạn vào dư
    * kho Phôi (Q2). STOP = ngưng; cây còn lại (nguyên hoặc lẻ) nhập trả kho Phôi của xưởng làm lệnh - vào tồn đúng chiều dài, lệnh sau
    * dùng cây lẻ trước (CS2). Tổng mm trả không vượt sắt tổ cắt đã nhận chưa cắt. STOP là quyết định cuối.
    */
@@ -651,7 +651,7 @@ export class OrderCancellationService {
           }
         }
         const phoi = await new WorkshopWarehouseResolver(tx).phoiWarehouseOfPi(piId);
-        // Nhân 26/11 câu 2: QLSX chỉ ghi số cây trả (chờ xác nhận); thủ kho Phôi đếm + xác nhận thì mới ghi sổ kho
+        // Nghiệp vụ 26/11 câu 2: QLSX chỉ ghi số cây trả (chờ xác nhận); thủ kho Phôi đếm + xác nhận thì mới ghi sổ kho
         // (confirmSteelReturn). Cây đã rời tổ cắt nên vẫn trừ khỏi sắt tổ cắt còn (steelLeftoverMm / tiến độ Phôi).
         for (const line of returns) {
           await tx.steelReturn.create({
@@ -686,7 +686,7 @@ export class OrderCancellationService {
     return this.cutSteelRow(row, piId);
   }
 
-  // ─── Nhân 26/11 câu 2: thủ kho Phôi xác nhận sắt tổ cắt trả về ─────────────────────────────────────────────────────────────
+  // ─── nghiệp vụ 26/11 câu 2: thủ kho Phôi xác nhận sắt tổ cắt trả về ─────────────────────────────────────────────────────────────
 
   /** Dòng trả sắt chờ thủ kho xác nhận (phạm vi kho của người xem; trống = mọi kho Phôi). */
   async listPendingSteelReturns(warehouseScope: string | null): Promise<PendingSteelReturnDto[]> {
@@ -966,7 +966,7 @@ export class OrderCancellationService {
 
     // Sau commit, best-effort (cùng kiểu Kết thúc lệnh): lỗi ở đây chỉ log, không làm hỏng việc huỷ đã ghi.
     await this.afterApproved(outcome, actor.id);
-    // Q6 (anh Nhân 26/11/2026): khung đã đan của SKU vừa huỷ thành tồn khung đan kho thành phẩm - cấp ngay cho lệnh đang chạy cần
+    // Q6 (nghiệp vụ 26/11/2026): khung đã đan của SKU vừa huỷ thành tồn khung đan kho thành phẩm - cấp ngay cho lệnh đang chạy cần
     // đúng mảnh + màu dây (best-effort, lỗi chỉ log).
     // Khung đang chuyển tới lệnh vừa huỷ (chưa nhận) vẫn chờ thủ kho nơi nhận nhập số thực nhận; chưa tính vào tồn của lệnh
     // huỷ này cho tới khi xác nhận.
@@ -1020,7 +1020,7 @@ export class OrderCancellationService {
     orderId: bigint,
     note: string | undefined,
   ): Promise<ApproveOutcome> {
-    // Lỗi Cao 1 (review Sang 23/11, còn ở 02016a3): khoá theo CẢ LỆNH (PI) trước - 2 lượt duyệt huỷ 2 SKU của cùng lệnh gộp gần như
+    // Lỗi Cao 1 (review IT 23/11, còn ở 02016a3): khoá theo CẢ LỆNH (PI) trước - 2 lượt duyệt huỷ 2 SKU của cùng lệnh gộp gần như
     // cùng lúc trước đây mỗi lượt chỉ khoá dòng SKU của mình, đếm "SKU còn chạy" đều thấy SKU kia nên không lượt nào chuyển lệnh
     // sang CANCELLED (lệnh thành DONE, dòng mua vẫn mở, phương án cũ vẫn APPROVED). Thứ tự khoá: PI -> dòng lệnh.
     const head = await tx.productionOrder.findUniqueOrThrow({
@@ -1089,7 +1089,7 @@ export class OrderCancellationService {
           productVariantId: item.productVariantId,
           wireMaterialId: item.wireMaterialId,
           cushionMaterialId: item.cushionMaterialId,
-          // Câu 3 (anh Nhân 24/11): giữ đủ số lượng cũ (KHSX tự bớt nếu hàng đã làm vẫn dùng được); BỎ mốc cũ - lên lệnh lại KHSX
+          // Câu 3 (nghiệp vụ 24/11): giữ đủ số lượng cũ (KHSX tự bớt nếu hàng đã làm vẫn dùng được); BỎ mốc cũ - lên lệnh lại KHSX
           // đặt mốc mới. Hạn giao là của dòng đơn bán (Sales), giữ nguyên.
           quantity: item.quantity,
           materialDeadline: null,
@@ -1200,7 +1200,7 @@ export class OrderCancellationService {
 
     // Mọi lệnh SX còn lại của PI đã Kết thúc (hoặc cả lệnh huỷ) -> nhả giữ chỗ vật tư + giữ đoạn như luồng Kết thúc.
     await this.productionOrders.releaseReservationsIfPiFinished(outcome.itemId);
-    // Đợt 2 - Q2 (anh Nhân 24/11/2026): đoạn đã cắt + KCS đạt của SKU huỷ tự vào dư kho Phôi (tính lại ngay, không chờ lần KCS sau).
+    // Đợt 2 - Q2 (nghiệp vụ 24/11/2026): đoạn đã cắt + KCS đạt của SKU huỷ tự vào dư kho Phôi (tính lại ngay, không chờ lần KCS sau).
     // Công tắc SEGMENT_STOCK_ENABLED tắt thì không làm gì; lỗi chỉ log.
     await this.segmentProduction.recomputeAfterQc(piId, actorId, `PO_CANCELLED:${outcome.orderId}`);
 
@@ -1217,7 +1217,7 @@ export class OrderCancellationService {
       return;
     }
 
-    // Lỗi Cao 2 (review Sang 23/11): mọi SKU còn lại đã Kết thúc (xưởng làm xong) -> giữ chỗ vừa nhả ở trên, KHÔNG tính lại phương
+    // Lỗi Cao 2 (review IT 23/11): mọi SKU còn lại đã Kết thúc (xưởng làm xong) -> giữ chỗ vừa nhả ở trên, KHÔNG tính lại phương
     // án / dòng mua (trước đây tính lại tạo lại giữ chỗ, có thể sinh dòng mua mới cho lệnh đã xong, không còn lần Kết thúc nào để nhả).
     if (!(await this.hasUnfinishedLiveOrder(piId))) {
       outcome.replanNote =
@@ -1419,7 +1419,7 @@ export class OrderCancellationService {
 
   // ─── Kiểm ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-  /** Câu 1 file 24/11 (Sang chốt, anh Nhân đồng ý): lệnh đã Kết thúc (xưởng làm xong) thì không huỷ - tránh cấp dòng mới rồi làm lại. */
+  /** Câu 1 file 24/11 (IT chốt, nghiệp vụ đồng ý): lệnh đã Kết thúc (xưởng làm xong) thì không huỷ - tránh cấp dòng mới rồi làm lại. */
   private assertNotFinished(floorStage: string): void {
     if (floorStage === 'FINISHED') {
       throw new ConflictException('Lệnh đã Kết thúc (xưởng làm xong) - không huỷ được');

@@ -35,4 +35,4 @@
 - Tham khảo dây nối service thật: test/integration/reservation-own-pi.integration.spec.ts.
 
 ## Tài khoản demo (mật khẩu không cần, gọi service trực tiếp)
-admin, boss, sales, khsx, qlsx, khopsh(phoi-son-han), khotp(thanh-pham), phoi, han, son, kcs; người mua: nhan (Nhàn), nghi (Nghi) — Material.buyerId đã gán 10/11; thủ kho thật: kieulinh (phoi-son-han + phoi-son-han-han-pa), hung (phoi-son-han-phoi-pha + phoi-son-han-han-pha), diem (phoi-son-han-son-pa + vat-tu-tp), quanh (vat-tu-tp), trinh (thanh-pham + thanh-pham-1788485485362), tuan (thanh-pham-1792489603061).
+admin, boss, sales, khsx, qlsx, khopsh(phoi-son-han), khotp(thanh-pham), phoi, han, son, kcs; người mua: nhan, nghi — Material.buyerId đã gán 10/11; thủ kho thật: kieulinh (phoi-son-han + phoi-son-han-han-pa), hung (phoi-son-han-phoi-pha + phoi-son-han-han-pha), diem (phoi-son-han-son-pa + vat-tu-tp), quanh (vat-tu-tp), trinh (thanh-pham + thanh-pham-1788485485362), tuan (thanh-pham-1792489603061).

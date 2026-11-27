@@ -176,7 +176,7 @@ export class FloorReviewService {
       (b) => b.productionOrder.productionInvoiceItem.productionInvoice?.id,
     );
     const stoppedPis = await this.loadStoppedPis(stage, piId, workshopId);
-    // Câu 4 (anh Nhân 24/11/2026, đảo cách ẩn 23/11): KCS chấm nốt đợt của SKU đã huỷ - đợt vẫn hiện, không xám (lệnh huỷ luôn
+    // Câu 4 (nghiệp vụ 24/11/2026, đảo cách ẩn 23/11): KCS chấm nốt đợt của SKU đã huỷ - đợt vẫn hiện, không xám (lệnh huỷ luôn
     // FINISHED nên PI có thể không còn SKU ACTIVE). FE gắn nhãn "SKU đã huỷ" theo cancelledOrderIds. Huỷ hiếm nên tập này nhỏ.
     const cancelledOrderIds = (
       await this.prisma.productionOrder.findMany({

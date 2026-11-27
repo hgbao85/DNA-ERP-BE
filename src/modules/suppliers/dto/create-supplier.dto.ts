@@ -23,7 +23,7 @@ export class CreateSupplierDto {
   @IsString()
   address?: string;
 
-  // 12/11/2026 (anh Nhân): mã số thuế + người liên hệ của NCC.
+  // 12/11/2026 (nghiệp vụ): mã số thuế + người liên hệ của NCC.
   @ApiPropertyOptional()
   @IsOptional()
   @Transform(({ value }: { value: unknown }) =>

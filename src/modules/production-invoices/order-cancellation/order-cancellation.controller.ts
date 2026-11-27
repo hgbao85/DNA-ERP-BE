@@ -75,8 +75,8 @@ export class OrderCancellationController {
     return this.goods.transfer(user.id, id, dto);
   }
 
-  /** Q3 (anh Nhân 24/11/2026): SKU đã huỷ còn sắt ở tổ cắt - QLSX quyết cắt tiếp hay ngưng + nhập trả cây. */
-  /** Nhân 26/11 câu 2: sắt tổ cắt trả về chờ thủ kho Phôi xác nhận. */
+  /** Q3 (nghiệp vụ 24/11/2026): SKU đã huỷ còn sắt ở tổ cắt - QLSX quyết cắt tiếp hay ngưng + nhập trả cây. */
+  /** Nghiệp vụ 26/11 câu 2: sắt tổ cắt trả về chờ thủ kho Phôi xác nhận. */
   @Get('steel-returns/pending')
   @RequirePermissions(STOCK_VIEW)
   pendingSteelReturns(@CurrentUser('warehouseScope') warehouseScope: string | null) {
@@ -95,7 +95,7 @@ export class OrderCancellationController {
     return this.service.confirmSteelReturn(actorOf(user), id, dto.countedBars, warehouseScope);
   }
 
-  /** Nhân 26/11 câu 1: khung đan lấy khác kho thành phẩm - đang chuyển, chờ thủ kho nơi nhận xác nhận. */
+  /** Nghiệp vụ 26/11 câu 1: khung đan lấy khác kho thành phẩm - đang chuyển, chờ thủ kho nơi nhận xác nhận. */
   @Get('woven-transfers/pending')
   @RequirePermissions(STOCK_VIEW)
   wovenInTransit(@CurrentUser('warehouseScope') warehouseScope: string | null) {
@@ -138,7 +138,7 @@ export class OrderCancellationController {
     return this.service.decideCut(actorOf(user), id, dto);
   }
 
-  /** Câu 8 (anh Nhân 24/11/2026): sắt đã xuất, dòng mua đã ký (kèm tiền), hàng từng công đoạn - cho hộp duyệt của Sếp. */
+  /** Câu 8 (nghiệp vụ 24/11/2026): sắt đã xuất, dòng mua đã ký (kèm tiền), hàng từng công đoạn - cho hộp duyệt của Sếp. */
   @Get(':id/impact')
   @RequirePermissions(VIEW)
   impact(@Param('id') id: string) {

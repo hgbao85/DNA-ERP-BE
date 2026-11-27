@@ -10,7 +10,7 @@ function rolesOf(method: keyof SuppliersController): unknown {
 }
 /* eslint-enable @typescript-eslint/unbound-method */
 
-describe('SuppliersController - quyền theo vai trò (12/11/2026, anh Nhân)', () => {
+describe('SuppliersController - quyền theo vai trò (12/11/2026, nghiệp vụ)', () => {
   it('xoá NCC chỉ Admin', () => {
     expect(rolesOf('remove')).toEqual([DEFAULT_ROLES.ADMIN]);
   });

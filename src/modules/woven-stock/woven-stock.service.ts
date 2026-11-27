@@ -30,7 +30,7 @@ export interface WovenStockSource {
 }
 
 /**
- * Tồn khung đan theo (mảnh, màu dây) - gộp MỌI kho thành phẩm (Nhân 26/11 câu 1: lệnh xưởng nào cũng lấy được). Nguồn ghi kho
+ * Tồn khung đan theo (mảnh, màu dây) - gộp MỌI kho thành phẩm (nghiệp vụ 26/11 câu 1: lệnh xưởng nào cũng lấy được). Nguồn ghi kho
  * từng phần để lấy cùng kho trước, khác kho thì phải chuyển giữa 2 xưởng.
  */
 export interface WovenStockBucket {
@@ -49,10 +49,10 @@ export const WOVEN_TRANSFER_RECEIVED = {
 };
 
 /**
- * Tồn khung đan (Q6 huỷ lệnh, anh Nhân trả lời 26/11/2026 - câu 1b, 2a, 3a):
+ * Tồn khung đan (Q6 huỷ lệnh, nghiệp vụ trả lời 26/11/2026 - câu 1b, 2a, 3a):
  *  - khung đã đan của SKU bị huỷ (đã nhận về từ điểm đan, kể cả phần nhận về SAU khi huỷ) nằm ở kho thành phẩm của lệnh bị huỷ,
  *    thành tồn theo mã mảnh + màu dây;
- *  - lệnh sau cần đúng mảnh + màu dây TỰ lấy tồn trước, chỉ xuất đan phần còn thiếu. Nhân 26/11 câu 1: lệnh ở kho / xưởng nào
+ *  - lệnh sau cần đúng mảnh + màu dây TỰ lấy tồn trước, chỉ xuất đan phần còn thiếu. nghiệp vụ 26/11 câu 1: lệnh ở kho / xưởng nào
  *    cũng lấy được - cùng kho trước; khác kho thì dòng lấy ở trạng thái "đang chuyển" (receiveStatus PENDING), kho nguồn trừ ngay,
  *    lệnh nhận không phải xuất đan phần đó nhưng Chuyền kiểm chỉ đếm khi thủ kho thành phẩm nơi nhận xác nhận đã nhận (kèm ảnh phiếu).
  *

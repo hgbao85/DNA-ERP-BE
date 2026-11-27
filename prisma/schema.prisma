@@ -755,7 +755,7 @@ model Supplier {
   name        String
   phone       String?
   address     String?
-  /// Mã số thuế + người liên hệ (12/11/2026, anh Nhân: danh sách NCC trên hệ thống là "sheet quản lý NCC", người mua tự
+  /// Mã số thuế + người liên hệ (12/11/2026, nghiệp vụ: danh sách NCC trên hệ thống là "sheet quản lý NCC", người mua tự
   /// thêm/sửa, chỉ Admin xoá).
   taxCode     String?
   contactName String?
@@ -1503,7 +1503,7 @@ model SalesOrderItem {
   /// ghim bản sao riêng (ProductionOrder.wireMaterialId/cushionMaterialId).
   wireMaterialId    BigInt?
   cushionMaterialId BigInt?
-  /// Huỷ lệnh câu 2 (anh Nhân 24/11/2026): khách huỷ hẳn thì Sales tự huỷ dòng đơn. Chỉ huỷ được khi chưa xuất, không còn lệnh SX
+  /// Huỷ lệnh câu 2 (nghiệp vụ 24/11/2026): khách huỷ hẳn thì Sales tự huỷ dòng đơn. Chỉ huỷ được khi chưa xuất, không còn lệnh SX
   /// sống và không nằm trong booking chưa huỷ. Dòng SKU chưa lên lệnh của dòng này cũng gắn cancelledAt để KHSX hết thấy.
   cancelledAt       DateTime?
   cancelledById     String?
@@ -1539,7 +1539,7 @@ enum BookingStatus {
   CANCELLED
 }
 
-/// 1 booking của hãng tàu (thường 1 cont - 5.4). Các ô theo bảng booking anh Nhân gửi (5.1). Mã PI/PO của khách không lưu riêng:
+/// 1 booking của hãng tàu (thường 1 cont - 5.4). Các ô theo bảng booking nghiệp vụ gửi (5.1). Mã PI/PO của khách không lưu riêng:
 /// suy từ các dòng (SalesOrder.orderCode của dòng đã chọn - 5.2).
 model Booking {
   id            BigInt        @id @default(autoincrement())
@@ -1821,7 +1821,7 @@ model ProductionInvoice {
   /// Không cần Sếp duyệt riêng (khác 2 trục hao hụt/chiều dài ở trên): đây thuần là ngân sách
   /// THỜI GIAN TÍNH TOÁN, không đổi kết quả cắt hay chi phí sắt, nên KHSX tự set và chạy luôn.
   solverTimeLimitSecondsOverride Int?
-  // Phần A - cờ "cần kiểm lại phương án cắt" khi QLSX đổi xưởng lệnh đã có phương án cắt APPROVED (anh Nhân chốt 10/11).
+  // Phần A - cờ "cần kiểm lại phương án cắt" khi QLSX đổi xưởng lệnh đã có phương án cắt APPROVED (nghiệp vụ chốt 10/11).
   // KHSX bấm "Đã kiểm" thì tắt cờ (không tự tính lại/duyệt phương án mới). Người B đọc cờ này để chặn chuyển/xuất sắt.
   cuttingRecheckRequired         Boolean                 @default(false)
   cuttingRecheckRequiredAt       DateTime?
@@ -1914,7 +1914,7 @@ model ProductionInvoiceItem {
   /// warehouseCode (gộp/cắt riêng lại) thì xoá luôn cột này. Mọi dòng của 1 PI cùng 1 xưởng (xuất sắt/giữ chỗ theo PI).
   workshopId               BigInt?
   workshop                 Workshop?           @relation(fields: [workshopId], references: [id])
-  /// Huỷ lệnh theo SKU (đợt 1, 23/11/2026 - anh Nhân câu 2/4): dòng này đã bị Sếp duyệt huỷ. Dòng ở lại lệnh cũ làm lịch sử
+  /// Huỷ lệnh theo SKU (đợt 1, 23/11/2026 - nghiệp vụ câu 2/4): dòng này đã bị Sếp duyệt huỷ. Dòng ở lại lệnh cũ làm lịch sử
   /// (lệnh SX của nó status CANCELLED); dòng đơn bán được cấp 1 dòng MỚI (productionInvoiceId NULL) để KHSX lên lệnh lại -
   /// mọi chỗ gom dòng theo salesOrderItemId phải bỏ dòng có cột này. Xem ProductionOrderCancelRequest.
   cancelledAt              DateTime?
@@ -2301,7 +2301,7 @@ model ProductionOrder {
   @@map("production_orders")
 }
 
-// ─── Huỷ lệnh theo SKU - đợt 1 (23/11/2026, anh Nhân trả lời 7 câu) ─────────────────────────────────────────────────────
+// ─── Huỷ lệnh theo SKU - đợt 1 (23/11/2026, nghiệp vụ trả lời 7 câu) ─────────────────────────────────────────────────────
 // KHSX bấm "Đề nghị huỷ" 1 SKU (1 lệnh SX) kèm lý do, Sếp duyệt mới huỷ; huỷ được bất kỳ lúc nào trước khi giao hàng. Duyệt:
 // lệnh SX status CANCELLED + floorStage FINISHED (xưởng hết thấy, PI vẫn Kết thúc được), dòng SKU cũ cancelledAt, dòng đơn bán
 // có dòng SKU mới "chưa lên lệnh". "Mỗi lệnh ≤ 1 đề nghị PENDING" do unique index MỘT PHẦN trong migration (Prisma không khai được).
@@ -2329,7 +2329,7 @@ model ProductionOrderCancelRequest {
   wipSnapshot       Json?
   /// Dòng SKU mới cấp cho dòng đơn bán sau khi huỷ (để lên lệnh lại). NULL = dòng SKU tạo tay, không gắn dòng đơn.
   replacementItemId BigInt?
-  /// Huỷ lệnh đợt 2 - Q3 (anh Nhân 24/11/2026): sắt đã xuất cho tổ cắt mà chưa cắt - QLSX quyết từng trường hợp. NULL = chưa quyết.
+  /// Huỷ lệnh đợt 2 - Q3 (nghiệp vụ 24/11/2026): sắt đã xuất cho tổ cắt mà chưa cắt - QLSX quyết từng trường hợp. NULL = chưa quyết.
   /// CONTINUE = cho cắt tiếp (tổ cắt báo cắt được cho SKU đã huỷ, đoạn vào dư kho Phôi); STOP = ngưng, cây còn lại nhập trả kho
   /// Phôi (SteelReturn). STOP là quyết định cuối; CONTINUE đổi sang STOP được.
   cutDecision       ProductionOrderCutDecision?
@@ -2364,7 +2364,7 @@ enum CancelledGoodsKind {
   WOVEN
 }
 
-/// Huỷ lệnh đợt 2 - Q5/Q6 (anh Nhân 24/11/2026): KHSX chuyển hàng đã làm của SKU đã huỷ sang 1 dòng SKU khác đang chạy. Q5 hàng đã
+/// Huỷ lệnh đợt 2 - Q5/Q6 (nghiệp vụ 24/11/2026): KHSX chuyển hàng đã làm của SKU đã huỷ sang 1 dòng SKU khác đang chạy. Q5 hàng đã
 /// đóng gói: cùng sản phẩm + màu dây + vải nệm, đích nhận 1 PackagingRecord (transferId) nên booking giao được. Q6 khung đã đan: cùng
 /// sản phẩm + màu dây, theo mảnh, đích coi như đã nhận đan thêm (Chuyền kiểm làm tiếp). Nguồn bớt theo Σ đã chuyển.
 model CancelledGoodsTransfer {
@@ -2379,7 +2379,7 @@ model CancelledGoodsTransfer {
   note              String?
   createdById       String
   createdAt         DateTime                     @default(now())
-  /// Nhân 26/11 câu 1: khung đan lấy KHÁC kho thành phẩm - kho nguồn / kho nhận (mã kho TP). Null = cùng kho / dòng cũ.
+  /// Nghiệp vụ 26/11 câu 1: khung đan lấy KHÁC kho thành phẩm - kho nguồn / kho nhận (mã kho TP). Null = cùng kho / dòng cũ.
   fromWarehouseCode String?
   toWarehouseCode   String?
   /// PENDING = đang chuyển giữa 2 xưởng (kho nguồn đã trừ, lệnh nhận chưa được chuyền kiểm đếm); RECEIVED = thủ kho nơi nhận đã
@@ -2399,13 +2399,13 @@ model CancelledGoodsTransfer {
   @@map("cancelled_goods_transfers")
 }
 
-/// Nhân 26/11 câu 1: khung đan lấy khác kho thành phẩm - đang chuyển / đã nhận.
+/// Nghiệp vụ 26/11 câu 1: khung đan lấy khác kho thành phẩm - đang chuyển / đã nhận.
 enum CancelledGoodsReceiveStatus {
   PENDING
   RECEIVED
 }
 
-/// Nhân 26/11 câu 2: thủ kho Phôi xác nhận số cây trả về rồi mới ghi sổ kho.
+/// Nghiệp vụ 26/11 câu 2: thủ kho Phôi xác nhận số cây trả về rồi mới ghi sổ kho.
 enum SteelReturnStatus {
   PENDING
   CONFIRMED
@@ -2967,7 +2967,7 @@ model SupplierOrder {
 
   /// Unique (supplierId, year, seq) CHỈ cho đơn chưa huỷ: partial unique index viết tay trong migration
   /// (supplier_orders_active_seq_key ... WHERE status <> 'CANCELLED') - Prisma không khai báo được index có
-  /// điều kiện. 12/11/2026 (anh Nhân): đơn huỷ khi CHƯA TỪNG có phiếu Giám đốc ký (revision = 0) trả số lại,
+  /// điều kiện. 12/11/2026 (nghiệp vụ): đơn huỷ khi CHƯA TỪNG có phiếu Giám đốc ký (revision = 0) trả số lại,
   /// đơn kế tiếp của cùng NCC lấy lại số đó (không nhảy cóc) - nên nhiều đơn CANCELLED có thể trùng số.
   @@index([status])
   @@map("supplier_orders")
@@ -3365,7 +3365,7 @@ model StockQuant {
   @@map("stock_quant")
 }
 
-/// Giữ ĐOẠN theo lệnh (13/11/2026, anh Nhân: "quản đoạn theo TỪNG LỆNH"). Đoạn đủ công đoạn + KCS đạt của lệnh nào giữ cho lệnh
+/// Giữ ĐOẠN theo lệnh (13/11/2026, nghiệp vụ: "quản đoạn theo TỪNG LỆNH"). Đoạn đủ công đoạn + KCS đạt của lệnh nào giữ cho lệnh
 /// đó trong kho Phôi của xưởng làm lệnh, theo mã đoạn (cỡ đoạn + bộ công đoạn). Tồn trong kho (stock_quant) trừ phần CÒN GIỮ của
 /// mọi lệnh = cột "dư" chung của xưởng, chia cho lệnh sau. KHÁC StockReservation (chỉ vật tư): bảng riêng vì khoá và cách tiêu
 /// thụ khác hẳn (theo mã đoạn, không có pool / hạn SKU). Không làm đổi tồn vật lý. Đọc / ghi chỉ qua SegmentStockService.
@@ -3373,7 +3373,7 @@ model SegmentReservation {
   id                  BigInt   @id @default(autoincrement())
   /// Kho Phôi của xưởng làm lệnh (WorkshopWarehouseResolver.phoiWarehouseOfPi).
   warehouseId         BigInt
-  /// Null = đoạn giữ cho PHƯƠNG ÁN CẮT TÍNH TRƯỚC lệnh (cuttingProposalId) - Nhân 26/11 câu 4: giữ ngay lúc KHSX tính, lệnh khác
+  /// Null = đoạn giữ cho PHƯƠNG ÁN CẮT TÍNH TRƯỚC lệnh (cuttingProposalId) - nghiệp vụ 26/11 câu 4: giữ ngay lúc KHSX tính, lệnh khác
   /// không thấy; tạo lệnh từ phương án thì gắn PI, phương án bị bỏ / lệnh không được duyệt thì trả về dư.
   productionInvoiceId BigInt?
   /// Phương án cắt tính trước đang giữ dòng này (chỉ khi productionInvoiceId null; gắn PI thì xoá về null).
@@ -3423,7 +3423,7 @@ model SegmentProduction {
 }
 
 /// Phần DƯ đoạn của lệnh còn nằm ở kho Phôi CŨ sau khi đổi xưởng (C4, danh sách lỗi 16/11 - 17/11/2026). Đổi xưởng chỉ chuyển phần
-/// đoạn lệnh CÒN GIỮ sang kho mới; phần dư ở lại kho cũ (anh Nhân 13/11: "dư là của chung xưởng cũ") - nên tách khỏi
+/// đoạn lệnh CÒN GIỮ sang kho mới; phần dư ở lại kho cũ (nghiệp vụ 13/11: "dư là của chung xưởng cũ") - nên tách khỏi
 /// SegmentProduction (dòng đó trỏ sang kho mới). Tổng dư của lệnh = SegmentProduction.surplusQty + Σ các dòng này. Tính lại phía
 /// cộng mà tổng dư GIẢM (vd KCS lỗi thêm) thì trừ ở đây (đúng kho cũ) trước, phần còn lại mới đi kho mới; dư TĂNG luôn vào kho mới.
 /// Đổi xưởng về lại đúng kho này thì gộp lại vào SegmentProduction và xoá dòng.
@@ -3446,7 +3446,7 @@ model SegmentProductionLeftover {
 }
 
 /// Loại thay đổi của giữ đoạn theo lệnh (nhật ký SegmentReservationLog).
-/// Sổ báo vượt tồn đoạn (13/11/2026, anh Nhân: Hàn / Sơn báo vượt KHÔNG chặn, hệ thống lưu lại để xử lý sau; Hàn lấy thêm khi
+/// Sổ báo vượt tồn đoạn (13/11/2026, nghiệp vụ: Hàn / Sơn báo vượt KHÔNG chặn, hệ thống lưu lại để xử lý sau; Hàn lấy thêm khi
 /// làm lại thì lưu số lấy thêm; QLSX đóng từng dòng có lý do + nhật ký). 1 dòng = 1 đợt báo (ProductionBatch) × 1 mã đoạn, ghi lúc
 /// trừ đoạn (Gửi KCS) khi: thiếu đoạn (shortageQty > 0 - phần KHÔNG trừ được vì tồn không âm) và / hoặc đợt làm số mảnh của
 /// (lệnh SX, mảnh, công đoạn) vượt số lượng tổng của lệnh (extraQty > 0, extraKind: báo vượt / làm lại sau KCS lỗi).
@@ -3955,7 +3955,7 @@ enum StepBundleStatus {
 }
 
 /// "Đợt gửi KCS" cho 1 CÔNG ĐOẠN PHỤ (Uốn/Dập/Đục lỗ/Tán/Tóp đầu/Xẻ) của 1 LOẠI SẮT trong 1 PI
-/// (2026-09-07, đổi scope 2026-09-07 lần 2 theo Sếp Trương Văn Nhân - xem changelog "Bù đủ dồn về
+/// (2026-09-07, đổi scope 2026-09-07 lần 2 theo quản lý - xem changelog "Bù đủ dồn về
 /// bảng tổng"): KHÔNG còn gắn với 1 CutBundle cụ thể - mirror PieceStepBundle bên VTTP (scope theo
 /// PI + vật tư, không phải theo đợt) vì Phôi làm các công đoạn SONG SONG, không tuần tự, số liệu
 /// mỗi công đoạn tính sẵn theo định mức nên không cần biết đúng đợt cắt nào tạo ra đoạn đó. Tổ Phôi
@@ -4428,7 +4428,7 @@ model WeavingIssue {
 /// dòng cũ nếu xuất đan cùng mảnh nhiều lần (mỗi lần là 1 WeavingIssue riêng).
 model WeavingIssueMaterial {
   id                BigInt  @id @default(autoincrement())
-  /// Dòng cũ (trước 09/11/2026) xuất cùng lần với mảnh. Từ khi xuất đan 2 phiếu (anh Nhân 09/11): vật tư đi phiếu riêng của kho
+  /// Dòng cũ (trước 09/11/2026) xuất cùng lần với mảnh. Từ khi xuất đan 2 phiếu (nghiệp vụ 09/11): vật tư đi phiếu riêng của kho
   /// Phụ kiện, không gắn lần xuất mảnh nào - null.
   weavingIssueId    BigInt?
   /// Lệnh / mảnh / điểm đan mà vật tư đi kèm (ghi thẳng, không suy qua weavingIssue).
@@ -4788,7 +4788,7 @@ enum PieceStepBundleStatus {
 ///
 /// Tổ Phôi gom các PieceStepBatch CHƯA gửi (pieceStepBundleId NULL) của (order, piece, step) thành
 /// 1 bundle rồi gửi KCS - KHÔNG chờ công đoạn khác xong trước (quyết định nghiệp vụ 2026-09-07,
-/// Sếp Trương Văn Nhân qua chat nội bộ: "để cho đơn giản thì không cần ràng buộc, cứ để thoải mái"
+/// Quản lý qua chat nội bộ: "để cho đơn giản thì không cần ràng buộc, cứ để thoải mái"
 /// - đổi từ hành vi CŨ ở ProductionBatchesService.recordPieceStepBatch() từng chặn cứng "báo bước
 /// sau vượt bước liền trước", nay chỉ còn CẢNH BÁO không chặn, xem getBatchPlan()).
 ///
@@ -5079,7 +5079,7 @@ enum IssueSlipLineKind {
   CONSUMABLE
   /// "Dùng chung" (4.9): không theo lệnh, chỉ từ tồn chưa giữ.
   SHARED
-  /// Phiếu 1 xuất đan (anh Nhân 09/11): mảnh theo lệnh SX, từ kho giữ mảnh (Sơn) ra điểm đan.
+  /// Phiếu 1 xuất đan (nghiệp vụ 09/11): mảnh theo lệnh SX, từ kho giữ mảnh (Sơn) ra điểm đan.
   WEAVING_PIECE
   /// Phiếu 2 xuất đan: dây, gỗ, đinh, nút cấp kèm từ kho Phụ kiện cho cùng điểm đan.
   WEAVING_MATERIAL

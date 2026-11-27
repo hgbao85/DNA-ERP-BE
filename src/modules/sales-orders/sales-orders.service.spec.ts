@@ -323,7 +323,7 @@ describe('SalesOrdersService', () => {
 
     // Race: 2 request tạo cùng orderCode gần như đồng thời đều qua được pre-check (đọc "chưa tồn
     // tại"), request thua bị DB unique constraint chặn thật (P2002) - phải bắt lại thành lỗi
-    // nghiệp vụ rõ ràng, không để lọt ra AllExceptionsFilter thành "Duplicate value for: ...".
+    // Nghiệp vụ rõ ràng, không để lọt ra AllExceptionsFilter thành "Duplicate value for: ...".
     it('race: rejects with the friendly orderCode-conflict 409 when create() loses on unique constraint (P2002)', async () => {
       prisma.customer.findUnique.mockResolvedValue(customer);
       prisma.mfgProduct.findUnique.mockResolvedValue(product);
@@ -1329,7 +1329,7 @@ describe('SalesOrdersService', () => {
       expect(prisma.auditLog.create).not.toHaveBeenCalled();
     });
   });
-  // Huỷ lệnh câu 2 (anh Nhân 24/11/2026): Sales huỷ 1 dòng đơn khi khách huỷ hẳn.
+  // Huỷ lệnh câu 2 (nghiệp vụ 24/11/2026): Sales huỷ 1 dòng đơn khi khách huỷ hẳn.
   describe('cancelItem', () => {
     const line = (overrides: Record<string, unknown> = {}) => ({
       id: 5n,

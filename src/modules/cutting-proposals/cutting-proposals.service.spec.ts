@@ -2330,7 +2330,7 @@ describe('CuttingProposalsService', () => {
       });
     });
 
-    // CS2 (anh Nhân 20/11/2026): cây lẻ ở ĐÚNG kho Phôi của xưởng làm lệnh dùng TRƯỚC (tối đa đúng số cây), gửi bộ giải qua
+    // CS2 (nghiệp vụ 20/11/2026): cây lẻ ở ĐÚNG kho Phôi của xưởng làm lệnh dùng TRƯỚC (tối đa đúng số cây), gửi bộ giải qua
     // leftover_stock_by_material; chiều dài MUA giữ 1 chiều dài/loại sắt (chuẩn hoặc KHSX chọn). Thay hành vi 13/11 (chiều dài tồn
     // ở kho Phôi MỌI xưởng bị đưa vào danh sách chiều dài mua, không giới hạn số cây).
     describe('cây lẻ kho Phôi của xưởng làm lệnh (CS2)', () => {
@@ -2357,7 +2357,7 @@ describe('CuttingProposalsService', () => {
         prisma.productionOrder.findUniqueOrThrow.mockResolvedValueOnce(orderIn(3n));
         prisma.stockQuant.findMany.mockResolvedValue([
           quant(11n, 5950, 4), // hợp lệ
-          quant(12n, 5950, 1), // kho khác (không phải kho approve() đọc) - không tính (review Sang 21/11)
+          quant(12n, 5950, 1), // kho khác (không phải kho approve() đọc) - không tính (review IT 21/11)
           quant(11n, 5900, 2), // bị giữ chỗ hết
           quant(12n, 5925, 9), // không bội 50
           quant(12n, 6000, 9), // chiều dài MUA (chuẩn) - không phải cây lẻ
@@ -2406,7 +2406,7 @@ describe('CuttingProposalsService', () => {
         });
       });
 
-      // Review Sang 21/11: "Tính lại" phải coi cây lẻ lệnh đang giữ qua phương án cũ (sắp bị thay khi duyệt) là của chính lệnh.
+      // Review IT 21/11: "Tính lại" phải coi cây lẻ lệnh đang giữ qua phương án cũ (sắp bị thay khi duyệt) là của chính lệnh.
       it('tính lại: phương án ĐÃ DUYỆT cùng lệnh SX (sẽ bị thay) được bỏ khỏi phần "đã giữ" khi đọc cây lẻ', async () => {
         const priv = service as unknown as {
           siblingProposalIdsToSupersede: (id: bigint) => Promise<bigint[]>;
@@ -3506,7 +3506,7 @@ describe('CuttingProposalsService', () => {
       });
     });
 
-    // Ranh giới planned-order / firmed-order (anh Nhân 07/11): dòng Giám đốc ĐÃ KÝ (PURCHASING) là
+    // Ranh giới planned-order / firmed-order (nghiệp vụ 07/11): dòng Giám đốc ĐÃ KÝ (PURCHASING) là
     // NGUỒN CUNG ĐÃ CHỐT - không được sửa số dưới chân họ, chỉ phần CHÊNH mới thành đơn kế hoạch.
     it('L1: phần đã KÝ (PURCHASING) được trừ khỏi nhu cầu - chỉ tách dòng kế hoạch cho phần chênh', async () => {
       prisma.cuttingProposal.findUnique.mockResolvedValue({
@@ -3668,9 +3668,9 @@ describe('CuttingProposalsService', () => {
       });
     });
 
-    // Anh Nhân chốt 07/11: ranh giới "đã ký" - dòng QUOTING/SUBMITTED là CHƯA ký nên ghi đè được; nhu cầu giảm thì bỏ
+    // Nghiệp vụ chốt 07/11: ranh giới "đã ký" - dòng QUOTING/SUBMITTED là CHƯA ký nên ghi đè được; nhu cầu giảm thì bỏ
     // số mua người mua đã tăng (orderQty) và báo nhập lại; nhu cầu tụt dưới số đã ký thì báo Giám đốc + người mua.
-    describe('tính lại khi nhu cầu giảm (anh Nhân 07/11)', () => {
+    describe('tính lại khi nhu cầu giảm (nghiệp vụ 07/11)', () => {
       const setupApprove = async (opts: {
         gross: number;
         existing: {

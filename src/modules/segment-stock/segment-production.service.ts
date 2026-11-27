@@ -61,7 +61,7 @@ export interface RecomputeSegmentStockResult {
 interface LoadedProduction {
   closed: boolean;
   /**
-   * Huỷ lệnh đợt 2 - Q2 (anh Nhân 24/11/2026: đoạn đã cắt của SKU huỷ tự vào tồn kho Phôi): lệnh đã đóng (mọi SKU Kết thúc) mà có
+   * Huỷ lệnh đợt 2 - Q2 (nghiệp vụ 24/11/2026: đoạn đã cắt của SKU huỷ tự vào tồn kho Phôi): lệnh đã đóng (mọi SKU Kết thúc) mà có
    * SKU bị huỷ thì vẫn tính lại, nhưng KHÔNG giữ gì cho lệnh - mọi đoạn đạt KCS vào dư. Cần vì KCS vẫn chấm nốt đợt của SKU đã huỷ
    * (câu 4) sau khi lệnh đã đóng; không có chế độ này thì đoạn chấm sau không bao giờ vào sổ.
    */
@@ -340,7 +340,7 @@ export class SegmentProductionService {
         needBySpec.set(specKey, byCode);
       }
     }
-    // Câu 14a (anh Nhân 24/11/2026): phần đoạn dư phương án cắt đã lấy từ kho cho lệnh (đang giữ, nhật ký SURPLUS_IN refType
+    // Câu 14a (nghiệp vụ 24/11/2026): phần đoạn dư phương án cắt đã lấy từ kho cho lệnh (đang giữ, nhật ký SURPLUS_IN refType
     // CUTTING_PROPOSAL trừ phần nhả) đã nằm trong giữ của lệnh -> đoạn TỰ CẮT chỉ cần phủ phần còn lại; phần cắt hơn thành dư.
     if (needBySpec.size > 0) {
       const stockLogs = await db.segmentReservationLog.findMany({

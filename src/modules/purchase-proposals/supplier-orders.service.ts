@@ -62,7 +62,7 @@ type OrderRow = Prisma.SupplierOrderGetPayload<{ include: typeof ORDER_INCLUDE }
  * các dòng trong đơn mới chuyển PURCHASING để Kho nhận hàng.
  *
  * Số đơn: đơn huỷ khi CHƯA TỪNG có phiếu Giám đốc ký thì số được cấp lại cho đơn kế tiếp của cùng NCC (12/11/2026,
- * anh Nhân - không nhảy cóc); đơn đã ký rồi Thay phiếu mới huỷ thì giữ số. Bộ đếm ở SupplierOrderCounter, cấp số trong
+ * Nghiệp vụ - không nhảy cóc); đơn đã ký rồi Thay phiếu mới huỷ thì giữ số. Bộ đếm ở SupplierOrderCounter, cấp số trong
  * khoá theo (NCC, năm) - xem allocateSeq().
  */
 /** Đơn gộp nhiều lệnh có thể chạm nhiều đề xuất - nới thời hạn transaction mặc định 5 s. */
@@ -248,7 +248,7 @@ export class SupplierOrdersService {
 
   /**
    * Huỷ đơn CHƯA duyệt: các dòng quay về chờ gom đơn. Đơn chưa từng có phiếu Giám đốc ký (revision = 0) thì số đơn
-   * được cấp lại cho đơn kế tiếp của cùng NCC (12/11/2026, anh Nhân - không nhảy cóc); đơn đã ký rồi "Thay phiếu"
+   * được cấp lại cho đơn kế tiếp của cùng NCC (12/11/2026, nghiệp vụ - không nhảy cóc); đơn đã ký rồi "Thay phiếu"
    * mới huỷ thì giữ số (số đó đã nằm trên phiếu Giám đốc ký). Xem allocateSeq.
    */
   async cancel(
@@ -710,7 +710,7 @@ export class SupplierOrdersService {
   }
 
   /**
-   * Cấp số cho đơn mới của 1 NCC trong 1 năm (12/11/2026, anh Nhân điểm 10 - không nhảy cóc): ưu tiên số NHỎ NHẤT của
+   * Cấp số cho đơn mới của 1 NCC trong 1 năm (12/11/2026, nghiệp vụ điểm 10 - không nhảy cóc): ưu tiên số NHỎ NHẤT của
    * đơn đã huỷ khi chưa từng có phiếu Giám đốc ký (revision = 0) mà chưa đơn nào khác (chưa huỷ) đang dùng, và lớn hơn
    * mốc Admin nạp (reuseFromSeq); không có thì lastSeq + 1. Khoá cùng key với setCounter() để 2 đơn tạo cùng lúc không
    * lấy trùng 1 số trả lại (partial unique index supplier_orders_active_seq_key là chốt chặn cuối).

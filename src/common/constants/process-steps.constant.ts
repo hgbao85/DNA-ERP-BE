@@ -37,7 +37,7 @@ export function processStepLabel(step: string): string {
 }
 
 /** Sắp lại 1 mảng processSteps bất kỳ (có thể lộn xộn thứ tự lưu trong DB) theo đúng thứ tự
- *  nghiệp vụ ở trên - dùng trước khi tính "bước liền trước" cho logic chặn báo vượt tiến độ. */
+ *  Nghiệp vụ ở trên - dùng trước khi tính "bước liền trước" cho logic chặn báo vượt tiến độ. */
 export function sortProcessSteps(steps: readonly ProcessStepValue[]): ProcessStepValue[] {
   return PROCESS_STEPS.filter((s) => steps.includes(s));
 }

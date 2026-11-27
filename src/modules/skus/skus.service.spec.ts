@@ -267,7 +267,7 @@ describe('SkusService', () => {
     });
 
     // Audit 2026-08-20 (Medium "resolveProductionInvoice lấy dòng đầu tiên") - xác nhận với
-    // nghiệp vụ: 1 Sales Order CÓ THỂ có 2 dòng cùng mfgProductId (vd giao 2 đợt khác ngày), nên
+    // Nghiệp vụ: 1 Sales Order CÓ THỂ có 2 dòng cùng mfgProductId (vd giao 2 đợt khác ngày), nên
     // tự dò findFirst không đủ tin cậy khi ghim quantity/deliveryDeadline vào PI mới. Caller biết
     // chắc dòng nào (vd FE truyền salesOrderItemId tường minh) phải ghim ĐÚNG dòng đó, không phải
     // dòng đầu tiên tìm thấy.
@@ -2419,7 +2419,7 @@ describe('SkusService', () => {
         },
       ]);
       prisma.user.findMany.mockResolvedValue([
-        { id: 'u-1', firstName: 'Nhàn', lastName: 'Trần', username: 'nhan' },
+        { id: 'u-1', firstName: 'A', lastName: 'Người mua', username: 'mua-a' },
       ]);
 
       const history = await service.getHistory('5');
@@ -2436,7 +2436,7 @@ describe('SkusService', () => {
           event: 'sku.created',
           note: 'SKU-01',
           actorId: 'u-1',
-          actorName: 'Trần Nhàn',
+          actorName: 'Người mua A',
           at: '2026-11-16T01:00:00.000Z',
         },
         {

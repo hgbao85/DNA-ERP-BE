@@ -301,7 +301,7 @@ describe('phoi-need.util - công thức số cần / giới hạn vật lý', ()
     });
   });
 
-  describe('đoạn dư theo phương án + đoạn dư lấy từ kho (anh Nhân câu 12b/13a/14a, 24/11/2026)', () => {
+  describe('đoạn dư theo phương án + đoạn dư lấy từ kho (nghiệp vụ câu 12b/13a/14a, 24/11/2026)', () => {
     const rows = (planSurplus: Parameters<typeof buildPhoiNeedIndex>[0]['planSurplus']) =>
       buildPhoiNeedIndex({
         orders: [{ id: 1n, bomRevisionId: 5n, quantity: 10 }],

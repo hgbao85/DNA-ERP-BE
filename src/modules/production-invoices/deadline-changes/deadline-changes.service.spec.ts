@@ -698,7 +698,7 @@ describe('DeadlineChangesService', () => {
             note: null,
             decisionNote: null,
             requestedBy: { id: 'khsx-1', firstName: 'Lan', lastName: 'Nguyễn' },
-            decidedBy: { id: 'boss-1', firstName: 'Sếp', lastName: 'Nhân' },
+            decidedBy: { id: 'boss-1', firstName: 'Sếp', lastName: 'A' },
           },
         },
       ]);
@@ -708,7 +708,7 @@ describe('DeadlineChangesService', () => {
         by: { id: 'khsx-1', name: 'Lan Nguyễn' },
         changes: [{ key: 'stage.FRAME_HAN', from: '2026-11-10', to: '2026-11-12' }],
       });
-      expect(history[0].by).toEqual({ id: 'boss-1', name: 'Sếp Nhân' });
+      expect(history[0].by).toEqual({ id: 'boss-1', name: 'Sếp A' });
     });
   });
 });

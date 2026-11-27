@@ -3,7 +3,7 @@ import { BadRequestException, ConflictException, NotFoundException } from '@nest
 import { CancelledGoodsService } from './cancelled-goods.service';
 
 /**
- * Huỷ lệnh đợt 2 - Q5 / Q6 (anh Nhân 24/11/2026): KHSX chuyển hàng của SKU đã huỷ sang 1 dòng SKU đang chạy. Kiểm các luật chặn
+ * Huỷ lệnh đợt 2 - Q5 / Q6 (nghiệp vụ 24/11/2026): KHSX chuyển hàng của SKU đã huỷ sang 1 dòng SKU đang chạy. Kiểm các luật chặn
  * và phần ghi (bản ghi chuyển + dòng đóng gói của đích cho hàng đã đóng gói; chỉ bản ghi chuyển cho khung đan).
  */
 describe('CancelledGoodsService.transfer (Q5/Q6)', () => {
@@ -181,7 +181,7 @@ describe('CancelledGoodsService.transfer (Q5/Q6)', () => {
   });
 });
 
-/** Khung đan lấy khác kho TP: thủ kho nơi nhận nhập số thực nhận; phần không nhận về lại kho nguồn (Nhân 27/11 cách 2). */
+/** Khung đan lấy khác kho TP: thủ kho nơi nhận nhập số thực nhận; phần không nhận về lại kho nguồn (nghiệp vụ 27/11 cách 2). */
 describe('CancelledGoodsService.confirmWovenReceived', () => {
   function setup(opts: { qty?: number; status?: string; orderStatus?: string } = {}) {
     const tx = {

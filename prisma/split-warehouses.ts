@@ -10,8 +10,8 @@
  *   ... --rehearse [--plan-file x.csv]   # chạy y hệt --apply trong 1 transaction rồi HOÀN TÁC (diễn tập trên DB thật)
  *
  * Phân loại tự động vật tư đang ở kho cũ:
- *   - tên bắt đầu "Chân nhôm"                                               -> kho Phụ kiện (anh Nhân chốt 07/11)
- *   - nhóm Sắt (STEEL_BAR), tên có "đá cắt", nhóm Tán rút (RIVET)            -> giữ ở kho Phôi (anh Nhân 07/11: tán rút ở
+ *   - tên bắt đầu "Chân nhôm"                                               -> kho Phụ kiện (nghiệp vụ chốt 07/11)
+ *   - nhóm Sắt (STEEL_BAR), tên có "đá cắt", nhóm Tán rút (RIVET)            -> giữ ở kho Phôi (nghiệp vụ 07/11: tán rút ở
  *     kho Phôi, đổi lại so với bản v8; đá cắt mua về kho Phôi rồi lập phiếu chuyển sang kho Hàn)
  *   - định mức tiêu hao (consumable_bom) chỉ dùng ở công đoạn HAN / chỉ SON -> kho Hàn / kho Sơn
  *   - còn lại                                                               -> CẦN XEM (không chạy --apply được tới khi

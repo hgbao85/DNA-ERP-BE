@@ -17,7 +17,7 @@ export interface ReserveInput {
   /** Chiều dài cây (mm) của lần giữ chỗ này. Mặc định 0 khi không truyền. drainPool() có `stockLengthMm` (xuất sắt) chỉ rút dòng
    *  cùng chiều dài hoặc dòng chưa ghi chiều dài (0) - CS2 20/11: 1 lệnh có thể giữ cả cây lẻ kho Phôi lẫn cây chiều dài mua. */
   stockLengthMm?: number;
-  /** CS2 (review Sang 21/11): true = khoá chống trùng có thêm chiều dài - cùng nguồn giữ được NHIỀU dòng cùng vật tư khác chiều dài
+  /** CS2 (review IT 21/11): true = khoá chống trùng có thêm chiều dài - cùng nguồn giữ được NHIỀU dòng cùng vật tư khác chiều dài
    *  (cây lẻ kho Phôi bên cạnh cây chiều dài mua). Bỏ trống = khoá dạng cũ (dòng cũ không đổi). */
   lengthKeyed?: boolean;
   /** Quy cách của hàng được giữ ('' / bỏ trống = không quy cách) - nệm. Khác quy cách = dòng giữ chỗ RIÊNG. */
@@ -117,7 +117,7 @@ export class StockReservationsService {
     }
 
     // Idempotent theo (refType, refId, materialId, quy cách[, chiều dài]) - 1 nguồn chỉ giữ chỗ đúng 1 dòng cho 1 (vật tư, quy
-    // cách[, chiều dài]), gọi lại (retry mất mạng, double-click) trả về dòng đã tạo thay vì cộng dồn sai. CS2 (review Sang 21/11):
+    // cách[, chiều dài]), gọi lại (retry mất mạng, double-click) trả về dòng đã tạo thay vì cộng dồn sai. CS2 (review IT 21/11):
     // thiếu chiều dài thì lần giữ chỗ thứ 2 cùng vật tư (cây lẻ + cây mua) trả lại dòng của lần 1 - mất phần giữ.
     const idempotencyKey = reservationKey(
       input.refType,
@@ -523,7 +523,7 @@ export class StockReservationsService {
       spec?: string;
       /** Kho đang trừ tồn - chỉ rút dòng ở kho này (rà soát 14/11 CK3, nhóm B 16/11). */
       warehouseId: bigint;
-      /** CS2 (review Sang 21/11): chiều dài cây đang xuất (xuất sắt) - chỉ rút dòng cùng chiều dài hoặc dòng chưa ghi chiều dài (0).
+      /** CS2 (review IT 21/11): chiều dài cây đang xuất (xuất sắt) - chỉ rút dòng cùng chiều dài hoặc dòng chưa ghi chiều dài (0).
        *  Rút theo tổng cả pool thì xuất cây chiều dài mua ăn mất phần giữ cây lẻ (cây lẻ còn trong kho nhưng hết giữ chỗ, lệnh
        *  khác giữ mất). Bỏ trống = rút cả pool như trước. */
       stockLengthMm?: number;

@@ -81,7 +81,7 @@ export class CreateMaterialDto {
     description: 'URL ảnh vật tư (Cloudinary secure_url) - xem POST /uploads/image',
   })
   @IsOptional()
-  // 20/11 (Sang báo): chỉ nhận tệp do chính hệ thống tải lên (áp cả lúc sửa - UpdateMaterialDto kế thừa).
+  // 20/11 (IT báo): chỉ nhận tệp do chính hệ thống tải lên (áp cả lúc sửa - UpdateMaterialDto kế thừa).
   @IsSystemUploadUrl()
   imageUrl?: string;
 

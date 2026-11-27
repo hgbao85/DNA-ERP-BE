@@ -62,7 +62,7 @@ export interface CancelledGoodsRowDto {
 const nullableEq = (a: bigint | null, b: bigint | null) => (a ?? null) === (b ?? null);
 
 /**
- * Huỷ lệnh đợt 2 - Q5 / Q6 (anh Nhân 24/11/2026). Q5: hàng đã đóng gói của SKU đã huỷ chuyển được sang đơn của khách khác, điều kiện
+ * Huỷ lệnh đợt 2 - Q5 / Q6 (nghiệp vụ 24/11/2026). Q5: hàng đã đóng gói của SKU đã huỷ chuyển được sang đơn của khách khác, điều kiện
  * cùng sản phẩm + màu dây + vải nệm. Q6: khung đã đan (đã nhận về từ điểm đan) nhập kho thành phẩm - ở đây là chuyển sang 1 SKU đang
  * chạy cùng sản phẩm + màu dây để dùng tiếp (đích coi như đã nhận đan thêm, Chuyền kiểm làm tiếp). KHSX bấm, có dấu vết.
  */
@@ -296,7 +296,7 @@ export class CancelledGoodsService {
   ): Promise<CancelledGoodsRowDto> {
     const id = parseBigIntId(requestId);
     const targetItemId = parseBigIntId(dto.targetItemId);
-    // Q6 câu 1b (anh Nhân 26/11/2026): khung đã đan không chuyển tay nữa - thành tồn khung đan kho thành phẩm, lệnh sau cùng mảnh +
+    // Q6 câu 1b (nghiệp vụ 26/11/2026): khung đã đan không chuyển tay nữa - thành tồn khung đan kho thành phẩm, lệnh sau cùng mảnh +
     // màu dây tự lấy (WovenStockService).
     if (dto.kind === CancelledGoodsKind.WOVEN) {
       throw new BadRequestException(
@@ -393,7 +393,7 @@ export class CancelledGoodsService {
     return this.buildRow(this.prisma, id);
   }
 
-  // ─── Nhân 26/11 câu 1: khung đan lấy khác kho thành phẩm - thủ kho nơi nhận xác nhận ─────────────────────────────────────
+  // ─── nghiệp vụ 26/11 câu 1: khung đan lấy khác kho thành phẩm - thủ kho nơi nhận xác nhận ─────────────────────────────────────
 
   /** Khung đan đang chuyển giữa 2 kho thành phẩm (lấy tồn khác kho), chờ thủ kho nơi nhận xác nhận. Phạm vi kho của người xem. */
   async listWovenInTransit(warehouseScope: string | null): Promise<WovenInTransitDto[]> {
@@ -487,7 +487,7 @@ export class CancelledGoodsService {
   /**
    * Thủ kho thành phẩm nơi nhận xác nhận số khung thực nhận (nhận > 0 thì bắt buộc ảnh phiếu chuyển đã ký, cùng luật phiếu CK).
    * Dòng chỉ còn đúng số thực nhận; phần không nhận về lại tồn kho nguồn (nhận 0 = bỏ dòng) rồi cấp tồn lại. Lệnh nhận đã huỷ
-   * trong lúc khung đang chuyển (Nhân 27/11 cách 2): phần nhận thành tồn của lệnh đó ở kho này.
+   * trong lúc khung đang chuyển (nghiệp vụ 27/11 cách 2): phần nhận thành tồn của lệnh đó ở kho này.
    */
   async confirmWovenReceived(
     actorId: string,

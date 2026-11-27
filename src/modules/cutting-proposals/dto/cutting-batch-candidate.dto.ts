@@ -317,7 +317,7 @@ export class CuttingBatchFixMaterialDto {
 
 /**
  * Khối "Đợt đang chọn" ở màn Tối ưu cắt sắt (2026-10-24, người dùng: chỉ gộp khi đơn cắt riêng ở cây 6m vượt 1 % mà không muốn dùng
- * chế độ đơn gấp; Sếp Nhân: chỉ gom lệnh có mốc cần sắt cách nhau ≤ 3 ngày; người dùng: ít hao hụt nhất, tối đa M SKU).
+ * chế độ đơn gấp; quản lý: chỉ gom lệnh có mốc cần sắt cách nhau ≤ 3 ngày; người dùng: ít hao hụt nhất, tối đa M SKU).
  */
 @Exclude()
 export class CuttingBatchFixOptionsDto {

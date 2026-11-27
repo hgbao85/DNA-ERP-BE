@@ -3,7 +3,7 @@ import { WorkshopMoveService } from './workshop-move.service';
 
 const dec = (n: number) => ({ toNumber: () => n });
 
-// Đổi xưởng (anh Nhân 09-10/11/2026, Sang 10/11): đổi nơi nhận dòng mua chưa về, kế hoạch chuyển hàng đang giữ, chuyển giữ chỗ.
+// Đổi xưởng (nghiệp vụ 09-10/11/2026, IT 10/11): đổi nơi nhận dòng mua chưa về, kế hoạch chuyển hàng đang giữ, chuyển giữ chỗ.
 describe('WorkshopMoveService', () => {
   const phoiPA = {
     id: 1n,
