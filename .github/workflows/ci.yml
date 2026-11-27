@@ -31,6 +31,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm prisma generate
       - run: pnpm lint:check
+        env:
+          # 27/11/2026: eslint type-aware cả repo có lần hết heap mặc định của Node (exit 134) -> nới lên 6 GB (máy CI có 16 GB).
+          NODE_OPTIONS: --max-old-space-size=6144
 
   test:
     runs-on: ubuntu-latest
