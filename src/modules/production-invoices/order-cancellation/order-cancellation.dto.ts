@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsBoolean,
   IsEnum,
@@ -137,4 +138,49 @@ export class ListOrderCancelRequestsQueryDto {
   @IsOptional()
   @Matches(/^\d+$/)
   productionOrderId?: string;
+}
+
+/** Nhân 26/11 câu 2: 1 dòng sắt tổ cắt trả về chờ thủ kho Phôi xác nhận. */
+export interface PendingSteelReturnDto {
+  id: string;
+  productionInvoiceId: string;
+  lenhCode: string;
+  factoryCode: string;
+  materialCode: string;
+  materialName: string;
+  lengthMm: number;
+  bars: number;
+  warehouseName: string;
+  createdByName: string;
+  createdAt: string;
+}
+
+export class ConfirmSteelReturnDto {
+  /** Số cây thủ kho đếm thực nhận (≤ số QLSX ghi trả). */
+  @IsInt()
+  @Min(0)
+  countedBars!: number;
+}
+
+/** Nhân 26/11 câu 1: khung đan lấy tồn khác kho thành phẩm, đang chuyển - chờ thủ kho nơi nhận xác nhận. */
+export interface WovenInTransitDto {
+  id: string;
+  qty: number;
+  pieceCode: string;
+  pieceName: string;
+  targetLenhCode: string;
+  targetFactoryCode: string;
+  sourceLenhCode: string;
+  sourceFactoryCode: string;
+  fromWarehouseName: string;
+  toWarehouseName: string;
+  createdAt: string;
+}
+
+export class ConfirmWovenReceivedDto {
+  /** Ảnh phiếu chuyển đã ký (≥ 1). */
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsString({ each: true })
+  signedSlipUrls!: string[];
 }

@@ -1,5 +1,5 @@
 import { getHighs, Highs } from './highs-solver';
-import { fillTailReserve, optimizeMaterial } from './optimize-material';
+import { fillTailReserve, optimizeMaterial, repackTailSurplus } from './optimize-material';
 import { MAX_SIZES_PER_BAR } from './patterns';
 
 describe('optimizeMaterial', () => {
@@ -416,6 +416,49 @@ describe('optimizeMaterial', () => {
       expect(fillTailReserve([1, 0], [51, 12], [50, 11], 100, 60, [Infinity, 2])).toEqual([0, 2]);
       // cây trống: không lấp
       expect(fillTailReserve([0, 0], [51, 12], [50, 11], 100, 60, [Infinity, 9])).toEqual([0, 0]);
+    });
+  });
+
+  describe('repackTailSurplus (Nhân 26/11 câu 5 + 8)', () => {
+    // cây dùng được 6000, cỡ 1000 (giá 1001) và 100 (giá 101); ngưỡng cùi 1 cây 60
+    const base = {
+      costS: [1001, 101],
+      lenS: [1000, 100],
+      usableS: 6000,
+      allowedS: 60,
+      minTailS: 0,
+      maxSizes: null,
+    };
+
+    it('ưu tiên đoạn dài: còn trống 4898, ngưỡng cùi 100 -> 4 đoạn 1000 + 8 đoạn 100 (12 đoạn), không lấp toàn đoạn ngắn', () => {
+      // giữ 1 + 1 cho nhu cầu; bộ giải lấp 47 đoạn 100 (cùi nhỏ nhất)
+      const out = repackTailSurplus({
+        ...base,
+        allowedS: 100,
+        tailCounts: [1, 48],
+        surplusCounts: [0, 47],
+      })!;
+      expect(out).toEqual([5, 9]);
+    });
+
+    it('không cách nào đạt ngưỡng thì cùi nhỏ nhất', () => {
+      const out = repackTailSurplus({
+        ...base,
+        allowedS: 0,
+        tailCounts: [1, 1],
+        surplusCounts: [0, 0],
+      })!;
+      expect(6000 - (out[0] * 1001 + out[1] * 101)).toBeLessThanOrEqual(100);
+    });
+
+    it('giới hạn số cỡ: chỉ dùng cỡ đã có trên cây khi hết chỗ', () => {
+      const out = repackTailSurplus({
+        ...base,
+        maxSizes: 1,
+        tailCounts: [0, 40],
+        surplusCounts: [0, 39],
+      })!;
+      expect(out[0]).toBe(0);
     });
   });
 });

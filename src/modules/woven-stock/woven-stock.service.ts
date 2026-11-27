@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   CancelledGoodsKind,
+  CancelledGoodsReceiveStatus,
   IssueSlipLineKind,
   IssueSlipStatus,
   ProductionOrderCancelStatus,
@@ -18,32 +19,42 @@ export const tpWarehouseOf = (code: string | null | undefined): string =>
 /** Ghi chú trên CancelledGoodsTransfer do hệ thống tự lấy tồn. */
 export const WOVEN_STOCK_AUTO_NOTE = 'Tự lấy từ tồn khung đan kho thành phẩm';
 
-/** 1 nguồn tồn: khung đan của 1 lệnh SX đã huỷ, theo mảnh. */
+/** 1 nguồn tồn: khung đan của 1 lệnh SX đã huỷ, theo mảnh, nằm ở kho thành phẩm của lệnh đó. */
 export interface WovenStockSource {
   cancelRequestId: bigint;
   sourceItemId: bigint;
   sourceOrderId: bigint;
+  /** Kho thành phẩm đang giữ khung (kho của lệnh đã huỷ). */
+  warehouseCode: string;
   qty: number;
 }
 
-/** Tồn khung đan theo (kho thành phẩm, mảnh, màu dây). */
+/**
+ * Tồn khung đan theo (mảnh, màu dây) - gộp MỌI kho thành phẩm (Nhân 26/11 câu 1: lệnh xưởng nào cũng lấy được). Nguồn ghi kho
+ * từng phần để lấy cùng kho trước, khác kho thì phải chuyển giữa 2 xưởng.
+ */
 export interface WovenStockBucket {
-  warehouseCode: string;
   pieceId: bigint;
   wireMaterialId: bigint | null;
   qty: number;
-  /** Nguồn theo thứ tự đề nghị huỷ cũ trước (lấy trước). */
+  /** Nguồn theo thứ tự đề nghị huỷ cũ trước. */
   sources: WovenStockSource[];
 }
 
-const bucketKey = (wc: string, pieceId: bigint, wire: bigint | null) =>
-  `${wc}:${pieceId}:${wire ?? 'none'}`;
+const bucketKey = (pieceId: bigint, wire: bigint | null) => `${pieceId}:${wire ?? 'none'}`;
+
+/** Dòng lấy tồn đã thành hàng của lệnh nhận (cùng kho, hoặc khác kho đã được thủ kho nơi nhận xác nhận). */
+export const WOVEN_TRANSFER_RECEIVED = {
+  OR: [{ receiveStatus: null }, { receiveStatus: CancelledGoodsReceiveStatus.RECEIVED }],
+};
 
 /**
  * Tồn khung đan (Q6 huỷ lệnh, anh Nhân trả lời 26/11/2026 - câu 1b, 2a, 3a):
  *  - khung đã đan của SKU bị huỷ (đã nhận về từ điểm đan, kể cả phần nhận về SAU khi huỷ) nằm ở kho thành phẩm của lệnh bị huỷ,
  *    thành tồn theo mã mảnh + màu dây;
- *  - lệnh sau cần đúng mảnh + màu dây (cùng kho thành phẩm) TỰ lấy tồn trước, chỉ xuất đan phần còn thiếu.
+ *  - lệnh sau cần đúng mảnh + màu dây TỰ lấy tồn trước, chỉ xuất đan phần còn thiếu. Nhân 26/11 câu 1: lệnh ở kho / xưởng nào
+ *    cũng lấy được - cùng kho trước; khác kho thì dòng lấy ở trạng thái "đang chuyển" (receiveStatus PENDING), kho nguồn trừ ngay,
+ *    lệnh nhận không phải xuất đan phần đó nhưng Chuyền kiểm chỉ đếm khi thủ kho thành phẩm nơi nhận xác nhận đã nhận (kèm ảnh phiếu).
  *
  * Không có bảng tồn riêng / không ghi sổ kho: mảnh đan từ trước tới nay không đi StockLedger (xuất đan trừ kho giữ mảnh sang
  * PRODUCTION, nhận đan chỉ ghi WeavingReceipt). Tồn tính lại từ dữ liệu:
@@ -60,10 +71,10 @@ export class WovenStockService {
     private readonly realtime: RealtimeService,
   ) {}
 
-  /** Tồn khung đan hiện có, lọc tuỳ chọn theo kho / mảnh / màu dây (undefined = mọi giá trị). */
+  /** Tồn khung đan hiện có, lọc tuỳ chọn theo mảnh / màu dây (undefined = mọi giá trị). */
   async loadStock(
     db: PrismaTx | PrismaServiceType,
-    filter: { warehouseCode?: string; pieceId?: bigint; wireMaterialId?: bigint | null } = {},
+    filter: { pieceId?: bigint; wireMaterialId?: bigint | null } = {},
   ): Promise<WovenStockBucket[]> {
     const reqs = await db.productionOrderCancelRequest.findMany({
       where: {
@@ -90,11 +101,6 @@ export class WovenStockService {
       if (seen.has(k)) return false;
       seen.add(k);
       const item = r.productionOrder.productionInvoiceItem;
-      if (
-        filter.warehouseCode !== undefined &&
-        tpWarehouseOf(item.warehouseCode) !== filter.warehouseCode
-      )
-        return false;
       if (
         filter.wireMaterialId !== undefined &&
         (item.wireMaterialId ?? null) !== (filter.wireMaterialId ?? null)
@@ -161,10 +167,10 @@ export class WovenStockService {
       const wc = tpWarehouseOf(item.warehouseCode);
       const pieceId = BigInt(pieceStr);
       const wire = item.wireMaterialId ?? null;
-      const bk = bucketKey(wc, pieceId, wire);
+      const bk = bucketKey(pieceId, wire);
       let b = buckets.get(bk);
       if (!b) {
-        b = { warehouseCode: wc, pieceId, wireMaterialId: wire, qty: 0, sources: [] };
+        b = { pieceId, wireMaterialId: wire, qty: 0, sources: [] };
         buckets.set(bk, b);
       }
       b.qty += qty;
@@ -172,6 +178,7 @@ export class WovenStockService {
         cancelRequestId: s.id,
         sourceItemId: item.id,
         sourceOrderId: s.productionOrder.id,
+        warehouseCode: wc,
         qty,
       });
     }
@@ -184,33 +191,32 @@ export class WovenStockService {
   }
 
   /**
-   * Cấp tồn khung đan của 1 (kho, mảnh, màu dây) cho các lệnh đang chạy cần đúng loại đó - lệnh cũ trước (id tăng dần). Mỗi lệnh
-   * nhận tối đa phần còn thiếu = định mức − đã xuất đan − đang trên phiếu xuất đan chờ ký − đã lấy tồn. Idempotent; trả về id các
-   * lệnh vừa nhận thêm.
+   * Cấp tồn khung đan của 1 (mảnh, màu dây) cho các lệnh đang chạy cần đúng loại đó, ở MỌI kho thành phẩm - lệnh cũ trước (id tăng
+   * dần). Mỗi lệnh nhận tối đa phần còn thiếu = định mức − đã xuất đan − đang trên phiếu xuất đan chờ ký − đã lấy tồn; lấy nguồn CÙNG
+   * kho thành phẩm trước, rồi mới tới kho khác (dòng "đang chuyển"). Idempotent; trả về id các lệnh vừa nhận thêm.
    */
   async allocateBucket(
-    warehouseCode: string,
     pieceId: bigint,
     wireMaterialId: bigint | null,
     actorId: string,
   ): Promise<bigint[]> {
     const touched = await this.prisma.$transaction(async (tx) => {
-      await lockBusinessKey(tx, `woven-stock:${bucketKey(warehouseCode, pieceId, wireMaterialId)}`);
-      const [bucket] = await this.loadStock(tx, { warehouseCode, pieceId, wireMaterialId });
+      await lockBusinessKey(tx, `woven-stock:${bucketKey(pieceId, wireMaterialId)}`);
+      const [bucket] = await this.loadStock(tx, { pieceId, wireMaterialId });
       if (!bucket || bucket.qty <= 0) return [];
       const targets = await tx.productionOrder.findMany({
         where: {
           status: { not: ProductionOrderStatus.CANCELLED },
           floorStage: 'ACTIVE',
-          productionInvoiceItem: {
-            cancelledAt: null,
-            wireMaterialId,
-            ...(warehouseCode === DEFAULT_TP_WAREHOUSE_CODE
-              ? { OR: [{ warehouseCode }, { warehouseCode: null }] }
-              : { warehouseCode }),
-          },
+          productionInvoiceItem: { cancelledAt: null, wireMaterialId },
         },
-        select: { id: true, quantity: true, bomRevisionId: true, productionInvoiceItemId: true },
+        select: {
+          id: true,
+          quantity: true,
+          bomRevisionId: true,
+          productionInvoiceItemId: true,
+          productionInvoiceItem: { select: { warehouseCode: true } },
+        },
         orderBy: { id: 'asc' },
       });
       if (targets.length === 0) return [];
@@ -245,10 +251,17 @@ export class WovenStockService {
         let take = Math.min(need, left);
         if (take <= 0) continue;
         left -= take;
-        for (const s of sources) {
+        const targetWc = tpWarehouseOf(t.productionInvoiceItem.warehouseCode);
+        // Cùng kho thành phẩm trước, rồi kho khác (giữ thứ tự đề nghị huỷ cũ trước trong mỗi nhóm).
+        const ordered = [
+          ...sources.filter((x) => x.warehouseCode === targetWc),
+          ...sources.filter((x) => x.warehouseCode !== targetWc),
+        ];
+        for (const s of ordered) {
           if (take <= 0) break;
           const n = Math.min(s.qty, take);
           if (n <= 0) continue;
+          const cross = s.warehouseCode !== targetWc;
           await tx.cancelledGoodsTransfer.create({
             data: {
               cancelRequestId: s.cancelRequestId,
@@ -257,8 +270,17 @@ export class WovenStockService {
               targetItemId: t.productionInvoiceItemId,
               pieceId,
               qty: n,
-              note: WOVEN_STOCK_AUTO_NOTE,
+              note: cross
+                ? `${WOVEN_STOCK_AUTO_NOTE} - khác kho, chuyển ${s.warehouseCode} -> ${targetWc}`
+                : WOVEN_STOCK_AUTO_NOTE,
               createdById: actorId,
+              ...(cross
+                ? {
+                    fromWarehouseCode: s.warehouseCode,
+                    toWarehouseCode: targetWc,
+                    receiveStatus: CancelledGoodsReceiveStatus.PENDING,
+                  }
+                : {}),
             },
           });
           s.qty -= n;
@@ -319,12 +341,43 @@ export class WovenStockService {
     return agg._sum.qty ?? 0;
   }
 
+  /**
+   * Lệnh nhận bị huỷ khi khung lấy khác kho còn đang chuyển (chưa thủ kho nơi nhận xác nhận): bỏ các dòng đó - khung chưa rời kho
+   * nguồn nên trở về tồn của lệnh huỷ nguồn, lần cấp sau chia lại cho lệnh khác. Best-effort - lỗi chỉ log.
+   */
+  async revertPendingIncoming(orderId: bigint, actorId: string): Promise<number> {
+    try {
+      const order = await this.prisma.productionOrder.findUnique({
+        where: { id: orderId },
+        select: { productionInvoiceItemId: true },
+      });
+      if (!order) return 0;
+      const { count } = await this.prisma.cancelledGoodsTransfer.deleteMany({
+        where: {
+          kind: CancelledGoodsKind.WOVEN,
+          targetItemId: order.productionInvoiceItemId,
+          receiveStatus: CancelledGoodsReceiveStatus.PENDING,
+        },
+      });
+      if (count > 0) {
+        this.logger.log(
+          `Lệnh ${orderId} huỷ: bỏ ${count} dòng khung đan đang chuyển tới lệnh (người duyệt ${actorId})`,
+        );
+      }
+      return count;
+    } catch (e) {
+      this.logger.error(
+        `Bỏ khung đan đang chuyển của lệnh ${orderId} lỗi: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return 0;
+    }
+  }
+
   /** Cấp tồn cho mọi tồn khung đan đang có (sau khi duyệt huỷ / nhận đan của lệnh đã huỷ). Best-effort - lỗi chỉ log. */
   async allocateAll(actorId: string, filter: { pieceId?: bigint } = {}): Promise<void> {
     try {
       const buckets = await this.loadStock(this.prisma, filter);
-      for (const b of buckets)
-        await this.allocateBucket(b.warehouseCode, b.pieceId, b.wireMaterialId, actorId);
+      for (const b of buckets) await this.allocateBucket(b.pieceId, b.wireMaterialId, actorId);
     } catch (e) {
       this.logger.error(`Cấp tồn khung đan lỗi: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -337,14 +390,12 @@ export class WovenStockService {
         where: { id: orderId },
         select: {
           bomRevisionId: true,
-          productionInvoiceItem: { select: { warehouseCode: true, wireMaterialId: true } },
+          productionInvoiceItem: { select: { wireMaterialId: true } },
         },
       });
       if (!order) return;
-      const wc = tpWarehouseOf(order.productionInvoiceItem.warehouseCode);
       const wire = order.productionInvoiceItem.wireMaterialId ?? null;
       const buckets = await this.loadStock(this.prisma, {
-        warehouseCode: wc,
         wireMaterialId: wire,
         ...(pieceId !== undefined ? { pieceId } : {}),
       });
@@ -356,7 +407,7 @@ export class WovenStockService {
       const wovenIds = new Set(woven.map((w) => w.pieceId.toString()));
       for (const b of buckets) {
         if (!wovenIds.has(b.pieceId.toString())) continue;
-        await this.allocateBucket(wc, b.pieceId, wire, actorId);
+        await this.allocateBucket(b.pieceId, wire, actorId);
       }
     } catch (e) {
       this.logger.error(

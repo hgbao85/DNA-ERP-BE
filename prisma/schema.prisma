@@ -2368,28 +2368,51 @@ enum CancelledGoodsKind {
 /// đóng gói: cùng sản phẩm + màu dây + vải nệm, đích nhận 1 PackagingRecord (transferId) nên booking giao được. Q6 khung đã đan: cùng
 /// sản phẩm + màu dây, theo mảnh, đích coi như đã nhận đan thêm (Chuyền kiểm làm tiếp). Nguồn bớt theo Σ đã chuyển.
 model CancelledGoodsTransfer {
-  id              BigInt             @id @default(autoincrement())
-  cancelRequestId BigInt
-  kind            CancelledGoodsKind
-  sourceItemId    BigInt
-  targetItemId    BigInt
+  id                BigInt                       @id @default(autoincrement())
+  cancelRequestId   BigInt
+  kind              CancelledGoodsKind
+  sourceItemId      BigInt
+  targetItemId      BigInt
   /// Chỉ WOVEN: mảnh khung đan.
-  pieceId         BigInt?
-  qty             Int
-  note            String?
-  createdById     String
-  createdAt       DateTime           @default(now())
+  pieceId           BigInt?
+  qty               Int
+  note              String?
+  createdById       String
+  createdAt         DateTime                     @default(now())
+  /// Nhân 26/11 câu 1: khung đan lấy KHÁC kho thành phẩm - kho nguồn / kho nhận (mã kho TP). Null = cùng kho / dòng cũ.
+  fromWarehouseCode String?
+  toWarehouseCode   String?
+  /// PENDING = đang chuyển giữa 2 xưởng (kho nguồn đã trừ, lệnh nhận chưa được chuyền kiểm đếm); RECEIVED = thủ kho nơi nhận đã
+  /// xác nhận. Null = không cần chuyển.
+  receiveStatus     CancelledGoodsReceiveStatus?
+  receivedById      String?
+  receivedAt        DateTime?
+  /// Ảnh phiếu chuyển đã ký - bắt buộc ≥ 1 khi xác nhận nhận (cùng luật phiếu chuyển kho CK).
+  signedSlipUrls    String[]                     @default([])
 
   cancelRequest   ProductionOrderCancelRequest @relation(fields: [cancelRequestId], references: [id])
   packagingRecord PackagingRecord?
 
   @@index([sourceItemId, kind])
   @@index([targetItemId, kind])
+  @@index([receiveStatus, toWarehouseCode])
   @@map("cancelled_goods_transfers")
 }
 
+/// Nhân 26/11 câu 1: khung đan lấy khác kho thành phẩm - đang chuyển / đã nhận.
+enum CancelledGoodsReceiveStatus {
+  PENDING
+  RECEIVED
+}
+
+/// Nhân 26/11 câu 2: thủ kho Phôi xác nhận số cây trả về rồi mới ghi sổ kho.
+enum SteelReturnStatus {
+  PENDING
+  CONFIRMED
+}
+
 model SteelReturn {
-  id                  BigInt   @id @default(autoincrement())
+  id                  BigInt            @id @default(autoincrement())
   cancelRequestId     BigInt
   productionInvoiceId BigInt
   materialId          BigInt
@@ -2397,12 +2420,19 @@ model SteelReturn {
   bars                Int
   warehouseId         BigInt
   createdById         String
-  createdAt           DateTime @default(now())
+  createdAt           DateTime          @default(now())
+  /// PENDING = QLSX đã ghi, chờ thủ kho Phôi xác nhận (chưa vào tồn); CONFIRMED = đã ghi sổ kho (dòng trước 27/11 cũng là CONFIRMED).
+  status              SteelReturnStatus @default(PENDING)
+  /// Số cây thủ kho đếm thực nhận (có thể ít hơn bars). null = chưa xác nhận / dòng cũ (= bars).
+  confirmedBars       Int?
+  confirmedById       String?
+  confirmedAt         DateTime?
 
   cancelRequest ProductionOrderCancelRequest @relation(fields: [cancelRequestId], references: [id])
   material      Material                     @relation(fields: [materialId], references: [id])
 
   @@index([productionInvoiceId, materialId])
+  @@index([warehouseId, status])
   @@map("steel_returns")
 }
 
@@ -3343,7 +3373,11 @@ model SegmentReservation {
   id                  BigInt   @id @default(autoincrement())
   /// Kho Phôi của xưởng làm lệnh (WorkshopWarehouseResolver.phoiWarehouseOfPi).
   warehouseId         BigInt
-  productionInvoiceId BigInt
+  /// Null = đoạn giữ cho PHƯƠNG ÁN CẮT TÍNH TRƯỚC lệnh (cuttingProposalId) - Nhân 26/11 câu 4: giữ ngay lúc KHSX tính, lệnh khác
+  /// không thấy; tạo lệnh từ phương án thì gắn PI, phương án bị bỏ / lệnh không được duyệt thì trả về dư.
+  productionInvoiceId BigInt?
+  /// Phương án cắt tính trước đang giữ dòng này (chỉ khi productionInvoiceId null; gắn PI thì xoá về null).
+  cuttingProposalId   BigInt?
   segmentSpecId       BigInt
   /// Cùng ý nghĩa StockLedger.segmentSteps ('' = trơn).
   segmentSteps        String   @default("")
@@ -3355,13 +3389,14 @@ model SegmentReservation {
   updatedAt           DateTime @updatedAt
 
   warehouse         Warehouse               @relation(fields: [warehouseId], references: [id])
-  productionInvoice ProductionInvoice       @relation(fields: [productionInvoiceId], references: [id], onDelete: Cascade)
+  productionInvoice ProductionInvoice?      @relation(fields: [productionInvoiceId], references: [id], onDelete: Cascade)
   segmentSpec       SegmentSpec             @relation(fields: [segmentSpecId], references: [id])
   logs              SegmentReservationLog[]
 
   @@unique([warehouseId, productionInvoiceId, segmentSpecId, segmentSteps])
   @@index([warehouseId, segmentSpecId, segmentSteps])
   @@index([productionInvoiceId])
+  @@index([cuttingProposalId])
   @@map("segment_reservations")
 }
 

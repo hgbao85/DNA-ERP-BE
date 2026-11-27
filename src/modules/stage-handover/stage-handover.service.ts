@@ -941,7 +941,11 @@ export class StageHandoverService {
           distinct: ['productionInvoiceId'],
         }),
       ]);
-      return uniqIds([...prods, ...res].map((r) => r.productionInvoiceId));
+      return uniqIds(
+        [...prods, ...res]
+          .map((r) => r.productionInvoiceId)
+          .filter((id): id is bigint => id != null),
+      );
     }
     const ledgers = await this.prisma.stockLedger.findMany({
       where: { refType: StockLedgerRefType.FRAME_OUTPUT, toWarehouseId: warehouseId },

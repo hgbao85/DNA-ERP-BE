@@ -499,7 +499,20 @@ export class FloorScanService {
         return out;
       }
       if (queueWorkshopId == null) return [];
-      return await this.cutAllocation.getWorkshopAllocationPis(queueWorkshopId);
+      const pis = await this.cutAllocation.getWorkshopAllocationPis(queueWorkshopId);
+      // Nhân 26/11 câu 3: máy công đoạn phụ cũng làm đoạn cắt tiếp của SKU đã huỷ (lệnh có thể không còn trên bảng chia). Lỗi phần
+      // thêm này chỉ log, không làm mất lệnh của bảng chia.
+      if (ws.kind !== WorkstationKind.STEP) return pis;
+      let continued: Array<{ productionInvoiceId: string; code: string }> = [];
+      try {
+        continued = await this.loadContinuedCutPis(ws.workshopId);
+      } catch (e) {
+        this.logger.warn(
+          `Không lấy được lệnh cắt tiếp SKU huỷ cho máy ${ws.id}: ${(e as Error).message}`,
+        );
+      }
+      const seen = new Set(pis.map((p) => p.productionInvoiceId));
+      return [...pis, ...continued.filter((p) => !seen.has(p.productionInvoiceId))];
     } catch (e) {
       this.logger.warn(
         `Không lấy được lệnh của bảng chia cho máy ${ws.id}: ${(e as Error).message}`,
@@ -605,14 +618,15 @@ export class FloorScanService {
         where: { id: piId },
         select: { id: true, code: true },
       }),
-      // Huỷ lệnh theo SKU (23/11/2026): SKU đã huỷ không còn để chọn báo - trừ MÁY CẮT tổ Phôi khi QLSX cho cắt tiếp (Q3,
-      // 24/11/2026). Máy công đoạn phụ / máy báo mảnh không liệt kê (BE từ chối báo SKU huỷ ở đó - review IT 26/11 mục 2.5).
+      // Huỷ lệnh theo SKU (23/11/2026): SKU đã huỷ không còn để chọn báo - trừ máy cắt + máy công đoạn phụ tổ Phôi khi QLSX cho
+      // cắt tiếp (Q3 24/11; Nhân 26/11 câu 3: đoạn cắt tiếp làm đủ công đoạn). Máy báo mảnh không liệt kê (review IT 26/11 mục 2.5).
       this.prisma.productionOrder.findMany({
         where: {
           productionInvoiceItem: { productionInvoiceId: piId },
           OR: [
             NOT_CANCELLED_ORDER,
-            ...(ws.stage === MfgStage.PHOI && ws.kind === WorkstationKind.CUT
+            ...(ws.stage === MfgStage.PHOI &&
+            (ws.kind === WorkstationKind.CUT || ws.kind === WorkstationKind.STEP)
               ? [CUT_CONTINUED_ORDER]
               : []),
           ],

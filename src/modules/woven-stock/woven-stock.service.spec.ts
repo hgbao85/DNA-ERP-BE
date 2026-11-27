@@ -60,7 +60,7 @@ describe('WovenStockService', () => {
     return { svc: new WovenStockService(db, realtime as never), db, realtime };
   }
 
-  it('tồn = đã nhận đan + đã lấy tồn vào − đã qua chuyền kiểm − đã lấy tồn ra, theo kho TP + mảnh + màu dây', async () => {
+  it('tồn = đã nhận đan + đã lấy tồn vào − đã qua chuyền kiểm − đã lấy tồn ra, gộp mọi kho TP theo mảnh + màu dây (Nhân 26/11 câu 1)', async () => {
     const { svc, db } = make({
       reqs: [req(1n, 70n, 130n, 'thanh-pham-2', 7n), req(2n, 71n, 131n, null, 7n)],
       receipts: [
@@ -72,13 +72,15 @@ describe('WovenStockService', () => {
       checked: [{ productionInvoiceItemId: 130n, pieceId: 20n, _sum: { checkedQty: 5 } }],
     });
     const out = await svc.loadStock(db);
-    const byWc = Object.fromEntries(out.map((b) => [b.warehouseCode, b]));
-    expect(byWc['thanh-pham-2'].qty).toBe(4); // 10 + 2 − 5 − 3
-    expect(byWc['thanh-pham'].qty).toBe(4); // kho trống -> kho thành phẩm mặc định
-    expect(byWc['thanh-pham'].wireMaterialId).toBe(7n);
+    expect(out).toHaveLength(1);
+    expect(out[0].qty).toBe(8);
+    expect(out[0].wireMaterialId).toBe(7n);
+    const byWc = Object.fromEntries(out[0].sources.map((x) => [x.warehouseCode, x.qty]));
+    expect(byWc['thanh-pham-2']).toBe(4); // 10 + 2 − 5 − 3
+    expect(byWc['thanh-pham']).toBe(4); // kho trống -> kho thành phẩm mặc định
   });
 
-  it('lọc theo màu dây / kho: lệnh khác dây không vào', async () => {
+  it('lọc theo màu dây: lệnh khác dây không vào', async () => {
     const { svc, db } = make({
       reqs: [req(1n, 70n, 130n, 'thanh-pham', 7n), req(2n, 71n, 131n, 'thanh-pham', null)],
       receipts: [
@@ -100,13 +102,25 @@ describe('WovenStockService', () => {
         { productionOrderId: 71n, pieceId: 20n, _sum: { qty: 4 } },
       ],
       targets: [
-        { id: 80n, quantity: 5, bomRevisionId: 9n, productionInvoiceItemId: 140n },
-        { id: 81n, quantity: 10, bomRevisionId: 9n, productionInvoiceItemId: 141n },
+        {
+          id: 80n,
+          quantity: 5,
+          bomRevisionId: 9n,
+          productionInvoiceItemId: 140n,
+          productionInvoiceItem: { warehouseCode: 'thanh-pham' },
+        },
+        {
+          id: 81n,
+          quantity: 10,
+          bomRevisionId: 9n,
+          productionInvoiceItemId: 141n,
+          productionInvoiceItem: { warehouseCode: 'thanh-pham' },
+        },
       ],
       bomPieces: [{ bomRevisionId: 9n, qtyPerUnit: 1 }],
       issued: 0,
     });
-    const touched = await svc.allocateBucket('thanh-pham', 20n, 7n, 'u1');
+    const touched = await svc.allocateBucket(20n, 7n, 'u1');
     expect(touched).toEqual([80n, 81n]);
     const rows = db.cancelledGoodsTransfer.create.mock.calls.map((c: any[]) => c[0].data);
     // lệnh 80 cần 5: 3 của nguồn 130 + 2 của nguồn 131; lệnh 81 nhận 2 còn lại của nguồn 131
@@ -121,30 +135,36 @@ describe('WovenStockService', () => {
       ),
     ).toBe(true);
     expect(realtime.publishEntityChanged).toHaveBeenCalledTimes(2);
-    // chỉ lệnh đang chạy, chưa huỷ, đúng dây + kho (kho mặc định nhận cả dòng chưa ghi kho)
+    // chỉ lệnh đang chạy, chưa huỷ, đúng dây - mọi kho thành phẩm (Nhân 26/11 câu 1)
     expect(db.productionOrder.findMany.mock.calls[0][0].where).toEqual(
       expect.objectContaining({
         floorStage: 'ACTIVE',
-        productionInvoiceItem: {
-          cancelledAt: null,
-          wireMaterialId: 7n,
-          OR: [{ warehouseCode: 'thanh-pham' }, { warehouseCode: null }],
-        },
+        productionInvoiceItem: { cancelledAt: null, wireMaterialId: 7n },
       }),
     );
+    // cùng kho -> không cần chuyển
+    expect(rows.every((r: any) => r.receiveStatus === undefined)).toBe(true);
   });
 
   it('cấp tồn: phần còn thiếu trừ đã xuất đan + phiếu chờ ký + đã lấy tồn; đủ rồi thì không lấy', async () => {
     const { svc, db } = make({
       reqs: [req(1n, 70n, 130n, 'thanh-pham', 7n)],
       receipts: [{ productionOrderId: 70n, pieceId: 20n, _sum: { qty: 6 } }],
-      targets: [{ id: 80n, quantity: 5, bomRevisionId: 9n, productionInvoiceItemId: 140n }],
+      targets: [
+        {
+          id: 80n,
+          quantity: 5,
+          bomRevisionId: 9n,
+          productionInvoiceItemId: 140n,
+          productionInvoiceItem: { warehouseCode: 'thanh-pham' },
+        },
+      ],
       bomPieces: [{ bomRevisionId: 9n, qtyPerUnit: 2 }],
       issued: 4,
       draft: 3,
       taken: 1,
     });
-    await svc.allocateBucket('thanh-pham', 20n, 7n, 'u1');
+    await svc.allocateBucket(20n, 7n, 'u1');
     // cần 10 − 4 − 3 − 1 = 2
     expect(db.cancelledGoodsTransfer.create).toHaveBeenCalledTimes(1);
     expect(db.cancelledGoodsTransfer.create.mock.calls[0][0].data.qty).toBe(2);
@@ -152,11 +172,19 @@ describe('WovenStockService', () => {
     const full = make({
       reqs: [req(1n, 70n, 130n, 'thanh-pham', 7n)],
       receipts: [{ productionOrderId: 70n, pieceId: 20n, _sum: { qty: 6 } }],
-      targets: [{ id: 80n, quantity: 5, bomRevisionId: 9n, productionInvoiceItemId: 140n }],
+      targets: [
+        {
+          id: 80n,
+          quantity: 5,
+          bomRevisionId: 9n,
+          productionInvoiceItemId: 140n,
+          productionInvoiceItem: { warehouseCode: 'thanh-pham' },
+        },
+      ],
       bomPieces: [{ bomRevisionId: 9n, qtyPerUnit: 1 }],
       issued: 5,
     });
-    expect(await full.svc.allocateBucket('thanh-pham', 20n, 7n, 'u1')).toEqual([]);
+    expect(await full.svc.allocateBucket(20n, 7n, 'u1')).toEqual([]);
     expect(full.db.cancelledGoodsTransfer.create).not.toHaveBeenCalled();
   });
 
@@ -164,10 +192,65 @@ describe('WovenStockService', () => {
     const { svc, db } = make({
       reqs: [req(1n, 70n, 130n, 'thanh-pham', 7n)],
       receipts: [{ productionOrderId: 70n, pieceId: 20n, _sum: { qty: 6 } }],
-      targets: [{ id: 80n, quantity: 5, bomRevisionId: 9n, productionInvoiceItemId: 140n }],
+      targets: [
+        {
+          id: 80n,
+          quantity: 5,
+          bomRevisionId: 9n,
+          productionInvoiceItemId: 140n,
+          productionInvoiceItem: { warehouseCode: 'thanh-pham' },
+        },
+      ],
       bomPieces: [],
     });
-    expect(await svc.allocateBucket('thanh-pham', 20n, 7n, 'u1')).toEqual([]);
+    expect(await svc.allocateBucket(20n, 7n, 'u1')).toEqual([]);
     expect(db.cancelledGoodsTransfer.create).not.toHaveBeenCalled();
+  });
+
+  it('Nhân 26/11 câu 1: lệnh kho khác cũng lấy được - cùng kho trước, phần lấy khác kho là "đang chuyển"', async () => {
+    const { svc, db } = make({
+      reqs: [req(1n, 70n, 130n, 'thanh-pham-2', 7n), req(2n, 71n, 131n, 'thanh-pham', 7n)],
+      receipts: [
+        { productionOrderId: 70n, pieceId: 20n, _sum: { qty: 3 } },
+        { productionOrderId: 71n, pieceId: 20n, _sum: { qty: 2 } },
+      ],
+      targets: [
+        {
+          id: 80n,
+          quantity: 4,
+          bomRevisionId: 9n,
+          productionInvoiceItemId: 140n,
+          productionInvoiceItem: { warehouseCode: null },
+        },
+      ],
+      bomPieces: [{ bomRevisionId: 9n, qtyPerUnit: 1 }],
+      issued: 0,
+    });
+    expect(await svc.allocateBucket(20n, 7n, 'u1')).toEqual([80n]);
+    const rows = db.cancelledGoodsTransfer.create.mock.calls.map((c: any[]) => c[0].data);
+    // lệnh 80 ở kho thành phẩm mặc định cần 4: 2 cùng kho (nguồn 131) trước, 2 từ kho thanh-pham-2 (nguồn 130) đang chuyển
+    expect(rows.map((r: any) => [r.sourceItemId, r.qty, r.receiveStatus ?? null])).toEqual([
+      [131n, 2, null],
+      [130n, 2, 'PENDING'],
+    ]);
+    expect(rows[1]).toEqual(
+      expect.objectContaining({ fromWarehouseCode: 'thanh-pham-2', toWarehouseCode: 'thanh-pham' }),
+    );
+  });
+
+  it('lệnh nhận bị huỷ khi khung còn đang chuyển: bỏ dòng chờ nhận, khung về lại tồn nguồn', async () => {
+    const { svc, db } = make({});
+    db.productionOrder.findUnique = jest.fn().mockResolvedValue({ productionInvoiceItemId: 9n });
+    db.cancelledGoodsTransfer.deleteMany = jest.fn().mockResolvedValue({ count: 2 });
+    await expect(svc.revertPendingIncoming(70n, 'u1')).resolves.toBe(2);
+    expect(db.cancelledGoodsTransfer.deleteMany).toHaveBeenCalledWith({
+      where: { kind: 'WOVEN', targetItemId: 9n, receiveStatus: 'PENDING' },
+    });
+  });
+
+  it('bỏ dòng đang chuyển lỗi thì không chặn huỷ lệnh', async () => {
+    const { svc, db } = make({});
+    db.productionOrder.findUnique = jest.fn().mockRejectedValue(new Error('db'));
+    await expect(svc.revertPendingIncoming(70n, 'u1')).resolves.toBe(0);
   });
 });
