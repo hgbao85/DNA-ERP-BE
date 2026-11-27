@@ -18,7 +18,7 @@
 >
 > Cập nhật 2026-09-07 (mục 14): bỏ ràng buộc THỨ TỰ công đoạn Phôi (Cắt/Uốn/Tán/...) - công đoạn
 > nào xong trước gửi KCS trước, không cần chờ công đoạn "trước" nó xong (quyết định Sếp Trương Văn
-> Nhân). Vật tư thành phẩm ĐÃ XONG trọn vẹn (BE+FE+live-test); Sắt hoãn sang giai đoạn 2 vì định
+> Quản lý). Vật tư thành phẩm ĐÃ XONG trọn vẹn (BE+FE+live-test); Sắt hoãn sang giai đoạn 2 vì định
 > mức (piece_bom) chưa khai processSteps nào trong dữ liệu thật.
 >
 > Cập nhật 2026-09-07 (mục 15): thêm màn "Ma trận mảnh × công đoạn" cho VTTP (đề xuất UX trước đó) -
@@ -565,7 +565,7 @@ chưa có dữ liệu thật để live-test).
 
 ## 14. Bỏ ràng buộc THỨ TỰ công đoạn Phôi - "công đoạn nào xong trước gửi KCS trước" (2026-09-07)
 
-Người dùng hỏi (chat nội bộ với Sếp Trương Văn Nhân) về việc chia Phôi thành các công đoạn nhỏ
+Người dùng hỏi (chat nội bộ với quản lý) về việc chia Phôi thành các công đoạn nhỏ
 (Cắt/Uốn/Tán/Đục lỗ...), mỗi công đoạn tự gửi KCS duyệt riêng thay vì phải xong HẾT mọi công đoạn
 mới gửi KCS một lần như hiện tại. Người dùng lo ngại việc bỏ ràng buộc thứ tự (Cắt xong mới được
 Tán, Tán xong mới được Uốn...) sẽ "chạy loạn xạ sao kiểm soát" - Sếp chốt: "để cho đơn giản thì
@@ -780,7 +780,7 @@ constraint XOR hiện có (đúng như `cutBundleId` không đụng).
   không còn ràng buộc thứ tự) → nhập 5, bấm "Gửi KCS" → tạo `StepBundle` mới "chờ KCS" thành công.
   Sang `tkcs`: `KcsPhoiPage` hiện đúng dòng "Sắt vuông 50x50 / Uốn / 5×660mm / chờ kiểm" GỘP CHUNG
   với các dòng "Cắt" khác cùng PO → "Tiến hành duyệt" chấm 2/5 không đạt (modal xác nhận CHỈ có ô
-  "Không đạt", KHÔNG có "phế/sửa được" - đúng thiết kế) → xác nhận, dòng chuyển "Lỗi 2 đoạn". Sang
+  "Không đạt", KHÔNG có "phế/sửa được" - đúng thiết kế) → xác nhận, dòng chuyển "Lỗi 2 đoạn". IT
   `tkphoi`: `StepBundleSection` hiện đúng "lỗi 2 (660mm) · chờ KCS duyệt lại" + nút "Bù đủ" → bấm,
   input tự gợi ý sẵn "2" → xác nhận → hiện "chờ KCS duyệt lại". Sang `tkcs`: "Duyệt lại" → modal
   prefill "Còn hỏng: 0" (đúng - Phôi khai đã sửa hết 2/2) → xác nhận → dòng chuyển "✓ đạt". Vòng đời
@@ -799,7 +799,7 @@ constraint XOR hiện có (đúng như `cutBundleId` không đụng).
 
 ### 17.1. Vì sao làm
 
-Sếp Trương Văn Nhân xem UI thật của mục 16 (StepBundle gắn với 1 `CutBundle` cụ thể) rồi phản hồi
+Quản lý xem UI thật của mục 16 (StepBundle gắn với 1 `CutBundle` cụ thể) rồi phản hồi
 qua chat + note tay: các công đoạn Phôi (đủ 7 công đoạn - Cắt/Uốn/Dập/Đục lỗ/Tán/Tóp đầu/Xẻ) phải
 làm được **song song, không tuần tự** - số liệu mỗi công đoạn đã tính sẵn theo định mức nên Phôi
 "chỉ cần đếm rồi gõ số vào bảng tổng", không cần biết/chọn đúng đợt cắt nào ra đoạn đó. Khi hỏi lại

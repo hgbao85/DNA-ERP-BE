@@ -201,15 +201,15 @@ migration mới trong code vừa commit (`piece_material_item_include_in_weaving
 COLUMN có default, ADD enum value, CREATE TABLE mới - không có lệnh phá huỷ nào). Máy khác pull code
 này về cũng sẽ cần làm 2 bước đó.
 
-## 7. Vòng 3 (cùng ngày) — Sếp duyệt qua Trương Văn Nhân: bỏ Trạng thái + gộp từ chối, thêm Lệnh sản xuất/PO
+## 7. Vòng 3 (cùng ngày) — Sếp duyệt qua quản lý: bỏ Trạng thái + gộp từ chối, thêm Lệnh sản xuất/PO
 
-Người dùng gửi lại nguyên văn phản hồi của Sếp (qua tin nhắn với Trương Văn Nhân, kèm 1 ảnh màn hình
+Người dùng gửi lại nguyên văn phản hồi của Sếp (qua tin nhắn với quản lý, kèm 1 ảnh màn hình
 khác không phải màn này) và yêu cầu áp dụng cho "Lịch sử kho":
 
-- Trương Văn Nhân: *"chỗ mã phiếu nên sửa thành lệnh sản xuất á anh"*, *"với thêm cái mã đơn hàng
+- Quản lý: *"chỗ mã phiếu nên sửa thành lệnh sản xuất á anh"*, *"với thêm cái mã đơn hàng
   (po) nữa"*.
 - Người dùng tự hỏi lại: *"bị nhiều quá không"*, *"có cần xóa bớt trường nào không"*.
-- Trương Văn Nhân trả lời: *"bỏ cột trạng thái"*, *"lịch sử chỉ ghi lại những lần xuất, nhập được
+- Quản lý trả lời: *"bỏ cột trạng thái"*, *"lịch sử chỉ ghi lại những lần xuất, nhập được
   chấp nhận"*, *"nếu từ chối thì ko cần thêm vào lịch sử"*.
 
 **Quyết định** (không hỏi lại người dùng — áp dụng theo đúng nghĩa đen của phản hồi, phù hợp nguyên

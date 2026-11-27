@@ -3,7 +3,7 @@
 > Trạng thái (05/11): **ĐÃ CODE + kiểm tra + chạy thử thật; 05/11 đã commit `0e3b21b` + gộp vào `main` `4d95d04`, FE `67bfc8b` → `demo` `b7efc8c`, đã push 05/11 09:52 (BE) – 09:55 (FE)** (changelog phần A mục 10). Nhánh `dot-10a-booking`, worktree BE
 > `D:\DNA-ERP-BE-dot10a` (cắt từ `main` `376534c` - đã có Đợt 1, 2, 5c), FE `D:\DNA-ERP-dot10a` (cắt từ `demo` `6774431`). DB dev riêng
 > `dna_erp_dot10a`. Plan: `docs/ke-hoach-phan-a-12-yeu-cau-2026-11-04.md` mục 7, 8 (điểm ghép ④), 12 (V2-6, V4-20). Nghiệp vụ: v8 YC5
-> 5.1–5.8 + ảnh "bảng thông tin booking" anh Nhân gửi.
+> 5.1–5.8 + ảnh "bảng thông tin booking" quản lý gửi.
 
 ## Mục lục
 0. ~~Đang dở~~ → xong (05/11)
@@ -67,7 +67,7 @@ nối junction về thư mục chính, vì `node_modules` của thư mục chín
 - Mục sidebar **"Lịch xuất hàng"** trong Bán hàng (`SalesApp.tsx`, giữa "Quản lí đơn hàng" và "Quản lí khách hàng").
 - `BookingSchedulePage.tsx` (+ `booking/`): chuyển **Lịch tháng** (tự dựng bằng `date-fns`, không thêm thư viện; chip Lấy cont / **CUT OFF
   nền vàng như Excel** / ETD / Cắt SI, viền đỏ khi thiếu hàng, "+n mốc khác"; điện thoại → danh sách theo ngày) và **Bảng** (đúng cột bảng
-  booking anh Nhân: STT, Khách, Tên PI, SKU, Số lượng, Số booking, POD, Cắt SI, Ngày lấy cont, CUT OFF, ETD, Nơi lấy cont, Tên tàu, Ghi
+  booking quản lý: STT, Khách, Tên PI, SKU, Số lượng, Số booking, POD, Cắt SI, Ngày lấy cont, CUT OFF, ETD, Nơi lấy cont, Tên tàu, Ghi
   chú + Kho gom, Khối, Hàng, Trạng thái; điện thoại → thẻ). Lọc khách / trạng thái / "hiện booking đã huỷ" / tìm. Prop `readOnly` để sau
   này KHSX / Sếp dùng lại.
 - Form booking đủ ô v8 (giờ VN cho Cắt SI / CUT OFF), kho gom tự gợi ý khi mọi dòng cùng 1 kho đóng gói, file / ảnh booking chỉ tải lên khi
@@ -98,7 +98,7 @@ nối junction về thư mục chính, vì `node_modules` của thư mục chín
 - FE: 2 ô lọc giãn hết chiều ngang (CSS chung `select { width: 100% }`) + chữ "Hiện booking đã huỷ" gãy 3 dòng; icon mũi tên tháng co còn
   6 px (padding mặc định của nút); 1 dòng hàng hiện 2 lần ý "chưa đủ hàng" + "thiếu N bộ" → gộp 1 dòng; thẻ điện thoại ghép tên tàu vào
   dòng "ETD" → tách dòng "Tàu".
-- Repo BE public: số booking thật lấy từ bảng của anh Nhân lọt vào spec + chú thích schema, tên tàu thật ở chú thích / placeholder → thay
+- Repo BE public: số booking thật lấy từ bảng của quản lý lọt vào spec + chú thích schema, tên tàu thật ở chú thích / placeholder → thay
   bằng giá trị giả (`BK0000123`, "TÊN TÀU 0123-045N").
 
 ## 5. Kiểm tra + chạy thử thật

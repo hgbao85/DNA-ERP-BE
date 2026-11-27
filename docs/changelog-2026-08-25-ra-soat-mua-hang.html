@@ -231,7 +231,7 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
       <code>Material.buyerId</code> đã gán đúng người phụ trách cho từng vật tư từ trước — nhưng cơ
       chế lọc (<code>purchasingRouting.ts#canPurchaserSeeProposal</code>) chỉ xét ở CẤP ĐỀ XUẤT: có
       ≥1 dòng của mình là được vào xem/thao tác CẢ đề xuất, kể cả các dòng của đồng nghiệp khác
-      trong cùng đề xuất gộp đó. Với PI-2026-012, 3 nhân viên mua hàng (Nhàn/Trâm/Nghi) đều có dòng
+      trong cùng đề xuất gộp đó. Với PI-2026-012, 3 nhân viên mua hàng (người mua A/người mua B/người mua C) đều có dòng
       trong cùng 1 đề xuất tiêu hao → cả 3 thấy y hệt 14 dòng như nhau.
     </p>
     <div class="tbl-wrap">
@@ -332,7 +332,7 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
       <li class="ok"><b>Sếp</b><span>Duyệt lúc 03:37:56 UTC → tự tạo ProductionOrder PO-46-1</span></li>
       <li class="ok"><b>Hệ thống (ngầm)</b><span>CuttingProposal tự tính rồi tự duyệt lúc 03:38:07 → tạo PurchaseProposal #61 (4 dòng sắt, set sẵn productionInvoiceId)</span></li>
       <li class="ok"><b>Hệ thống (ngầm)</b><span>Ngay sau đó tính tiếp nguyên liệu + tiêu hao → GHI THÊM 14 dòng vào ĐÚNG PurchaseProposal #61, không tạo mới</span></li>
-      <li class="ok"><b>Nhàn (Mua hàng)</b><span>"Danh sách" chỉ có đúng 1 dòng cho PI-2026-014; mở ra thấy 11 vật tư của mình (cả sắt lẫn tiêu hao trộn chung), 7 dòng của Trâm/Nghi hiện read-only</span></li>
+      <li class="ok"><b>người mua A (Mua hàng)</b><span>"Danh sách" chỉ có đúng 1 dòng cho PI-2026-014; mở ra thấy 11 vật tư của mình (cả sắt lẫn tiêu hao trộn chung), 7 dòng của người mua B/người mua C hiện read-only</span></li>
     </ol>
     <div class="callout warn">
       <b>Sự cố vận hành gặp phải giữa chừng (không phải lỗi code):</b> lần chạy thử đầu (PO-45 →
@@ -441,17 +441,17 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     </div>
     <p class="module-note">
       <b>Kiểm chứng bằng UI thật (tái dùng PO-46 → PI-2026-014, đề xuất #61 ở mục 5):</b> lần này để
-      Nhàn báo giá + gửi phần của mình trước, Trâm gửi phần của Trâm sau, xác nhận Sếp duyệt được
+      Người mua A báo giá + gửi phần của mình trước, người mua B gửi phần của người mua B sau, xác nhận Sếp duyệt được
       từng phần độc lập.
     </p>
     <ol class="timeline stages">
-      <li class="ok"><b>Nhàn</b><span>báo giá 11 vật tư của mình (SAT-002/003/004/006/008, DAY-001/002, VTK-013/035, NN-001/002) → Gửi Sếp duyệt lúc 14:37 — 11 item chuyển <code>QUOTING → SUBMITTED</code>, 7 item của Trâm/Nghi giữ nguyên <code>QUOTING</code>, rollup đề xuất vẫn <code>QUOTING</code> (đúng — chưa đủ mọi item)</span></li>
-      <li class="ok"><b>Sếp</b><span>vào "So sánh giá" — đề xuất PO-46 hiện ngay với nhãn "11/18 vật tư đã gửi" dù rollup còn <code>QUOTING</code>; mở chi tiết chỉ thấy 11 dòng của Nhàn có ô chọn NCC, 7 dòng còn lại (6 của Trâm còn <code>QUOTING</code>, 1 của Nghi còn <code>QUOTING</code>) hiện ở khối "chưa tới lượt duyệt" read-only</span></li>
-      <li class="ok"><b>Sếp</b><span>bấm Duyệt lúc 14:38 — đúng 11 item của Nhàn chuyển <code>SUBMITTED → PURCHASING</code>; 7 item Trâm/Nghi KHÔNG đổi, vẫn <code>QUOTING</code>; rollup đề xuất vẫn <code>QUOTING</code> (đúng theo bảng rollup — chưa phải mọi item đều <code>PURCHASING</code>/<code>PURCHASED</code>)</span></li>
-      <li class="ok"><b>Nhàn</b><span>"Lệnh mua NCC" không còn hiện PO-46 nữa (đã xong phần mình); "Theo dõi mua hàng" hiện đúng 11 dòng của mình ở PO-46, không lẫn dòng <code>QUOTING</code> của Nghi</span></li>
-      <li class="ok"><b>Trâm</b><span>báo giá + gửi 6 vật tư của mình (VTK-004, DINH-001, VTK-018, VTK-022, VTK-027, VTK-033) lúc 14:38 — 6 item chuyển <code>SUBMITTED</code> độc lập, không đụng tới 11 item đã <code>PURCHASING</code> của Nhàn hay 1 item còn <code>QUOTING</code> của Nghi</span></li>
-      <li class="ok"><b>Sếp</b><span>"So sánh giá" hiện lượt chờ duyệt MỚI, độc lập, đúng "6/18 vật tư đã gửi"; khối "chưa tới lượt duyệt" giờ liệt kê 11 dòng <code>PURCHASING</code> (Nhàn, đã xong) + 1 dòng <code>QUOTING</code> (Nghi, chưa gửi) — duyệt tiếp, chỉ 6 item của Trâm chuyển <code>PURCHASING</code></span></li>
-      <li class="ok"><b>Kết quả cuối</b><span>đề xuất #61: 17/18 item <code>PURCHASING</code> (Nhàn + Trâm, duyệt ở 2 lượt tách biệt), đúng 1 item của Nghi vẫn <code>QUOTING</code> — rollup đề xuất vẫn <code>QUOTING</code> cho tới khi Nghi gửi + Sếp duyệt nốt lượt thứ 3</span></li>
+      <li class="ok"><b>người mua A</b><span>báo giá 11 vật tư của mình (SAT-002/003/004/006/008, DAY-001/002, VTK-013/035, NN-001/002) → Gửi Sếp duyệt lúc 14:37 — 11 item chuyển <code>QUOTING → SUBMITTED</code>, 7 item của người mua B/người mua C giữ nguyên <code>QUOTING</code>, rollup đề xuất vẫn <code>QUOTING</code> (đúng — chưa đủ mọi item)</span></li>
+      <li class="ok"><b>Sếp</b><span>vào "So sánh giá" — đề xuất PO-46 hiện ngay với nhãn "11/18 vật tư đã gửi" dù rollup còn <code>QUOTING</code>; mở chi tiết chỉ thấy 11 dòng của người mua A có ô chọn NCC, 7 dòng còn lại (6 của người mua B còn <code>QUOTING</code>, 1 của người mua C còn <code>QUOTING</code>) hiện ở khối "chưa tới lượt duyệt" read-only</span></li>
+      <li class="ok"><b>Sếp</b><span>bấm Duyệt lúc 14:38 — đúng 11 item của người mua A chuyển <code>SUBMITTED → PURCHASING</code>; 7 item người mua B/người mua C KHÔNG đổi, vẫn <code>QUOTING</code>; rollup đề xuất vẫn <code>QUOTING</code> (đúng theo bảng rollup — chưa phải mọi item đều <code>PURCHASING</code>/<code>PURCHASED</code>)</span></li>
+      <li class="ok"><b>người mua A</b><span>"Lệnh mua NCC" không còn hiện PO-46 nữa (đã xong phần mình); "Theo dõi mua hàng" hiện đúng 11 dòng của mình ở PO-46, không lẫn dòng <code>QUOTING</code> của người mua C</span></li>
+      <li class="ok"><b>người mua B</b><span>báo giá + gửi 6 vật tư của mình (VTK-004, DINH-001, VTK-018, VTK-022, VTK-027, VTK-033) lúc 14:38 — 6 item chuyển <code>SUBMITTED</code> độc lập, không đụng tới 11 item đã <code>PURCHASING</code> của người mua A hay 1 item còn <code>QUOTING</code> của người mua C</span></li>
+      <li class="ok"><b>Sếp</b><span>"So sánh giá" hiện lượt chờ duyệt MỚI, độc lập, đúng "6/18 vật tư đã gửi"; khối "chưa tới lượt duyệt" giờ liệt kê 11 dòng <code>PURCHASING</code> (người mua A, đã xong) + 1 dòng <code>QUOTING</code> (người mua C, chưa gửi) — duyệt tiếp, chỉ 6 item của người mua B chuyển <code>PURCHASING</code></span></li>
+      <li class="ok"><b>Kết quả cuối</b><span>đề xuất #61: 17/18 item <code>PURCHASING</code> (người mua A + người mua B, duyệt ở 2 lượt tách biệt), đúng 1 item của người mua C vẫn <code>QUOTING</code> — rollup đề xuất vẫn <code>QUOTING</code> cho tới khi người mua C gửi + Sếp duyệt nốt lượt thứ 3</span></li>
     </ol>
     <div class="callout ok">
       Xác nhận đúng thiết kế: <b>2 lượt duyệt độc lập trên CÙNG 1 đề xuất, không ai phải đợi ai</b> —
@@ -484,10 +484,10 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
     <p class="module-note">
       Mục 7 đã tách được state machine xuống cấp item và cho Sếp duyệt độc lập theo TỪNG LƯỢT GỬI -
       nhưng chưa xử lý ca 2 người mua hàng CÙNG LÚC đang ở trạng thái <code>SUBMITTED</code> trong
-      cùng 1 đơn gộp (vd cả Trâm lẫn Nghi cùng bấm "Gửi Giám đốc duyệt" trước khi Sếp kịp xử lý lượt
+      cùng 1 đơn gộp (vd cả người mua B lẫn người mua C cùng bấm "Gửi Giám đốc duyệt" trước khi Sếp kịp xử lý lượt
       nào). Màn "So sánh giá" khi đó vẫn liệt kê PHẲNG mọi item đang submitted của cả 2 người vào 1
       danh sách, với đúng 1 cặp nút Duyệt/Từ chối cho toàn bộ danh sách đó - Sếp Từ chối phần của
-      Trâm là Từ chối dính luôn cả phần của Nghi.
+      Người mua B là Từ chối dính luôn cả phần của người mua C.
     </p>
     <div class="callout bad">
       <b>Nguyên nhân:</b> <code>handleApprove</code>/<code>handleReject</code> (BossApp.tsx) đã lọc
@@ -515,14 +515,14 @@ footer{margin-top:3.5rem; padding-top:1.4rem; border-top:1px solid var(--line); 
       </table>
     </div>
     <p class="module-note">
-      <b>Kiểm chứng bằng UI thật (PO-47 → PI-2026-015):</b> dựng lại đúng tình huống lỗi - Trâm (6
-      vật tư) và Nghi (1 vật tư) cùng đang <code>SUBMITTED</code> trong 1 đơn, Nhàn (11 vật tư) vẫn
+      <b>Kiểm chứng bằng UI thật (PO-47 → PI-2026-015):</b> dựng lại đúng tình huống lỗi - người mua B (6
+      vật tư) và người mua C (1 vật tư) cùng đang <code>SUBMITTED</code> trong 1 đơn, người mua A (11 vật tư) vẫn
       <code>NEW</code>.
     </p>
     <ol class="timeline stages">
-      <li class="ok"><b>Sếp</b><span>bấm vào đơn PO-47 - thấy 3 dòng: Nhàn (11 vật tư, "Chờ báo giá"), Nghi (1 vật tư, "Chờ duyệt"), Trâm (6 vật tư, "Chờ duyệt") - không còn danh sách item phẳng</span></li>
-      <li class="ok"><b>Sếp</b><span>bấm vào dòng Trâm - chỉ thấy đúng 6 vật tư của Trâm kèm bảng chọn NCC, không lẫn item của Nghi</span></li>
-      <li class="ok"><b>Sếp</b><span>bấm Duyệt - quay lại danh sách người đề xuất: Trâm chuyển "Đang mua hàng", <b>Nghi vẫn nguyên "Chờ duyệt" (không hề bị đụng tới)</b>, Nhàn vẫn "Chờ báo giá"</span></li>
+      <li class="ok"><b>Sếp</b><span>bấm vào đơn PO-47 - thấy 3 dòng: người mua A (11 vật tư, "Chờ báo giá"), người mua C (1 vật tư, "Chờ duyệt"), người mua B (6 vật tư, "Chờ duyệt") - không còn danh sách item phẳng</span></li>
+      <li class="ok"><b>Sếp</b><span>bấm vào dòng người mua B - chỉ thấy đúng 6 vật tư của người mua B kèm bảng chọn NCC, không lẫn item của người mua C</span></li>
+      <li class="ok"><b>Sếp</b><span>bấm Duyệt - quay lại danh sách người đề xuất: người mua B chuyển "Đang mua hàng", <b>người mua C vẫn nguyên "Chờ duyệt" (không hề bị đụng tới)</b>, người mua A vẫn "Chờ báo giá"</span></li>
     </ol>
   </div>
 

@@ -6,7 +6,7 @@
 
 Phần A gồm: **Đợt 1** Load cont (YC9) · **Đợt 2** Mã LSX + chọn xưởng (V3-1, YC12 phần chọn) · **Đợt 3** Mốc, năng lực, cảnh báo
 (YC10) · **Đợt 4** Vật tư cần về (YC6) · **Đợt 9** Sửa kế hoạch + Excel (YC2) · **Đợt 8** Sắt cắt bằng phần mềm (7.12, 7.14,
-7.15, 7.17) · **Đợt 10a** Booking / Lịch xuất hàng (YC5 phần Sales). **Đợt 11** (máy cắt theo quy cách, 7.16) chờ anh Nhân trả lời
+7.15, 7.17) · **Đợt 10a** Booking / Lịch xuất hàng (YC5 phần Sales). **Đợt 11** (máy cắt theo quy cách, 7.16) chờ quản lý trả lời
 V7-1..V7-4 - ngoài phạm vi plan này.
 
 ---
@@ -433,29 +433,29 @@ ghi lịch sử, báo Mua hàng.
 - Test: 2 lần tính (đạt/không đạt từng lần), số mua dùng `purchaseTotalBars`, đề xuất cũ tương thích, chiều dài chuẩn + lịch sử +
   thông báo, đếm đặc cách, gợi ý (chạy với bộ dữ liệu `test/solver-real-data-new`).
 
-**Cập nhật 07/11 (Bảo trả lời file "gửi Bảo Đợt 9 và Phần A còn lại", kèm câu anh Nhân chốt 07/11 - changelog 12-yeu-cau mục 31):**
+**Cập nhật 07/11 (IT trả lời file "gửi IT Đợt 9 và Phần A còn lại", kèm câu quản lý chốt 07/11 - changelog 12-yeu-cau mục 31):**
 - **Lưỡi máy TỰ ĐỘNG thật = 3 mm** (không phải 2,5 đang cài), laser 1 mm → bảng cắt Phôi máy tự động cũng 3 mm. Đổi ở Cấu hình (Admin) ô "Lưỡi
   cắt (mm)" của MC Tự động (`solverMctdBladeWidthMm`) - không cần code; mặc định schema 2,5 sửa thành 3 khi làm Đợt 8. Máy tự động: 2 lần tính
   (mua 3 mm / bảng cắt lưỡi thật) trùng nhau; chỉ laser khác.
 - **Mua sắt luôn theo lưỡi 3 mm, không nhân 1%, mua đúng theo sơ đồ cắt**; sắt mua dư so với bảng cắt **vào tồn tự do**, lệnh khác dùng, lần
-  tính sau tự trừ (anh Nhân 07/11 - khớp thiết kế).
-- **Chỗ ghi số mua (Bảo đề xuất, chưa chốt với A):** B chỉ đọc `PurchaseProposalItem.buyQty` của dòng sắt (+ `stockLengthMm`), không đọc
+  tính sau tự trừ (quản lý 07/11 - khớp thiết kế).
+- **Chỗ ghi số mua (IT đề xuất, chưa chốt với A):** B chỉ đọc `PurchaseProposalItem.buyQty` của dòng sắt (+ `stockLengthMm`), không đọc
   `CuttingProposalLine.buyBars`; nhận hàng giữ chỗ cho PI tới đúng `buyQty`. Đề xuất: `buyQty` = số cây bảng cắt cần, số mua theo 3 mm ghi
   vào `orderQty` (không đổi schema, phần dư tự vào tồn chưa giữ). **Vướng:** `orderQty` hiện là số người mua tự tăng, và việc sửa câu 3 (dưới)
   lại xoá `orderQty` khi tính lại → phải phân biệt số hệ thống ghi với số người mua tăng. Chốt trong buổi 30 phút với B (câu 4).
   Giữ 2 quy ước của B: mỗi vật tư + cỡ cây chỉ 1 dòng NEW; không sửa dòng đã chốt.
-- **Đổi chiều dài chuẩn** (anh Nhân 07/11): đề xuất mua chưa có Giám đốc ký → tính lại theo chiều dài mới + báo người mua; phiếu đã ký giữ
+- **Đổi chiều dài chuẩn** (quản lý 07/11): đề xuất mua chưa có Giám đốc ký → tính lại theo chiều dài mới + báo người mua; phiếu đã ký giữ
   chiều dài cũ, hàng về dùng như cây cũ trong kho. (Thêm vào thiết kế "đổi → thông báo Mua hàng".)
-- **Xưởng → kho Phôi (điểm ghép ③):** B làm xong **12/11/2026** (ngày chuyển 9 kho + kiểm kê, anh Nhân chốt; sớm hơn dự kiến ~06/01/2027):
+- **Xưởng → kho Phôi (điểm ghép ③):** B làm xong **12/11/2026** (ngày chuyển 9 kho + kiểm kê, quản lý chốt; sớm hơn dự kiến ~06/01/2027):
   thêm cột "kho Phôi" vào bảng xưởng, tạo kho Phôi Phước An, 1 hàm "xưởng → kho Phôi" (B báo tên hàm). Phú An → kho Phôi Phú An (tách từ
   `phoi-son-han` thành Phôi / Hàn / Sơn); Phước An → kho Phôi Phước An (mới; tồn Phước An chưa có trong phần mềm, kiểm kê + nhập 12/11).
-- **Không làm màn thêm xưởng** (anh Nhân 07/11: ít khi thêm, IT thêm tay; xưởng mới = 1 kho Phôi + 1 kho Hàn riêng, Sơn / phụ kiện / thành
+- **Không làm màn thêm xưởng** (quản lý 07/11: ít khi thêm, IT thêm tay; xưởng mới = 1 kho Phôi + 1 kho Hàn riêng, Sơn / phụ kiện / thành
   phẩm dùng kho chung ở Phú An).
-- **Vẫn chờ:** câu 2.4 (xưởng dự kiến lúc tính cắt) của anh Nhân.
+- **Vẫn chờ:** câu 2.4 (xưởng dự kiến lúc tính cắt) của quản lý.
 
 ## 7. Đợt 10a – Booking / Lịch xuất hàng (YC5, phần Sales) · nhánh `dot-10a-booking` (sau Đợt 1, 2)
 
-**v8:** 5.1 ô theo bảng booking anh Nhân gửi · 5.2 chọn hàng theo lệnh SX từng SKU, kèm mã PO khách · 5.3 xếp cả hàng chưa xong, tới
+**v8:** 5.1 ô theo bảng booking quản lý gửi · 5.2 chọn hàng theo lệnh SX từng SKU, kèm mã PO khách · 5.3 xếp cả hàng chưa xong, tới
 ngày lấy cont / CUT OFF chưa đủ thì cảnh báo · 5.4 thường 1 booking = 1 cont, có ô số cont · chặn vượt số còn lại · tổng m³ so cont ·
 5.6 gom về 1 kho TP · 5.8 "chưa đủ hàng" = đã đóng gói − đã xuất. (5.5, 5.7 kho xác nhận xuất + bỏ nút cũ = 10b của người B.)
 
@@ -485,14 +485,14 @@ ngày lấy cont / CUT OFF chưa đủ thì cảnh báo · 5.4 thường 1 booki
 | ② | Đợt 3–4 | `materialNeedDateOf(item, group)` | chia hàng theo SKU (5d) |
 | ③ | Đợt 7 của B | (B đưa) xưởng → kho Phôi | Đợt 8 xuất sắt |
 | ④ | Đợt 10a | `Booking`, `BookingLine` | 10b xác nhận xuất, trừ tồn |
-| ⑤ (mới, review mục 16 điểm 8) | trước Đợt 5 của B | — | 3 luồng tính số mua + giữ chỗ nằm trong `production-invoices` (A); B sửa số mua/đơn gộp/giữ chỗ theo SKU → thống nhất: A không đổi chữ ký 3 hàm tính mua trong lúc B làm 5a–5d. **Cập nhật 04/11:** B đã làm 5a bằng cột riêng `PurchaseProposalItem.orderQty` (số mua = max(buyQty, orderQty)) nên lần tính lại không ghi đè số B tăng; còn hở: tính lại làm buyQty GIẢM thì mua dư tăng lặng lẽ → đề xuất lần tính lại xoá `orderQty` của dòng bị đổi + báo người mua (cần B đồng ý, code ở phía A). **07/11: B đồng ý (A sửa ở phần tính lại), anh Nhân chốt cho MỌI vật tư:** phiếu chưa có Giám đốc ký → bỏ số người mua đã tăng, quay về số mới, báo người mua; phiếu đã ký → gọi 1 hàm B viết sẵn (báo người mua + Giám đốc, người mua tự quyết phiếu thay thế / nhận đủ, dư vào tồn tự do). B đã kiểm lỗi có thật (orderQty 110 giữ nguyên khi buyQty tính lại còn 50). |
+| ⑤ (mới, review mục 16 điểm 8) | trước Đợt 5 của B | — | 3 luồng tính số mua + giữ chỗ nằm trong `production-invoices` (A); B sửa số mua/đơn gộp/giữ chỗ theo SKU → thống nhất: A không đổi chữ ký 3 hàm tính mua trong lúc B làm 5a–5d. **Cập nhật 04/11:** B đã làm 5a bằng cột riêng `PurchaseProposalItem.orderQty` (số mua = max(buyQty, orderQty)) nên lần tính lại không ghi đè số B tăng; còn hở: tính lại làm buyQty GIẢM thì mua dư tăng lặng lẽ → đề xuất lần tính lại xoá `orderQty` của dòng bị đổi + báo người mua (cần B đồng ý, code ở phía A). **07/11: B đồng ý (A sửa ở phần tính lại), quản lý chốt cho MỌI vật tư:** phiếu chưa có Giám đốc ký → bỏ số người mua đã tăng, quay về số mới, báo người mua; phiếu đã ký → gọi 1 hàm B viết sẵn (báo người mua + Giám đốc, người mua tự quyết phiếu thay thế / nhận đủ, dư vào tồn tự do). B đã kiểm lỗi có thật (orderQty 110 giữ nguyên khi buyQty tính lại còn 50). |
 
 ## 9. Thứ tự và ước lượng (phần A)
 
 Đợt 1 (3) → Đợt 2 (5) → Đợt 3 (10) → Đợt 4 (5) → Đợt 9 (7) → Đợt 8 (9, cần chốt V2-3) → Đợt 10a (7). Tổng ≈ 46 ngày công như kế hoạch
 kỹ thuật. Mỗi đợt xong: commit nhánh đợt, báo người dùng, hỏi gộp.
 
-## 10. Câu hỏi cần người dùng / anh Nhân chốt
+## 10. Câu hỏi cần người dùng / quản lý chốt
 
 **Người dùng đã trả lời 04/11 (theo vòng 4):** Q1 mỗi dòng SKU 1 số LSX riêng, không trùng toàn hệ thống (unique index) · Q2 lúc KHSX
 gửi QLSX, mốc còn trống thì **tự lưu ngày đề xuất** · Q3 "Đóng gói N+14" là **ngày bắt đầu** (M4); ngày xong = M4 + Xđg − 1; hạn VT
@@ -503,7 +503,7 @@ Danh sách câu hỏi ban đầu:
 
 1. **Đợt 2 – LSX trùng cho 2 SKU?** Sổ xưởng có "I41+42 LSX 323" (1 số cho 2 SKU). Plan theo v8 "không trùng": mỗi dòng SKU 1 số riêng.
    Nếu xưởng vẫn đánh chung 1 số cho 2 SKU của cùng lệnh gộp thì nới: cho trùng trong cùng 1 PI.
-   **06/11:** file kế hoạch KHSX dùng 1 số LSX cho nhiều mã là thường ngày (LSX324, LSX182, LSX317, 319, 320, 323…) → đã hỏi lại anh Nhân
+   **06/11:** file kế hoạch KHSX dùng 1 số LSX cho nhiều mã là thường ngày (LSX324, LSX182, LSX317, 319, 320, 323…) → đã hỏi lại quản lý
    (changelog 12-yeu-cau mục 30), chờ trả lời.
 2. **Đợt 8 – xưởng chưa biết lúc tính cắt** (V2-3 ở mục 12): chọn "xưởng dự kiến" khi tính + tính lại nếu QLSX đổi xưởng?
 3. **Đợt 3 – khoảng ngày Nhập đan / Chuyền kiểm** khi chỉ có 1 ngày mốc: tính X ngày kết thúc ở ngày đó (plan) hay dồn cả lệnh vào 1 ngày?

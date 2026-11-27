@@ -9,7 +9,7 @@ thấy, (2) làm thêm 1 trang Admin để sửa/xóa lại được 3 chỗ "ch
 ý bất biến) khi lỡ chọn nhầm file, miễn là bản thân việc sửa/xóa cũng được ghi log. Toàn bộ đã làm
 xong - xem mục "Đã làm (vòng 2)".
 
-**Cập nhật lần 3 (cùng ngày)**: người dùng hỏi trực tiếp Sếp Trương Văn Nhân qua chat nội bộ "ai là
+**Cập nhật lần 3 (cùng ngày)**: người dùng hỏi trực tiếp quản lý qua chat nội bộ "ai là
 người được quyền sửa (account nào được xem và sửa)" - Sếp trả lời "cho người nhập được sửa luôn
 anh", KHÔNG chỉ Admin như thiết kế ban đầu ở vòng 2. Đã mở quyền tự sửa/xóa cho CHÍNH người đã nhập
 (KCS/Mua hàng/Kho) NGAY TẠI màn họ đang làm việc, giữ nguyên cửa Admin làm lưới an toàn - xem mục
@@ -215,7 +215,7 @@ phục lại dữ liệu demo (PATCH lại `approvalFileUrl` qua API) sau khi te
 
 ## Đã làm (vòng 3, cùng ngày) — mở quyền tự sửa cho người nhập, ngay tại màn làm việc
 
-Theo lời Sếp Trương Văn Nhân ("cho người nhập được sửa luôn") - xem "Cập nhật lần 3" ở Bối cảnh.
+Theo lời quản lý ("cho người nhập được sửa luôn") - xem "Cập nhật lần 3" ở Bối cảnh.
 Nguyên tắc: giữ nguyên trang Admin (vòng 2) làm lưới an toàn cuối, MỞ THÊM cho chính người đã tạo
 bản ghi tự sửa/xóa ngay tại màn họ đang làm việc hàng ngày, không cần biết trang Admin tồn tại.
 

@@ -6,7 +6,7 @@ Nguồn: FE `docs/audit-2026-11-16-loi-con-ton-doc-code.html`, mục X1, phần 
 
 | Ý trong danh sách | Hiện trạng |
 |---|---|
-| `recordCutBatch` đọc bó đang mở ngoài transaction, không khoá, cộng vào bó không kiểm trạng thái | **Đã sửa từ `2470ac9` (Sang)**: chọn đợt đang mở TRONG transaction, `lockBusinessKey` + `FOR UPDATE`, chỉ lấy đợt `CUTTING` → không cộng được vào đợt đã gửi KCS / đã đạt. |
+| `recordCutBatch` đọc bó đang mở ngoài transaction, không khoá, cộng vào bó không kiểm trạng thái | **Đã sửa từ `2470ac9` (IT)**: chọn đợt đang mở TRONG transaction, `lockBusinessKey` + `FOR UPDATE`, chỉ lấy đợt `CUTTING` → không cộng được vào đợt đã gửi KCS / đã đạt. |
 | `finishCutBundle` update không có điều kiện trạng thái | **Đã sửa từ `2470ac9`**: `updateMany WHERE status = CUTTING` + kiểm count, lời gọi thua nhận 409. |
 | `reviewCutBundle` đọc số đoạn ngoài transaction | **Không còn là lỗi thật**, đã thêm chốt phòng thủ (dưới). |
 
@@ -26,5 +26,5 @@ Vì sao `reviewCutBundle` không còn là lỗi thật:
 
 - +1 unit: số đã cắt đọc sau bước giữ dòng đợt. Ca "chấm vượt" kiểm thêm là không ghi kết quả KCS.
 - Unit toàn bộ: chỉ còn 2 lỗi cũ của bộ giải tối ưu cắt (3823 qua).
-- Integration 35/35, gồm 12 test tranh chấp đợt cắt của Sang.
+- Integration 35/35, gồm 12 test tranh chấp đợt cắt của IT.
 - **Chưa thử sống**: bản sao DB dev không còn phiếu xuất sắt / đợt cắt nào để duyệt.

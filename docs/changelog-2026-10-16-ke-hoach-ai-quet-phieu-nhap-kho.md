@@ -10,9 +10,9 @@ hiện tại (viết tay) và cho biết về sau phiếu sẽ in máy để AI 
 
 ## 2. Phiếu mẫu người dùng gửi (đọc từ ảnh)
 
-Mẫu 01NK-DNA (theo Thông tư 133/2016), viết tay: ngày 14/10/2026, đơn vị IEA-KCN Phú An, người giao Huỳnh Thanh Phốc, "theo PXK
+Mẫu 01NK-DNA (theo Thông tư 133/2016), viết tay: ngày 14/10/2026, đơn vị IEA-KCN Phú An, người giao (tên trên phiếu), "theo PXK
 ngày 10/10/2026 của **Bảo Hân Plastic**" (nhà cung cấp), nhập tại kho Phú An. Một dòng: **"Bì zip 17×23 in dầu", ĐVT kg, theo chứng
-từ 50, thực nhập 50**; cột Đơn giá bị dùng để ghi **"1 kg / 130 cái"**. Ký: người lập + thủ kho (Lê Thị Mỹ Quanh), QC (Trần Văn Nhơn),
+từ 50, thực nhập 50**; cột Đơn giá bị dùng để ghi **"1 kg / 130 cái"**. Ký: người lập + thủ kho, QC,
 người giao.
 
 **Điều phiếu KHÔNG có:** mã PI, mã đề xuất mua, mã SKU, mã vật tư (cột "Mã số" để trống). Tức là AI đọc được CHỮ, nhưng phiếu

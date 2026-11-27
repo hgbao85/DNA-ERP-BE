@@ -117,10 +117,10 @@ YC10 mục 10.1–10.16.
     lực"; nhãn ĐG → M4; xoá cảnh báo năng lực cũ khi mở form lệnh khác.
 
 ## 4. Chưa làm / còn treo
-- 2 mặc định chờ anh Nhân (`docs/cau-hoi-xac-nhan-anh-nhan-2026-11-04.docx` câu 2.2–2.3): Nhập đan / Chuyền kiểm trải X ngày kết thúc ở
+- 2 mặc định chờ quản lý (`docs/cau-hoi-xac-nhan-anh-nhan-2026-11-04.docx` câu 2.2–2.3): Nhập đan / Chuyền kiểm trải X ngày kết thúc ở
   ngày mốc (`SINGLE_DATE_STAGE_SPREAD_X_DAYS`), chấm "chưa đủ 1 cont" ngày D lúc 7h ngày D+1 (`DIGEST_HOUR_VN`) - đổi bằng hằng số ở
   `production-capacity.types.ts` / `daily-jobs.service.ts`.
-- Phôi "làm được trong ngày" đang ƯỚC TÍNH theo tỷ lệ đoạn cắt; đồng bộ theo mảnh (mức 2, anh Nhân chốt 04/11) làm sau.
+- Phôi "làm được trong ngày" đang ƯỚC TÍNH theo tỷ lệ đoạn cắt; đồng bộ theo mảnh (mức 2, quản lý chốt 04/11) làm sau.
 - Dự phòng M1/M3 trong hàm ngày cần vật tư → Đợt 4 (mục 2).
 - Tin sáng vẫn ghi mã PI (`PA3-PI-I`) thay vì số LSX (hành vi có sẵn từ trước Đợt 2) - không đổi ở đợt này.
 - Còn file rỗng `D:\jest-pc.log` do 1 thợ tạo nhầm ngoài repo (lệnh xoá của thợ bị chặn) - người dùng xoá tay nếu muốn.

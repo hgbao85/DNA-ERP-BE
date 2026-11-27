@@ -1,6 +1,6 @@
 # Lỗi mức thấp — rà soát Mua hàng + Kho 14/11 (16/11/2026)
 
-Bản rà soát (FE `docs/audit-2026-11-14-ra-soat-mua-hang-kho.html`, mục 05) chỉ mô tả được 3 trong khoảng 12 lỗi thấp, và Sang đã review cả 3. Các mã còn lại (MH4–MH7, XK5, XK7, XK8, CK7–CK9, TĐ6) chưa từng có mô tả, kể cả trong bản gốc, nên chưa sửa được.
+Bản rà soát (FE `docs/audit-2026-11-14-ra-soat-mua-hang-kho.html`, mục 05) chỉ mô tả được 3 trong khoảng 12 lỗi thấp, và IT đã review cả 3. Các mã còn lại (MH4–MH7, XK5, XK7, XK8, CK7–CK9, TĐ6) chưa từng có mô tả, kể cả trong bản gốc, nên chưa sửa được.
 
 Không có migration.
 
@@ -46,7 +46,7 @@ mục 05. Đã sửa các lỗi Trung bình:
 - **TĐ8** `SegmentProductionService.recomputeInTx`, `SegmentStocktakeService`: giữ khoá chuyển đổi dữ liệu cũ (dùng chung) trước khoá
   lệnh / ô - không chạy chen lượt chuyển đổi.
 - **TĐ7** (đổi xưởng chuyển cả phần dư sang kho mới): anh chọn tạm chấp nhận, ghi hạn chế vào quy trình bật công tắc
-  (`docs/changelog-2026-11-14-ton-doan-phia-tru.md`). Sửa đúng cần tách `SegmentProduction` theo kho (migration, bảng của Sang).
+  (`docs/changelog-2026-11-14-ton-doan-phia-tru.md`). Sửa đúng cần tách `SegmentProduction` theo kho (migration, bảng của IT).
 
 Test: stock-ledger (2 chân thật -> 400), material-issues (0,57 × 10 xuất 5,7 được), purchase-receipts + purchase-proposals (đóng "Kho từ
 chối nhận"), segment-stock / transfer (khoá lệnh trước), segment-production + stocktake (khoá chuyển đổi trước).

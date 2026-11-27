@@ -1,6 +1,6 @@
 # Kho xuất XK1–XK4 (rà soát Mua hàng + Kho 14/11) — 16/11/2026
 
-Bước 5 trong checklist của FE `docs/audit-2026-11-14-ra-soat-mua-hang-kho.html`. Không đổi schema, không có migration, không sửa file của Sang.
+Bước 5 trong checklist của FE `docs/audit-2026-11-14-ra-soat-mua-hang-kho.html`. Không đổi schema, không có migration, không sửa file của IT.
 
 ## XK1 — Xác nhận phiếu XK so với kho in trên phiếu
 

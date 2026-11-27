@@ -37,7 +37,7 @@
 28. Kéo Đợt 5e của người B (đóng phần thiếu + nhận vượt bắt buộc lý do) về thư mục chính + migrate DB dev (06/11)
 29. Kéo Đợt 6 của người B (phiếu xuất XK + số phiếu NK) về thư mục chính + migrate DB dev (06/11)
 30. Nhận file Excel kế hoạch của KHSX (mẫu cho Đợt 9) - phân tích + đã đổi cột file xuất theo file KH (Đợt 9 mục 10, đã commit + gộp 09/11 - mục 40) (06/11)
-31. Bảo trả lời 8 câu (file gửi Bảo Đợt 9 + Phần A còn lại) kèm anh Nhân chốt 07/11 - cập nhật kế hoạch, chưa code (07/11)
+31. IT trả lời 8 câu (file gửi IT Đợt 9 + Phần A còn lại) kèm quản lý chốt 07/11 - cập nhật kế hoạch, chưa code (07/11)
 32. Rà lại "cộng 1% khi mua vật tư" - code đúng chốt, dữ liệu thật còn lệch bảng % (script Đợt 0 của B chưa chạy trên bản 26/10) (07/11)
 33. Sửa % hao hụt hàng loạt: chọn được nguyên nhóm Sắt (bỏ qua sắt phần mềm) - FE, nhánh `sua-hao-hut-nhom-sat`, đã gộp `demo` + deploy production (07/11)
 34. Kéo Đợt 7 của người B (chia 9 kho - phần lõi) về thư mục chính + migrate 2 DB trong máy (07/11)
@@ -49,12 +49,12 @@
 40. Clone production về local + xoá DB cũ; commit + gộp + push đồng bộ Phôi – Hàn và Đợt 9 phần 3; sửa tiếp "Tổng 0 PI", "Khung 99%", cột Hạn cắt sắt, tiền tố LSX - nhánh `sua-tiep-0911` đã commit + gộp + push (09/11)
 41. Dọn worktree cũ, 3 review (chức năng / bảo mật / hiệu năng), "Văn phòng agent", test tay lần 2 (đã đi hết luồng, 38 điểm) + gọn khung "phần đồng nghiệp" ở Lệnh mua vật tư (09/11; commit + push 10/11 - mục 49)
 42. Sửa nhóm 1 sau test tay lần 2 (~20 điểm giao diện FE, 5 thợ song song) (09/11; commit + push 10/11 - mục 49)
-43. Kéo commit mới của Bảo "Xuất đan 2 phiếu" (BE `b2c8c48`, FE `cdc60af`) + áp migration vào DB máy (09/11)
+43. Kéo commit mới của IT "Xuất đan 2 phiếu" (BE `b2c8c48`, FE `cdc60af`) + áp migration vào DB máy (09/11)
 44. Làm tiếp 4 việc sau test tay lần 2 (NCC 18–21, chặn xuất sắt sớm 30, mã lệnh không nhảy chữ 31, "Khung sẵn để sơn" 34d) + dựng lệnh thử MY-314 xem trên màn phần nhóm 1 (09/11; commit + push 10/11 - mục 49)
 45. Hết nhóm 1 sau test tay lần 2: mã lệnh không nhảy chữ ở mọi màn, đo lại "~3 giây" Phôi nhận sắt (không tái hiện), xem trên màn 7/8, 13, 16b + bỏ nút Sếp trùng, nới ô tiền tố LSX (09/11; commit + push 10/11 - mục 49)
-46. File Word tổng hợp mọi câu chờ anh Nhân chốt (23 câu + 1 xin dữ liệu) - ghi đè file xác nhận 09/11 (09/11)
+46. File Word tổng hợp mọi câu chờ quản lý chốt (23 câu + 1 xin dữ liệu) - ghi đè file xác nhận 09/11 (09/11)
 47. Pat làm như chân nhôm - điều tra: Pat / Sắt phi (cắt) rơi khỏi tính mua vì chỉ đếm dòng tick "Đan"; vướng tồn Pat ảo - CHỜ người dùng chọn cách, chưa sửa code (09/11)
-48. Trả lời file Bảo hỏi "Đổi xưởng khi lệnh đã có phương án cắt / đã giữ sắt" (4 câu) - file Word đã điền (10/11)
+48. Trả lời file IT hỏi "Đổi xưởng khi lệnh đã có phương án cắt / đã giữ sắt" (4 câu) - file Word đã điền (10/11)
 49. Commit + push phần sửa sau test tay lần 2 (mục 41.5, 42, 44, 45) + changelog; che chi tiết review bảo mật vì repo công khai (10/11)
 
 ## 1. Plan phần A
@@ -193,9 +193,9 @@ trên production (bảng `workshops` + 2 xưởng, cột `lsxCode`/`workshopId`,
 Người dùng: "triển khai tiếp phần A". Đợt 1 + 2 đã trên `main`/`demo` nên 2 đợt không chờ nhau chạy được: phiên "Phần A – Đợt 3: mốc,
 năng lực, cảnh báo (YC10)" (worktree `*-dot3`, nhánh `dot-3-moc-nang-luc`, DB `dna_erp_dot3`, cổng 3034/3134) và "Phần A – Đợt 10a:
 Booking / Lịch xuất hàng (YC5)" (worktree `*-dot10a`, nhánh `dot-10a-booking`, DB `dna_erp_dot10a`, cổng 3035/3135). Brief của mỗi phiên
-gồm quyết định đã chốt, mặc định đang chờ anh Nhân (file `docs/cau-hoi-xac-nhan-anh-nhan-2026-11-04.docx` câu 2.2–2.3), cách tránh đụng
+gồm quyết định đã chốt, mặc định đang chờ quản lý (file `docs/cau-hoi-xac-nhan-anh-nhan-2026-11-04.docx` câu 2.2–2.3), cách tránh đụng
 nhau (khối chú thích riêng trong `schema.prisma`/`notification-types.ts`, Đợt 10a chỉ thêm 1 dòng vào `daily-jobs`, giờ migration khác
-nhau), không commit, changelog file riêng mỗi đợt. Đợt 4, 9 chờ Đợt 3; Đợt 8 chờ câu 2.4 của anh Nhân.
+nhau), không commit, changelog file riêng mỗi đợt. Đợt 4, 9 chờ Đợt 3; Đợt 8 chờ câu 2.4 của quản lý.
 
 
 ## 7. Kéo `main` / `demo` mới nhất về thư mục chính (05/11, chỉ ghi ở máy, không commit)
@@ -229,10 +229,10 @@ thấy chặn tiền tố lạ (chỉ chặn khi Admin đã nhập). Server đã
 ## 9. File Word hướng dẫn test Phần A (05/11, chỉ ở máy, không commit)
 
 Người dùng: "làm cho tôi một file hướng dẫn test, mô tả chi tiết phần A đã làm kèm business rule của từng phần".
-- `docs/huong-dan-test-phan-a-2026-11-05.docx` (12 trang, dựng bằng script ở scratchpad phiên, khuôn Arial của file câu hỏi anh Nhân):
+- `docs/huong-dan-test-phan-a-2026-11-05.docx` (12 trang, dựng bằng script ở scratchpad phiên, khuôn Arial của file câu hỏi quản lý):
   mục 0 tổng quan + trạng thái từng đợt; 1 môi trường (cấu hình chạy, 2 DB test, tài khoản demo - mật khẩu không ghi, chỉ trỏ
   `prisma/seed-demo.ts`; bảng lệnh thử PA3 dùng cho ca nào); 2–5 mỗi đợt: trước/sau, business rule đánh mã (R1.x, R2.x, R3.x, R10.x),
-  ca test có ô Đạt/Lỗi (TC1.1–1.12, TC2.1–2.13, TC3.1–3.15, TC10.1–10.16); 6 câu chờ anh Nhân 2.1–2.5 + phần còn treo; 7 bảng ghi lỗi.
+  ca test có ô Đạt/Lỗi (TC1.1–1.12, TC2.1–2.13, TC3.1–3.15, TC10.1–10.16); 6 câu chờ quản lý 2.1–2.5 + phần còn treo; 7 bảng ghi lỗi.
 - Nguồn rule: changelog Đợt 1 (mục 2), `changelog-…-dot-2.md`, `…-dot-3.md`, `…-dot-10a.md`, plan phần A; giới hạn cấu hình năng lực đọc
   ở DTO (0,1–20 cont/ngày, 1–60 ngày/cont). Ngày trong ca test đối chiếu với lần demo 05/11 và tính tay theo công thức.
 - **Thêm dữ liệu thử vào `dna_erp_dot3`** (DB test riêng, không phải DB dùng chung): `PA3-PI-L` (PA3-J55 200 bộ, chưa gửi QLSX, chưa LSX,
@@ -392,7 +392,7 @@ mua dư), câu 4 A. Người dùng xác nhận Sếp = tài khoản vai trò BOS
 
 ## 16. Kéo Đợt 5d phần 1 của người B (nhận hàng theo phiếu) + migrate DB dev + đổi tên migration Đợt 4 (05/11)
 
-Người dùng: "pull nhánh mới nhất của Bảo đã" (kèm tin nhắn của B: migration `20261105100000_add_purchase_receipts` đã chạy trên DB dev
+Người dùng: "pull nhánh mới nhất của IT đã" (kèm tin nhắn của B: migration `20261105100000_add_purchase_receipts` đã chạy trên DB dev
 chung, chỉ cần `prisma generate`; route `POST /purchase-proposals/:id/items/:itemId/receive` đã gỡ, nhập kho đi qua `/purchase-receipts`).
 - **Commit mới:** BE `02bae17` + gộp `b212eab` (bảng `purchase_receipts`, `purchase_receipt_logs.receiptId`, `POST /purchase-receipts`
   (+ preview / reject / GET), chia theo hạn cần, chứng từ bắt buộc, từ chối nhận báo người mua, gỡ route nhận từng dòng); FE `58811c5` +
@@ -575,17 +575,17 @@ Người dùng: "Push BE rồi FE".
 
 ## 27. File Word gửi người B: Đợt 9 + phần A còn lại đụng phần B + 8 câu hỏi (06/11)
 
-Người dùng: "soạn tất cả thành một file word tôi sẽ gửi Bảo". File **`docs/gui-bao-dot-9-va-phan-a-con-lai-2026-11-06.docx`** (4 trang, KHÔNG commit -
-repo public, có tên người), dựng bằng `.claude/tools/huong-dan-test-phan-a/build_gui_bao.py` (khuôn Arial của file hỏi anh Nhân).
+Người dùng: "soạn tất cả thành một file word tôi sẽ gửi IT". File **`docs/gui-bao-dot-9-va-phan-a-con-lai-2026-11-06.docx`** (4 trang, KHÔNG commit -
+repo public, có tên người), dựng bằng `.claude/tools/huong-dan-test-phan-a/build_gui_bao.py` (khuôn Arial của file hỏi quản lý).
 - Mục 1 việc làm trên máy B (pull, `prisma generate`, `migrate deploy` 1 migration Đợt 9; không cài lại thư viện - đã kiểm `package.json` / lockfile
   từ `6f5c554` / `136a1a3`); mục 2 Đợt 9 đụng file dùng chung + luật mốc mới + nhắc lại Đợt 4; mục 3 bảng phần A còn lại × chỗ đụng phần B (5e, 6, 7,
   10b theo kế hoạch kỹ thuật); mục 4 câu hỏi: ⑤ xoá `orderQty` khi tính lại, xưởng → kho Phôi trước Đợt 8, chỗ B đọc số cây sắt, mảnh mức 2 × Đợt 7,
   màn danh mục xưởng, đường dẫn màn nhận theo phiếu (U8), chia số mua theo SKU, thông báo còn mã PI.
 - Kiểm: xuất PDF qua Word, xem 4 trang (sửa dấu ` trong chữ đậm, tiêu đề rớt dòng, dòng chấm điền).
 - **Bản v2** `docs/gui-bao-dot-9-va-phan-a-con-lai-2026-11-06-v2.docx` (bản cũ đang mở trong Word nên ghi file mới): người dùng "xoá cái này đi: Việc
-  cần làm trên máy em … Bảo là IT, còn Nhân là sếp nhỏ" → bỏ mục việc làm trên máy (chỉ giữ 1 dòng mã commit); mục câu hỏi thành **"Câu kỹ thuật cần em
-  trả lời"** + chú thích câu nghiệp vụ hỏi anh Nhân file riêng; câu 1 (điểm ⑤) chỉ hỏi ai sửa code (nghiệp vụ chờ anh Nhân câu 2.5); câu 5 bỏ lựa chọn
-  nghiệp vụ "chưa cần". Ghi nhớ mới: Bảo = IT, anh Nhân = sếp nhỏ, Sếp = Giám đốc.
+  cần làm trên máy em … người dùng là IT, còn quản lý là sếp nhỏ" → bỏ mục việc làm trên máy (chỉ giữ 1 dòng mã commit); mục câu hỏi thành **"Câu kỹ thuật cần em
+  trả lời"** + chú thích câu nghiệp vụ hỏi quản lý file riêng; câu 1 (điểm ⑤) chỉ hỏi ai sửa code (nghiệp vụ chờ quản lý câu 2.5); câu 5 bỏ lựa chọn
+  nghiệp vụ "chưa cần". Ghi nhớ mới: người dùng = IT, quản lý = sếp nhỏ, Sếp = Giám đốc.
 - Người dùng: "nói mà không dùng thuật ngữ … non-tech như sếp có thể hiểu luôn, không tạo file mới, sửa trực tiếp" → viết lại **ngay trong file v2**
   (3 trang): bỏ mọi tên code / route / bảng / mã commit; 3 mục (Đợt 9 đổi gì · việc A còn lại liên quan phần B · 8 câu ngắn); chi tiết code trỏ sang
   nhật ký thay đổi Đợt 4 / Đợt 9.
@@ -662,10 +662,10 @@ ký - KHÔNG đưa vào repo).
   không cần hỏi: file đọc đúng ngày đang hiện trong ô.
 - **Phát hiện lệch quyết định cũ (báo người dùng, chưa đổi):** file KH dùng **1 số LSX cho nhiều SKU** (MEYING LSX324 = I41-A + I42-A, LSX325 cũng
   vậy; GOPLUS LSX182 = 3 SKU J55.T6 / J55.C3) - còn ERP Đợt 2 chốt 04/11 "mỗi dòng SKU 1 số LSX riêng, không trùng" (`lsxCode` unique) → KHSX sẽ
-  không gõ được LSX324 cho cả 2 SKU. Cần người dùng / anh Nhân quyết. **06/11: người dùng chọn hỏi anh Nhân** - IT soạn tin 2 phương án:
+  không gõ được LSX324 cho cả 2 SKU. Cần người dùng / quản lý quyết. **06/11: người dùng chọn hỏi quản lý** - IT soạn tin 2 phương án:
   (1) cho nhiều mã chung 1 số LSX nếu cùng 1 lệnh (KHSX gom cắt chung), 2 lệnh khác nhau vẫn không trùng - IT đề xuất, đúng cách KHSX đang làm;
-  (2) giữ mỗi mã 1 số, KHSX thêm đuôi (LSX324-1, LSX324-2). Chờ trả lời, chưa đổi code. **→ 07/11 anh Nhân "ok" phương án 2**
-  (tin Bảo "chốt option 2" - IT hiểu là câu này, người dùng không phản đối; không phải đổi code - mục 37). Dẫn chứng (ô cột A gộp nhiều dòng): KH MEYING T11 sheet
+  (2) giữ mỗi mã 1 số, KHSX thêm đuôi (LSX324-1, LSX324-2). Chờ trả lời, chưa đổi code. **→ 07/11 quản lý "ok" phương án 2**
+  (tin IT "chốt option 2" - IT hiểu là câu này, người dùng không phản đối; không phải đổi code - mục 37). Dẫn chứng (ô cột A gộp nhiều dòng): KH MEYING T11 sheet
   "T10 (2)" dòng 3–4 (LSX324), 5–6 (LSX325); GOPLUS KH T11 sheet "KH T11 (2)" dòng 3–5 / 6–8 / 9–11 (LSX182/183/184, cùng 1 PO); TỔNG HỢP TIẾN ĐỘ
   sheet "TIẾN ĐỘ MEYING 2024" các lệnh đang chạy LSX317 (238–239), 319 (240–242), 320 (438–441, 4 mã), 323 (548–549) → 1 LSX nhiều mã là cách làm
   thường ngày, không phải ngoại lệ.
@@ -673,24 +673,24 @@ ký - KHÔNG đưa vào repo).
   (+6), ERP không dời 2 mốc Mua VT (Sếp chọn Q9-1).
 - **Chưa làm:** file chiều dài cây sắt theo xưởng (Đợt 8) và sổ theo dõi sắt (định mức) chưa nhận.
 
-## 31. Bảo trả lời 8 câu (file gửi Bảo Đợt 9 + Phần A còn lại) kèm anh Nhân chốt 07/11 - cập nhật kế hoạch, chưa code (07/11)
+## 31. IT trả lời 8 câu (file gửi IT Đợt 9 + Phần A còn lại) kèm quản lý chốt 07/11 - cập nhật kế hoạch, chưa code (07/11)
 
-Người dùng gửi ảnh tin của Bảo + file `gui-bao-dot-9-va-phan-a-con-lai-2026-11-06-v2-TRA-LOI.docx` (Bảo ghi đủ 8 câu, đã cập nhật theo anh Nhân;
+Người dùng gửi ảnh tin của IT + file `gui-bao-dot-9-va-phan-a-con-lai-2026-11-06-v2-TRA-LOI.docx` (IT ghi đủ 8 câu, đã cập nhật theo quản lý;
 chép vào scratchpad `bao-tl-in/` rồi mới đọc - KHÔNG đưa vào repo). Tin nhắc 2 điểm đụng phần A: lưỡi máy tự động 3 mm; ngày chuyển 9 kho
 **12/11/2026** (sớm hơn ~06/01/2027).
 
-| Câu | Bảo / anh Nhân trả lời | Việc của A |
+| Câu | IT / quản lý trả lời | Việc của A |
 |---|---|---|
-| 1 xưởng → kho Phôi | A (B đưa danh sách). Phú An → kho Phôi Phú An (tách `phoi-son-han` thành Phôi/Hàn/Sơn); Phước An → kho Phôi Phước An (mới; tồn Phước An chưa nhập, kiểm kê + nhập 12/11; tồn hiện có đều ở Phú An - anh Nhân 07/11). B làm lõi chia 9 kho xong 12/11 + cột "kho Phôi" ở bảng xưởng + hàm "xưởng → kho Phôi" (báo tên sau); chuyển mảnh bằng phiếu, xuất đan 2 phiếu làm sau | Đợt 8 gọi hàm của B (có sớm hơn dự kiến) |
-| 2 chỗ dùng số cây sắt | B chỉ đọc `PurchaseProposalItem.buyQty` (+ `stockLengthMm`), không đọc `CuttingProposalLine.buyBars`; số mua = max(buyQty, orderQty), nguyên; đơn NCC + phiếu in; nhận hàng giữ chỗ PI tới buyQty, vượt vào tồn chưa giữ; đóng phần thiếu = buyQty − đã nhận. Đề xuất buyQty = số cây bảng cắt, số mua 3 mm vào orderQty. Anh Nhân 07/11: **laser 1 mm, máy tự động 3 mm (không phải 2,5)**, mua sắt luôn theo 3 mm, không nhân 1%, đúng sơ đồ cắt; mua dư vào tồn tự do; đổi chiều dài chuẩn → đề xuất chưa ký tính lại + báo người mua, phiếu đã ký giữ chiều dài cũ | Đợt 8 (thiết kế cập nhật ở kế hoạch mục 6). **Vướng:** đề xuất ghi số 3 mm vào `orderQty` đụng việc sửa câu 3 (xoá `orderQty` khi tính lại) - chốt với B |
-| 3 tính lại làm số cần giảm | A sửa ở phần tính lại. Anh Nhân chốt cho **mọi vật tư**: phiếu chưa có Giám đốc ký → bỏ số người mua đã tăng, quay về số mới, báo người mua nhập lại; phiếu đã ký → báo người mua + Giám đốc, người mua tự quyết phiếu thay thế / nhận đủ, dư vào tồn tự do. B xác nhận lỗi có thật (orderQty 110 giữ nguyên khi buyQty tính lại = 50, không báo ai); phần phiếu đã ký B làm, A gọi 1 hàm B viết sẵn | **Việc mới của A, làm được ngay** (phần phiếu chưa ký); chỗ tính lại: `cutting-proposals.service.ts` (sắt) + `consumable-material-purchase.service.ts` (vật tư khác) |
-| 4 đồng bộ mảnh bước 2 + chuyển mảnh bằng phiếu | A: hai bên ngồi 30 phút chốt cách làm trước | Hẹn B; mức 2 vẫn chờ 6 câu anh Nhân |
-| 5 màn thêm xưởng | Anh Nhân 07/11: **không cần**; IT thêm tay; xưởng mới = 1 kho Phôi + 1 kho Hàn riêng, Sơn / phụ kiện / thành phẩm dùng kho chung Phú An | Bỏ khỏi việc A |
+| 1 xưởng → kho Phôi | A (B đưa danh sách). Phú An → kho Phôi Phú An (tách `phoi-son-han` thành Phôi/Hàn/Sơn); Phước An → kho Phôi Phước An (mới; tồn Phước An chưa nhập, kiểm kê + nhập 12/11; tồn hiện có đều ở Phú An - quản lý 07/11). B làm lõi chia 9 kho xong 12/11 + cột "kho Phôi" ở bảng xưởng + hàm "xưởng → kho Phôi" (báo tên sau); chuyển mảnh bằng phiếu, xuất đan 2 phiếu làm sau | Đợt 8 gọi hàm của B (có sớm hơn dự kiến) |
+| 2 chỗ dùng số cây sắt | B chỉ đọc `PurchaseProposalItem.buyQty` (+ `stockLengthMm`), không đọc `CuttingProposalLine.buyBars`; số mua = max(buyQty, orderQty), nguyên; đơn NCC + phiếu in; nhận hàng giữ chỗ PI tới buyQty, vượt vào tồn chưa giữ; đóng phần thiếu = buyQty − đã nhận. Đề xuất buyQty = số cây bảng cắt, số mua 3 mm vào orderQty. Quản lý 07/11: **laser 1 mm, máy tự động 3 mm (không phải 2,5)**, mua sắt luôn theo 3 mm, không nhân 1%, đúng sơ đồ cắt; mua dư vào tồn tự do; đổi chiều dài chuẩn → đề xuất chưa ký tính lại + báo người mua, phiếu đã ký giữ chiều dài cũ | Đợt 8 (thiết kế cập nhật ở kế hoạch mục 6). **Vướng:** đề xuất ghi số 3 mm vào `orderQty` đụng việc sửa câu 3 (xoá `orderQty` khi tính lại) - chốt với B |
+| 3 tính lại làm số cần giảm | A sửa ở phần tính lại. Quản lý chốt cho **mọi vật tư**: phiếu chưa có Giám đốc ký → bỏ số người mua đã tăng, quay về số mới, báo người mua nhập lại; phiếu đã ký → báo người mua + Giám đốc, người mua tự quyết phiếu thay thế / nhận đủ, dư vào tồn tự do. B xác nhận lỗi có thật (orderQty 110 giữ nguyên khi buyQty tính lại = 50, không báo ai); phần phiếu đã ký B làm, A gọi 1 hàm B viết sẵn | **Việc mới của A, làm được ngay** (phần phiếu chưa ký); chỗ tính lại: `cutting-proposals.service.ts` (sắt) + `consumable-material-purchase.service.ts` (vật tư khác) |
+| 4 đồng bộ mảnh bước 2 + chuyển mảnh bằng phiếu | A: hai bên ngồi 30 phút chốt cách làm trước | Hẹn B; mức 2 vẫn chờ 6 câu quản lý |
+| 5 màn thêm xưởng | Quản lý 07/11: **không cần**; IT thêm tay; xưởng mới = 1 kho Phôi + 1 kho Hàn riêng, Sơn / phụ kiện / thành phẩm dùng kho chung Phú An | Bỏ khỏi việc A |
 | 6 đường vào màn nhận hàng | `/?m=inbound_warehouse&p=nhap-kho`; B sẽ thêm `&focus=MATERIAL:<materialId>`; tài khoản Mua hàng bị khoá phân hệ kho → nút "Nhập kho" chỉ hiện cho thủ kho | Nút "Nhập kho" ở Vật tư cần về (Đợt 4), chỉ thủ kho |
-| 7 số mua theo SKU của lệnh gộp | Không có và không định có (05/11 chốt chặn ở bước xuất, SKU cần sớm ưu tiên); anh Nhân 07/11: hiện số chung, ghi thêm SKU nào ưu tiên trước là đủ (thứ tự = `ranksBefore` ở `stock/sku-priority.util.ts`) | Tuỳ chọn nhỏ ở Vật tư cần về |
+| 7 số mua theo SKU của lệnh gộp | Không có và không định có (05/11 chốt chặn ở bước xuất, SKU cần sớm ưu tiên); quản lý 07/11: hiện số chung, ghi thêm SKU nào ưu tiên trước là đủ (thứ tự = `ranksBefore` ở `stock/sku-priority.util.ts`) | Tuỳ chọn nhỏ ở Vật tư cần về |
 | 8 thông báo bên B còn mã PI | Còn - B tự đổi (cần mua, sắp về, Sếp duyệt, hàng về, đủ hàng, sắt đã xuất, Phôi nhận sắt); link `focus=PI_CODE:…` vẫn giữ mã PI | A đổi thông báo của A (việc treo cũ), giữ link PI |
 
-- **Câu 2.5 của anh Nhân** (file câu hỏi 04/11) coi như đã trả lời qua câu 3. **Câu 2.4** (xưởng dự kiến lúc tính cắt) vẫn chờ → Đợt 8 vẫn chờ.
+- **Câu 2.5 của quản lý** (file câu hỏi 04/11) coi như đã trả lời qua câu 3. **Câu 2.4** (xưởng dự kiến lúc tính cắt) vẫn chờ → Đợt 8 vẫn chờ.
 - **Lưỡi máy tự động 3 mm:** chỉ là số ở Cấu hình (Admin → MC Tự động → "Lưỡi cắt (mm)"), không cần code; ai có quyền Admin đổi trên bản
   chạy thật (IT không tự đụng production). Bảng cắt của lệnh đã tính trước đó vẫn theo 2,5 mm.
 - Đã cập nhật: kế hoạch Phần A mục 6 (Đợt 8, khối "Cập nhật 07/11"), mục 8 điểm ghép ⑤, mục 10 câu 1; ghi nhớ sắt / Phần A.
@@ -703,15 +703,15 @@ sẵn, hãy review lại chỗ nhập vật tư" - sau khi mục 31 ghi "mua s�
 
 **Kết quả rà:**
 - **Có 2 thứ "1%" khác nhau.** (a) `Material.purchaseWastePercentage` = "% dự trù hao hụt khi mua" nhập ở Admin → Danh mục vật tư (cột "%
-  hao hụt", ô form "% dự trù hao hụt khi mua"), cộng vào số mua của **mọi vật tư trừ sắt phần mềm** theo công thức anh Nhân chốt V3-3 (04/11):
+  hao hụt", ô form "% dự trù hao hụt khi mua"), cộng vào số mua của **mọi vật tư trừ sắt phần mềm** theo công thức quản lý chốt V3-3 (04/11):
   `số mua = nhu cầu × (1 + %) − tồn khả dụng` (`common/utils/purchase-waste.util.ts`), dùng ở cả 3 luồng: vật tư tiêu hao
   (`consumable-material-purchase`), vật tư thành phẩm theo mảnh (`piece-material-yield-purchase`), vật tư thành phẩm không gắn mảnh
   (`material-yield-recipe-purchase`). (b) "1%" của **sắt cắt bằng phần mềm** = NGƯỠNG phần thừa trên mỗi cây khi cắt (tề + cùi ≤ 1%, cây 6000
   dùng ≥ 5940), không phải đệm mua: form ẩn ô % với sắt nhóm con "Phần mềm" và BE ép trống (`MaterialsService.resolveWasteFields`); số cây mua
-  lấy từ bài toán cắt (`cutting-proposals`), không cộng %. Chốt: Sếp 31/10 "Vậy là đủ ko cộng thêm 1% đề xuất sắt nữa", anh Nhân "ko cộng thêm
+  lấy từ bài toán cắt (`cutting-proposals`), không cộng %. Chốt: Sếp 31/10 "Vậy là đủ ko cộng thêm 1% đề xuất sắt nữa", quản lý "ko cộng thêm
   lúc mua" (changelog tài liệu nghiệp vụ mục 13, V4-4), vòng 4 02/11 (mục 15) và 07/11 (mục 31 ở đây) lặp lại. → câu "không nhân 1%" CHỈ nói
   sắt phần mềm; vật tư khác vẫn cộng % của chính vật tư.
-- **Bảng % anh Nhân chốt (v8 mục 7.9, vòng 3–4):** sắt (trừ sắt phần mềm), la tấm, thép dây 1% · dây đan 1% · bulon, đinh, nút, tán 1,5% ·
+- **Bảng % quản lý chốt (v8 mục 7.9, vòng 3–4):** sắt (trừ sắt phần mềm), la tấm, thép dây 1% · dây đan 1% · bulon, đinh, nút, tán 1,5% ·
   carton, thùng, tem, nhãn, gối, HDLR 0% · sơn, xốp, nệm và loại còn lại 1,5%. B đã viết script nạp bảng này (Đợt 0, `c6bffef`,
   `prisma/apply-purchase-waste-defaults.ts`, mặc định chỉ xem trước, `--apply` mới ghi, có file hoàn tác).
 - **Dữ liệu thật lệch bảng:** đếm trên `dna_erp` (backup production 26/10): sắt tự tính 7 + VTTP 19 đều 1% (đúng); đinh 3, nút nhựa 19, tán
@@ -764,8 +764,8 @@ Chưa thử trên production bằng tài khoản thật (cần đăng nhập) - 
 
 ## 34. Kéo Đợt 7 của người B (chia 9 kho - phần lõi) về thư mục chính + migrate 2 DB trong máy (07/11)
 
-Người dùng gửi ảnh tin Bảo ("Đợt 7 (9 kho) đang trên nhánh, chưa push… hàm `phoiWarehouseOfWorkshop(db, workshopId)` trong
-`src/modules/stock/workshop-warehouse.util.ts`… em có sửa vào code bên Sang…") + "pull nhánh mới trước".
+Người dùng gửi ảnh tin IT ("Đợt 7 (9 kho) đang trên nhánh, chưa push… hàm `phoiWarehouseOfWorkshop(db, workshopId)` trong
+`src/modules/stock/workshop-warehouse.util.ts`… em có sửa vào code bên IT…") + "pull nhánh mới trước".
 - **Thực tế:** B đã gộp + **push** lúc 10:16–10:17 07/11 (BE `57dfb68` → gộp `a761af8` trên `origin/main`; FE `87bd0f4` → `3f2ffa8` trên
   `origin/demo`) - tin nhắn ghi "chưa push" là cũ. `origin/main` tự deploy Render → migration 9 kho đã lên production (đổi tên kho
   `phoi-son-han` thành "Kho Phôi Phú An", thêm 4 kho Hàn PA / Sơn PA / Phôi PhA / Hàn PhA, gắn loại kho + xưởng); chuyển tồn thật là script
@@ -785,7 +785,7 @@ Người dùng gửi ảnh tin Bảo ("Đợt 7 (9 kho) đang trên nhánh, chư
 
 ## 35. Kéo commit Đợt 7 bổ sung của người B (đá cắt kho Phôi → kho Hàn) + dựng DB test riêng cho test tay trên trình duyệt (07/11)
 
-**DB test riêng (người dùng: "chạy test trực tiếp từ đầu tới cuối… bằng mcp trên browser app", rồi "tạm dừng vì Bảo sắp commit"):**
+**DB test riêng (người dùng: "chạy test trực tiếp từ đầu tới cuối… bằng mcp trên browser app", rồi "tạm dừng vì IT sắp commit"):**
 - Tạo `dna_erp_e2e` từ `backups/local_dna_erp_20261028_prod-sach-truoc-e2e.dump` (production 26/10 + mật khẩu demo, `pg_restore` thẳng trong
   container) → `prisma migrate deploy` áp 14 migration mới (Đợt 1 → Đợt 7) → đủ 173 migration, 54 tài khoản, 384 vật tư, 16 SKU, 3 khách, 0 đơn,
   9 kho thật đúng loại. KHÔNG đụng `dna_erp` / `dna_erp_dongbo`.
@@ -795,7 +795,7 @@ Người dùng gửi ảnh tin Bảo ("Đợt 7 (9 kho) đang trên nhánh, chư
   **Sau khi kéo code B: đã test tay nửa đầu luồng (07/11) - kết quả + phát hiện ở `changelog-2026-10-28-e2e-tren-backup-production.md`
   mục 18.**
 
-**Kéo code B (người dùng: "pull"):** fast-forward BE `main` `a761af8` → `f27b284` ("Đợt 7: xếp vật tư theo trả lời anh Nhân + chuyển đá cắt kho Phôi
+**Kéo code B (người dùng: "pull"):** fast-forward BE `main` `a761af8` → `f27b284` ("Đợt 7: xếp vật tư theo trả lời quản lý + chuyển đá cắt kho Phôi
 sang kho Hàn" - `issue-slips`, `warehouse-transfers`, `prisma/split-warehouses.ts`), FE `demo` `1a28c83` → `c373e11` (gộp `6c35f4c`: kho Phôi chuyển
 đá cắt sang kho Hàn + Dùng chung từ tồn kho mình - 3 trang InboundWarehouse). Không trùng file đang sửa dở (`git status` trước/sau y nguyên),
 **không có migration** → không sao lưu / migrate DB. Không đụng code A.
@@ -873,7 +873,7 @@ cách giải quyết lỗi test tay 07/11 - e2e changelog mục 18 - và phần 
 `D:\DNA-ERP-sua0911`), node_modules nối junction; DB thử `dna_erp_sua0911` (chép `dna_erp_e2e` 09/11 = production 26/10 + dữ liệu test tay);
 `.claude/launch.json` thêm `be-3041-sua0911`, `fe-3141-sua0911`. Chia 4 thợ song song, không chung file (Opus review diff thật + chạy lại kiểm tra).
 
-**1. Tính lại số mua khi nhu cầu giảm (anh Nhân chốt 07/11, mục 31 câu 3) - BE**
+**1. Tính lại số mua khi nhu cầu giảm (quản lý chốt 07/11, mục 31 câu 3) - BE**
 - Helper mới `src/common/utils/purchase-recompute.util.ts` (+ spec): ranh giới **đã ký** = PURCHASING (sau "Sếp đã duyệt") + PURCHASED; **chưa ký** =
   NEW / QUOTING / SUBMITTED / REJECTED. Dòng chưa ký: ghi số mới; nhu cầu GIẢM mà người mua đã tăng `orderQty` → `orderQty = null` + thông báo mới
   `PURCHASE_ORDER_QTY_RESET` ("Số cần mua … giảm còn … - nhập lại số mua", thêm "- phiếu đã in, cần in lại" khi SUBMITTED); tăng thì giữ `orderQty`.
@@ -884,7 +884,7 @@ cách giải quyết lỗi test tay 07/11 - e2e changelog mục 18 - và phần 
 - Sắt (`cutting-proposals.service.ts`): "đã chốt" đổi từ "khác NEW" thành "đã ký" (PURCHASING tính theo `effectiveOrderQty`, PURCHASED theo
   `receivedQty`); phần kế hoạch ghi vào dòng chưa ký đầu tiên (trừ số của dòng chưa ký còn lại để không đếm đúp); cùng luật xoá `orderQty`.
 - **Opus sửa thêm khi review:** (a) điều kiện "nhu cầu giảm dưới số đã ký" so với số CẦN MUA lúc ký (`buyQty`), không so với số thực mua (`orderQty`
-  người mua làm tròn lên) - nếu không, cần 406 mua tròn 450 thì lần tính lại nào cũng báo sai; (b) sắt: không báo khi chỉ còn dòng PURCHASED nhận vượt
+  Người mua làm tròn lên) - nếu không, cần 406 mua tròn 450 thì lần tính lại nào cũng báo sai; (b) sắt: không báo khi chỉ còn dòng PURCHASED nhận vượt
   (nhận vượt là cho phép, không còn việc gì cho người mua) - cờ `alertDemandDropped`; thêm 4 ca test cho 2 điểm này.
 - Thông báo mới `PURCHASE_ORDER_QTY_RESET` ở `notification-types.ts` (FE không có danh sách loại phải khai).
 
@@ -911,9 +911,9 @@ Cái, đã ký mua 406"; chạy lại lần 2 không đổi gì, không thêm th
 2 dòng đã ký, bấm mở Nhập kho đúng dòng (tô viền); ô lọc "Kho Phụ kiện". Tạo PO (`sales`): "Còn thiếu: Mã đơn hàng, Khách hàng, SKU", nút Lưu mờ.
 Dữ liệu thử đã sửa (chỉ DB `dna_erp_sua0911`): dòng mua 150/151/154, tồn NN-004 / NN-017 = 106.
 
-**File xác nhận (gửi người dùng; → 09/11 đã ghi đè thành bản tổng hợp 23 câu, mục 46):** `docs/xac-nhan-anh-nhan-sau-chay-thu-2026-11-09.docx` (anh Nhân: 1 carton ở Kho thành phẩm - trừ tồn tại chỗ hay
+**File xác nhận (gửi người dùng; → 09/11 đã ghi đè thành bản tổng hợp 23 câu, mục 46):** `docs/xac-nhan-anh-nhan-sau-chay-thu-2026-11-09.docx` (quản lý: 1 carton ở Kho thành phẩm - trừ tồn tại chỗ hay
 chuyển 257 mã bao bì sang kho Phụ kiện; 2 Pat / La tấm; 3 Quản lý SX bấm Bắt đầu 2 chỗ; 4 đóng gói khi chưa xuất carton; 5 Phôi báo vượt; + nhắc câu 2.1–2.4,
-6 câu đồng bộ) và `docs/gui-bao-sau-chay-thu-2026-11-09.docx` (Bảo: việc A đụng phần B, bảng 11 lỗi màn Mua hàng / Kho, 4 câu: ai sửa carton, in lại
+6 câu đồng bộ) và `docs/gui-bao-sau-chay-thu-2026-11-09.docx` (IT: việc A đụng phần B, bảng 11 lỗi màn Mua hàng / Kho, 4 câu: ai sửa carton, in lại
 phiếu chưa ký, câu nhắc màn Xuất sắt, nhận lỗi nào). Script `.claude/tools/huong-dan-test-phan-a/build_xac_nhan_0911.py`. Không commit docx.
 Báo cáo test tay: đính chính "dòng KCS tô đỏ = có hàng chờ kiểm, không phải trễ hạn" (Word + HTML dựng lại).
 
@@ -938,7 +938,7 @@ mới để gọi thử không đăng nhập; `GET /api/v1/materials-due` trả 
   "Sửa sau buổi chạy thử toàn luồng 07/11"** (trước / sau, RS.1–RS.7, TCS.1–TCS.10; TCS.1–4 cần IT dựng 3 dòng mua thử), đánh số lại "Chờ chốt" → 10,
   "Ghi lỗi" → 11; bảng trạng thái thêm dòng "Sửa sau chạy thử – đã cập nhật lên hệ thống 09/11", dòng "Chưa làm" bỏ phần tính lại số mua, Đợt 11 để sau
   12 yêu cầu; 10.1 câu 2.5 + "Lệnh gộp" → đã làm; 10.2 Đợt 2, Đợt 4 cập nhật.
-- Cần báo Bảo: 9 màn kho của B có đổi chữ "PI" → "lệnh" (đã lên production) + nội dung file `docs/gui-bao-sau-chay-thu-2026-11-09.docx`.
+- Cần báo IT: 9 màn kho của B có đổi chữ "PI" → "lệnh" (đã lên production) + nội dung file `docs/gui-bao-sau-chay-thu-2026-11-09.docx`.
 
 ## 40. Clone production về local + xoá DB cũ; commit + gộp + push đồng bộ Phôi – Hàn và Đợt 9 phần 3; sửa tiếp "Tổng 0 PI", "Khung 99%", cột Hạn cắt sắt, tiền tố LSX - nhánh `sua-tiep-0911` đã commit + gộp + push (09/11)
 
@@ -980,7 +980,7 @@ giờ trỏ DB không còn - dựng DB thử mới từ `dna_erp` khi cần.
   23 file 247 test. Chưa chạy thử trên trình duyệt (DB local mới có 0 lệnh SX - cần dựng dữ liệu thử).
 
 **Chưa làm:** test lại luồng booking → kho xuất (cần dữ liệu thử trên DB mới); chữ "PI" ở màn Quản trị và bảng Booking ("Tên PI" có thể là thuật ngữ
-của bảng booking anh Nhân gửi - cần hỏi); dọn worktree cũ (chưa được bảo).
+của bảng booking quản lý gửi - cần hỏi); dọn worktree cũ (chưa được bảo).
 
 **Commit + deploy phần sửa tiếp (người dùng: "Commit + deploy"):** `origin` không có gì mới; commit BE `165ec11` (3 file), FE `ee2672f` (11 file, không
 đưa `tsconfig.tsbuildinfo`) → gộp `--no-ff` BE `main` `0d02c71`, FE `demo` `838e45e` (không đụng phần sửa dở còn lại ở thư mục chính FE) → `tsc` 2 bên
@@ -1028,7 +1028,7 @@ muatp (chỉ DB thử). DB thử chưa có NCC nào → bước tạo đơn đ�
   Quy cách · Cần mua · ĐVT chia nhóm theo trạng thái, cuộn trong hộp. (Bản đầu xổ tên nối dấu phẩy ngay tại chỗ - người dùng thấy khó đọc, đổi sang
   popup.) Chưa chia theo tên người mua (màn chỉ có mã người mua của vật tư).
 - Nhãn dòng chờ duyệt tách 2 nghĩa: chưa vào đơn đặt hàng → "Chưa vào đơn"; đã vào đơn chờ phiếu ký → "Chờ Sếp duyệt" (trước ghi "Chờ Sếp duyệt" cho cả
-  dòng người mua chưa làm gì - điểm 22 buổi test 07/11, đã gửi Bảo). Trạng thái gộp ở danh sách / góc phải đổi theo. `PROPOSAL_STATUS_LABELS` dùng chung
+  dòng người mua chưa làm gì - điểm 22 buổi test 07/11, đã gửi IT). Trạng thái gộp ở danh sách / góc phải đổi theo. `PROPOSAL_STATUS_LABELS` dùng chung
   không đổi (màn Theo dõi mua hàng / Quản trị giữ như cũ). Người dùng hỏi lại "trước để Sếp chưa duyệt mà?" → giải thích → chốt **giữ nhãn mới** (09/11).
 - Kiểm: `tsc` sạch, `eslint` file sạch (màn không có test riêng); trình duyệt 1200 px + điện thoại 375 px: dòng tóm tắt + popup (37 hàng = 1 nhóm +
   36 vật tư) đúng, không tràn ngang; ảnh `backups/test-tay-2026-11-09/06-sau-sua-phan-dong-nghiep-gon.jpg`.
@@ -1043,7 +1043,7 @@ muatp (chỉ DB thử). DB thử chưa có NCC nào → bước tạo đơn đ�
   được, hiện "Mua dư +0,6955".
 - Kho Phôi (khopsh): 13 dòng chờ nhận. Nhập sắt hộp 100/180: lệch số phiếu giao (90) bị chặn, câu báo rõ; thiếu file thì nút khoá kèm "Còn thiếu
   ảnh…"; In phiếu nhập cấp số NK-261109-001 (chặn cửa sổ in, đọc HTML: đúng NCC, đơn 53/2026, 100/100 cây, MY-313); xác nhận → còn chờ 80, có lịch
-  sử kèm 4 file. Ô "Kho nhận" trên phiếu vẫn 7 kho cũ (còn "Dây – gỗ") - chờ phần 9 kho của Bảo (hẹn 12/11), không ghi là lỗi.
+  sử kèm 4 file. Ô "Kho nhận" trên phiếu vẫn 7 kho cũ (còn "Dây – gỗ") - chờ phần 9 kho của IT (hẹn 12/11), không ghi là lỗi.
 - Phát hiện mới (ghi-chu.md 18–23, ảnh 07–11): (18) ô tick "Đang hoạt động" ở form NCC lệch; (19) tên NCC toàn dấu cách vẫn lưu → NCC không tên
   (FE chỉ chặn rỗng, BE `MinLength(1)` không cắt khoảng trắng), SĐT nhận cả chữ; (20) NCC trùng tên vẫn lưu, không cảnh báo → 2 dãy số đơn riêng;
   (21) form Thêm NCC bỏ tick "Đang hoạt động" vẫn ra "Hoạt động" (`createSupplier` FE không gửi `isActive`, `CreateSupplierDto` cũng không nhận -
@@ -1099,9 +1099,9 @@ muatp (chỉ DB thử). DB thử chưa có NCC nào → bước tạo đơn đ�
 - Phát hiện mới (ghi-chu.md 35–38, ảnh 21–22):
   - **(38, cao) Không xuất được vật tư đóng gói:** cả 6 dòng báo "fromWarehouseId và toWarehouseId không được trùng nhau". Xuất bao bì = chuyển từ
     `Material.warehouseId` sang kho thành phẩm của lệnh, nhưng 6 bao bì đang gán vào chính `thanh-pham` (DB thử từ backup production) → kho đi =
-    kho đến (`packaging-issues.service.ts` postLedgerEntry → `stock-ledger.service.ts:116`). Dính chia 9 kho (phần B của Bảo). Kèm: ô số lẻ hiện
+    kho đến (`packaging-issues.service.ts` postLedgerEntry → `stock-ledger.service.ts:116`). Dính chia 9 kho (phần B của IT). Kèm: ô số lẻ hiện
     "3.8609999999999998"; đóng gói + xuất hàng không đòi xuất bao bì trước.
-  - (35, CẦN HỎI anh Nhân) đóng gói 300 thùng dù mảnh đạt chuyền kiểm chỉ đủ ~297 bộ (màn xuất bao bì cũng tính "Thực có" 297); dòng tiến độ
+  - (35, CẦN HỎI quản lý) đóng gói 300 thùng dù mảnh đạt chuyền kiểm chỉ đủ ~297 bộ (màn xuất bao bì cũng tính "Thực có" 297); dòng tiến độ
     hiện Khung/Đan/Chuyền kiểm 99% nhưng Đóng gói đủ.
   - (36) nhập nội bộ chỉ nhận cả phiếu hoặc từ chối, không có ô đếm thực nhận; hộp xác nhận xuất đan không nhắc dây/đinh mang kèm, vượt tồn chỉ
     báo sau khi xác nhận (câu dùng mã DAY-013); chữ cũ "Kho Vật tư thành phẩm" + mã "kho phôi-sơn-hàn"; số phiếu "CK-2026-001" khác mẫu
@@ -1112,20 +1112,20 @@ muatp (chỉ DB thử). DB thử chưa có NCC nào → bước tạo đơn đ�
 **10. Báo cáo test tay lần 2 (Word) - `docs/bao-cao-test-tay-lan-2-2026-11-09.docx` (chưa commit):**
 - 20 trang A4, lời thường (không tên code, không tên tài khoản thử / người mua thật), 23 ảnh khoanh đỏ. Mục: tóm tắt (việc phải xử lý trước
   chạy thật: 38, 27 + 16, 24, 30, 7–8, 13), cách làm, luồng đã đi + số liệu, bảng 38 điểm (theo thứ tự luồng, tô màu mức), chi tiết theo mức
-  (cao → vừa → cần hỏi → nhỏ → ghi nhận: hiện tượng + đề xuất + ảnh), phần chạy đúng, 3 câu cần anh Nhân (đóng gói theo số bộ đạt chuyền kiểm;
-  làm tròn số mua hàng đếm theo cái; booking bắt CUT OFF / ngày lấy cont), phần FE đã sửa trong buổi (popup + nhãn "Chưa vào đơn" - nhắc Bảo
+  (cao → vừa → cần hỏi → nhỏ → ghi nhận: hiện tượng + đề xuất + ảnh), phần chạy đúng, 3 câu cần quản lý (đóng gói theo số bộ đạt chuyền kiểm;
+  làm tròn số mua hàng đếm theo cái; booking bắt CUT OFF / ngày lấy cont), phần FE đã sửa trong buổi (popup + nhãn "Chưa vào đơn" - nhắc IT
   khỏi sửa trùng), phần chưa test.
 - Dựng bằng `docx` (npm) - script `.claude/tools/huong-dan-test-phan-a/build_bao_cao_test_lan2.js`; kiểm bằng Word thật xuất PDF + `pdf-to-png.ps1`:
   mở được, 20 trang; đã sửa ảnh quá to (27 → 20 trang) và danh sách mục 7 đánh số nối từ mục 3.
 
-**Chưa làm:** gộp 3 review vào trang luồng; gửi báo cáo cho Bảo / anh Nhân (người dùng tự gửi); nhánh chưa đi: cắt bù 10 + 12
-đoạn thiếu (xuất thêm sắt từ tồn tự do), xuất vật tư hàn/sơn cho Hàn/Sơn ("Xác nhận nhận vật tư"), Tạm dừng/Tiếp tục lệnh; báo Bảo lỗi 38 + phần
+**Chưa làm:** gộp 3 review vào trang luồng; gửi báo cáo cho IT / quản lý (người dùng tự gửi); nhánh chưa đi: cắt bù 10 + 12
+đoạn thiếu (xuất thêm sắt từ tồn tự do), xuất vật tư hàn/sơn cho Hàn/Sơn ("Xác nhận nhận vật tư"), Tạm dừng/Tiếp tục lệnh; báo IT lỗi 38 + phần
 nhãn "Chưa vào đơn" đã sửa ở FE để khỏi sửa trùng.
 
 ## 42. Sửa nhóm 1 sau test tay lần 2 (~20 điểm giao diện FE, 5 thợ song song) (09/11; commit + push 10/11 - mục 49)
 
 Người dùng chọn "Sửa nhóm 1" sau khi chia 38 điểm (mục 41) thành 4 nhóm: (1) sửa ngay - giao diện / chữ / kiểm tra nhập ở phần A; (2) đụng
-file Bảo đang sửa (NCC, đơn đặt hàng, nhận hàng, xuất kho, bao bì 38) - để gửi Bảo; (3) chờ quyết (16+27, 35, 37, 29, 6, 2); (4) không cần sửa
+file IT đang sửa (NCC, đơn đặt hàng, nhận hàng, xuất kho, bao bì 38) - để gửi IT; (3) chờ quyết (16+27, 35, 37, 29, 6, 2); (4) không cần sửa
 (3, 17). Chỉ FE `D:\DNA-ERP` (nhánh `demo`), không đụng BE. Opus chia 5 phần không chung file, giao 5 `implementer-sonnet`, rồi tự review diff.
 
 **Đã sửa (theo điểm của báo cáo test lần 2):**
@@ -1174,10 +1174,10 @@ số LSX", Sếp tự mở tab có việc (vẫn chỉ kiểm qua code).
 
 **Chưa làm:** dòng "khung sẵn để sơn" cho Sơn (→ đã làm, mục 44); mã lệnh nhảy chữ ở các màn ngoài Phôi (sửa gốc `components/LenhCode.tsx` →
 đã làm phần lớn, mục 44); ~3 giây khi Phôi
-xác nhận nhận sắt (lời gọi BE `receiveSteelIssue`, nghi do gửi thông báo); nhóm 2 (gửi Bảo, đầu danh sách là điểm 38) và nhóm 3 (chờ anh
-Nhân). Không commit.
+xác nhận nhận sắt (lời gọi BE `receiveSteelIssue`, nghi do gửi thông báo); nhóm 2 (gửi IT, đầu danh sách là điểm 38) và nhóm 3 (chờ anh
+Quản lý). Không commit.
 
-## 43. Kéo commit mới của Bảo "Xuất đan 2 phiếu" (BE `b2c8c48`, FE `cdc60af`) + áp migration vào DB máy (09/11)
+## 43. Kéo commit mới của IT "Xuất đan 2 phiếu" (BE `b2c8c48`, FE `cdc60af`) + áp migration vào DB máy (09/11)
 
 - `git fetch` 2 repo: BE `main` +2 commit (`ba1d036` + gộp `b2c8c48`), FE `demo` +2 commit (`9577746` + gộp `cdc60af`) - "Xuất đan 2 phiếu: mảnh từ
   kho Sơn, dây/gỗ/đinh/nút từ kho Phụ kiện; mảnh không đan chuyển thẳng kho Thành phẩm". Không có commit local chưa đẩy; KHÔNG file nào vừa đổi
@@ -1186,7 +1186,7 @@ Nhân). Không commit.
   `issue_slip_lines`, `pairedSlipId/weavingPointId` ở `issue_slips`, cột + chép dữ liệu cũ ở `weaving_issue_materials`, khoá ngoại / chỉ mục) →
   `prisma migrate deploy` vào `dna_erp_test` và `dna_erp` (cả 2 trên máy, đã kiểm `DATABASE_URL` là localhost) - áp xong. KHÔNG đụng DB production.
 - `prisma generate` + `nest build` sạch; FE `tsc --noEmit` sạch (commit mới + phần sửa nhóm 1 không xung đột kiểu); khởi động lại BE thử 3040
-  (log không lỗi). Spec của Bảo (`issue-slips` / `weaving-issues` / `warehouse-transfers`) không chạy ở máy - xem CI GitHub.
+  (log không lỗi). Spec của IT (`issue-slips` / `weaving-issues` / `warehouse-transfers`) không chạy ở máy - xem CI GitHub.
 - Liên quan báo cáo test lần 2: commit này đổi luồng xuất đan (điểm 36b - hộp xác nhận / hàng mang kèm) → lần test sau phải đi lại bước xuất đan
   theo 2 phiếu mới; dữ liệu MY-313 trong `dna_erp_test` là xuất đan theo cách CŨ (trước migration).
 
@@ -1238,15 +1238,15 @@ src/components/sanxuat src/components/LenhCode --maxWorkers=2` 12/12 (gồm 5 ca
 
 **Ghi nhận khi dựng lệnh:** script ban đầu gửi sai tên trường khi nhận hàng → BE trả 400 nhiều lần, và số phiếu NK-261109-007…057 bị bỏ qua
 (số phiếu được lấy trước khi kiểm dữ liệu) - chỉ trên DB thử; nghi phiếu nhập lỗi vẫn "ăn" số → số phiếu thật có thể nhảy cóc. Thuộc phần
-phiếu của Bảo - chưa soát code, nên hỏi Bảo cùng nhóm 2.
+phiếu của IT - chưa soát code, nên hỏi IT cùng nhóm 2.
 
 **Chưa xem được trên màn** (chỉ kiểm qua code + tsc): dải nhắc hoàn tất + thanh nút Sếp ở chi tiết SKU (7/8 - DB thử không có SKU đang chờ
 duyệt), "Chưa nhập số LSX" (13), Sếp tự mở tab có việc (16b); mã lệnh không nhảy chữ (31) chưa đo được bằng mắt (chỉ thoáng lúc tải).
 → **Cập nhật mục 45:** đã xem được 7/8, 13, 16b trên màn (sửa tạm DB thử rồi trả lại).
 
-**Chưa làm / còn treo:** các chỗ `useLenhCodeLookup` còn nhảy chữ (liệt kê ở trên → đã sửa ở gốc, mục 45); nhóm 2 gửi Bảo (đầu danh sách là 38 - xuất bao bì trùng
+**Chưa làm / còn treo:** các chỗ `useLenhCodeLookup` còn nhảy chữ (liệt kê ở trên → đã sửa ở gốc, mục 45); nhóm 2 gửi IT (đầu danh sách là 38 - xuất bao bì trùng
 kho, mức cao; 22, 23–25, 26, 36a; 36b/36c phải test lại vì luồng xuất đan mới - mục 43) + ghi nhận số phiếu NK ở trên; nhóm 3 chờ quyết (anh
-Nhân: 16+27, 35, 37; khác: 29, 6, 2). Lệnh MY-314 để nguyên trên DB thử (đang chạy) cho lần test sau. Không commit.
+Quản lý: 16+27, 35, 37; khác: 29, 6, 2). Lệnh MY-314 để nguyên trên DB thử (đang chạy) cho lần test sau. Không commit.
 
 ## 45. Hết nhóm 1 sau test tay lần 2: mã lệnh không nhảy chữ ở mọi màn, đo lại "~3 giây" Phôi nhận sắt (không tái hiện), xem trên màn 7/8, 13, 16b + bỏ nút Sếp trùng, nới ô tiền tố LSX (09/11; commit + push 10/11 - mục 49)
 
@@ -1289,13 +1289,13 @@ chưa xem được trên màn (7/8, 13, 16b). Việc nhỏ (≤ 4 file, sửa v�
 **Kiểm:** FE `npx tsc --noEmit` sạch; `eslint` 4 file đổi ở mục này: 0 lỗi, số cảnh báo bằng bản HEAD; `vitest run src/components
 src/modules/pages/Floor --maxWorkers=2` 97/97. Không đụng BE. File FE giữ CRLF như cả repo.
 
-**Nhóm 1 coi như xong.** Còn lại ngoài nhóm 1: nhóm 2 gửi Bảo (38 đầu danh sách + số phiếu NK nhảy cóc - mục 44), nhóm 3 chờ quyết (anh Nhân:
+**Nhóm 1 coi như xong.** Còn lại ngoài nhóm 1: nhóm 2 gửi IT (38 đầu danh sách + số phiếu NK nhảy cóc - mục 44), nhóm 3 chờ quyết (quản lý:
 16+27, 35, 37; khác: 29, 6, 2), nhóm 4 việc dữ liệu (Admin khai tiền tố số LSX trước khi chạy thật). Không commit.
 
-## 46. File Word tổng hợp mọi câu chờ anh Nhân chốt (23 câu + 1 xin dữ liệu) - ghi đè file xác nhận 09/11 (09/11)
+## 46. File Word tổng hợp mọi câu chờ quản lý chốt (23 câu + 1 xin dữ liệu) - ghi đè file xác nhận 09/11 (09/11)
 
-Người dùng: "những gì cần hỏi Nhân hãy list tất cả" → Opus gom từ file hỏi 04/11, file xác nhận 09/11 (mục 39), báo cáo test tay lần 2
-(mục 41) và các chỗ đang làm theo mặc định trong changelog; bỏ câu anh Nhân đã trả lời (số LSX trùng → thêm đuôi, tính lại số mua khi nhu cầu
+Người dùng: "những gì cần hỏi quản lý hãy list tất cả" → Opus gom từ file hỏi 04/11, file xác nhận 09/11 (mục 39), báo cáo test tay lần 2
+(mục 41) và các chỗ đang làm theo mặc định trong changelog; bỏ câu quản lý đã trả lời (số LSX trùng → thêm đuôi, tính lại số mua khi nhu cầu
 giảm = câu 2.5, chiều dài chuẩn). Người dùng: "Soạn file Word".
 
 **File:** ghi đè `docs/xac-nhan-anh-nhan-sau-chay-thu-2026-11-09.docx` (theo ghi nhớ: sửa thẳng file cũ, không tạo bản 2; bản trước chép phòng
@@ -1303,12 +1303,12 @@ hờ ở thư mục tạm của phiên). 5 trang A4, Arial, lời thường, m�
 `.claude/tools/huong-dan-test-phan-a/build_xac_nhan_anh_nhan_tong_hop.py` (cùng khuôn `build_xac_nhan_0911.py`; chạy với docx mẫu KHÁC file ra).
 Không commit docx.
 
-**Nội dung:** câu 1–5 GIỮ NGUYÊN số / thứ tự như bản trước (lỡ anh Nhân đã trả lời bản cũ thì vẫn khớp), 3 câu gấp tô đỏ ở đầu file:
+**Nội dung:** câu 1–5 GIỮ NGUYÊN số / thứ tự như bản trước (lỡ quản lý đã trả lời bản cũ thì vẫn khớp), 3 câu gấp tô đỏ ở đầu file:
 - Phần 1 (sau chạy thử 07/11): 1 carton ở Kho thành phẩm **[GẤP]** (= điểm 38 test lần 2, đang kẹt mọi lệnh đóng ở Kho thành phẩm); 2 Pat / La
   tấm; 3 Quản lý SX bấm Bắt đầu 2 chỗ; 4 đóng gói - gộp thêm điểm 35 (300 thùng khi mảnh đạt chuyền kiểm chỉ đủ ~297 bộ), 4 lựa chọn; 5 Phôi
   báo vượt - ghi rõ IT đã làm theo đề xuất A ở bản thử, chỉ cần xác nhận.
 - Phần 2 (sau test tay lần 2, câu mới): 6 làm tròn lên số mua vật tư đếm cái / cuộn **[GẤP]** (điểm 16 + 27); 7 tồn đủ vẫn mua phần hao (câu
-  "hỏi anh Nhân" từ review 04/11 - không thấy ghi đã hỏi); 8 booking bắt buộc CUT OFF hoặc Ngày lấy cont (37); 9 gộp thông báo "hàng về kho"
+  "hỏi quản lý" từ review 04/11 - không thấy ghi đã hỏi); 8 booking bắt buộc CUT OFF hoặc Ngày lấy cont (37); 9 gộp thông báo "hàng về kho"
   (29); 10 bắt buộc lý do từ chối SKU (6 - DB 26/10: cả 15 SKU bị từ chối chỉ ghi lý do "."); 11 đơn có hạn giao đã qua - giữ cảnh báo hay
   chặn (mục 42); 12 chữ "Tên PI" ở Lịch xuất hàng (mục 40 - có thể là PI của khách, không có đề xuất IT); 13 câu giới thiệu màn đăng nhập
   (2 - ghi "có thể cần Sếp duyệt").
@@ -1316,7 +1316,7 @@ Không commit docx.
   theo cách này") + lưu ý NV định mức rà công đoạn Tán / Dập; 20–22 = 2.1–2.3 (ghi "đang chạy"); 23 = 2.4 xưởng dự kiến lúc tính cắt
   **[GẤP]** (phần tính sắt cần mua theo xưởng đang chờ).
 - Phần 4: xin danh sách tiền tố số LSX theo khách để Admin khai.
-- Không đưa: phần máy cắt (để sau khi xong + test hết 12 yêu cầu theo ghi nhớ); câu cho Bảo (số phiếu NK nhảy cóc, nhóm 2).
+- Không đưa: phần máy cắt (để sau khi xong + test hết 12 yêu cầu theo ghi nhớ); câu cho IT (số phiếu NK nhảy cóc, nhóm 2).
 
 **Kiểm:** XML hợp lệ; mở bằng Word thật → PDF 5 trang → xem cả 5 ảnh trang: không tràn bảng, câu không bị cắt giữa trang (hàng `cantSplit`).
 
@@ -1324,7 +1324,7 @@ Không commit docx.
 
 ## 47. Pat làm như chân nhôm - điều tra: Pat / Sắt phi (cắt) rơi khỏi tính mua vì chỉ đếm dòng tick "Đan"; vướng tồn Pat ảo - CHỜ người dùng chọn cách, chưa sửa code (09/11)
 
-Người dùng trả lời câu 2 (Pat / La tấm) của file hỏi anh Nhân: "PAT làm tương tự với chân nhôm". Opus đọc code + DB thử (dữ liệu 26/10):
+Người dùng trả lời câu 2 (Pat / La tấm) của file hỏi quản lý: "PAT làm tương tự với chân nhôm". Opus đọc code + DB thử (dữ liệu 26/10):
 - Pat và chân nhôm cùng một cơ chế: nhóm con Sắt "Vật tư thành phẩm" trong định mức mảnh + công thức "1 đơn vị nguyên liệu ra N cái" (bảng công thức:
   chân nhôm ← thanh nhôm 161 / 12 / 193; 14 loại Pat ← La tấm; Sắt phi 4/6/8 (cắt) ← Sắt phi theo kg). Chưa định mức nào dùng chân nhôm.
 - Cả tính mua nguyên liệu (`MaterialYieldRecipesService.getProductionDemand` → `MaterialYieldRecipePurchaseService`) lẫn danh sách cắt + tiến độ
@@ -1336,11 +1336,11 @@ Người dùng trả lời câu 2 (Pat / La tấm) của file hỏi anh Nhân: "
   hoặc vào tồn + phiếu chuyển sang Hàn (đụng phần kho của B); (2) áp cho mọi dòng Vật tư thành phẩm (ô Đan chỉ còn nghĩa "đi kèm xuất đan") -
   hoặc chỉ Pat. Người dùng chưa hiểu câu hỏi trong hộp chọn → đã giải thích lại bằng ví dụ (lệnh A cắt 3.200 Pat, lệnh B không mua La tấm).
 
-**Chưa làm:** chờ người dùng chọn; chưa sửa code; file hỏi anh Nhân câu 2 chưa đánh dấu "đã chốt".
+**Chưa làm:** chờ người dùng chọn; chưa sửa code; file hỏi quản lý câu 2 chưa đánh dấu "đã chốt".
 
-## 48. Trả lời file Bảo hỏi "Đổi xưởng khi lệnh đã có phương án cắt / đã giữ sắt" (4 câu) - file Word đã điền (10/11)
+## 48. Trả lời file IT hỏi "Đổi xưởng khi lệnh đã có phương án cắt / đã giữ sắt" (4 câu) - file Word đã điền (10/11)
 
-Người dùng gửi file Bảo hỏi (`Downloads\CAU_HOI_SANG_DOI_XUONG_10-11-2026.docx`, 4 câu, kèm phần anh Nhân đã chốt 10/11: đổi xưởng được khi chưa
+Người dùng gửi file IT hỏi (`Downloads\CAU_HOI_SANG_DOI_XUONG_10-11-2026.docx`, 4 câu, kèm phần quản lý đã chốt 10/11: đổi xưởng được khi chưa
 xuất sắt; đổi xong phương án cắt "cần kiểm lại", KHSX kiểm / tính lại rồi bấm "Đã kiểm", trước đó cấm chuyển / xuất sắt; dòng mua chưa về đổi
 nơi nhận; sắt đã giữ chuyển bằng phiếu nhưng phải tính lại). Opus đối chiếu code rồi người dùng: "xuất ra file word".
 
@@ -1350,10 +1350,10 @@ tay → `approve()` đánh SUPERSEDED bản cũ + `releaseByRef` giữ chỗ cũ
 lại dòng mua sắt (`planPurchaseRecompute`: chưa ký sửa số, đã ký giữ + `notifyPurchaseDemandDropped`). Bảng `Workshop` chưa có chiều dài chuẩn
 (Đợt 8 chưa làm).
 
-**Phát hiện:** đề xuất A câu 2 của B ("Đã kiểm" = duyệt phương án mới) + luật anh Nhân "chưa Đã kiểm thì chưa chuyển sắt" → lúc duyệt, sắt còn ở kho
+**Phát hiện:** đề xuất A câu 2 của B ("Đã kiểm" = duyệt phương án mới) + luật quản lý "chưa Đã kiểm thì chưa chuyển sắt" → lúc duyệt, sắt còn ở kho
 xưởng cũ, kho xưởng mới thấy 0 → đề xuất mua thêm đúng số sắt đó (mua trùng).
 
-**Đã trả lời (file `docs/cau-hoi-sang-doi-xuong-10-11-2026-TRA-LOI.docx`, 3 trang, chữ xanh đậm "Sang:", lời thường; script
+**Đã trả lời (file `docs/cau-hoi-sang-doi-xuong-10-11-2026-TRA-LOI.docx`, 3 trang, chữ xanh đậm "IT:", lời thường; script
 `.claude/tools/huong-dan-test-phan-a/tra_loi_bao_doi_xuong_1011.py` - chỉ sửa document.xml của file gốc, bản gốc trong Downloads giữ nguyên):**
 - Câu 1 ☒ A: A làm cờ + nút "Đã kiểm" + thông báo; A bật cờ ngay trong lúc đổi xưởng (cùng lần lưu) - B không cần gọi hàm, chỉ đọc cờ; chỉ bật
   khi lệnh có phương án đã duyệt; tên cờ báo B khi làm xong.
@@ -1365,9 +1365,9 @@ xưởng cũ, kho xưởng mới thấy 0 → đề xuất mua thêm đúng số
 
 **Kiểm:** XML hợp lệ; Word thật → PDF 3 trang, xem cả 3 ảnh trang (4 ô ☒, chữ trả lời không tràn khung). Không commit docx.
 
-**Liên quan:** chốt 10/11 trả lời gần hết câu 23 (= 2.4 "xưởng dự kiến") của file hỏi anh Nhân (mục 46) - chỉ còn ý "KHSX tính trước theo xưởng mặc
-định Phú An" chưa nói rõ; lần cập nhật file sau đánh dấu câu 23 + câu 2 (Pat). **Chưa làm:** chưa gửi Bảo (người dùng tự gửi); chưa code phần cờ /
-nút "Đã kiểm" (việc của A sau khi Bảo đồng ý).
+**Liên quan:** chốt 10/11 trả lời gần hết câu 23 (= 2.4 "xưởng dự kiến") của file hỏi quản lý (mục 46) - chỉ còn ý "KHSX tính trước theo xưởng mặc
+định Phú An" chưa nói rõ; lần cập nhật file sau đánh dấu câu 23 + câu 2 (Pat). **Chưa làm:** chưa gửi IT (người dùng tự gửi); chưa code phần cờ /
+nút "Đã kiểm" (việc của A sau khi IT đồng ý).
 
 ## 49. Commit + push phần sửa sau test tay lần 2 (mục 41.5, 42, 44, 45) + changelog; che chi tiết review bảo mật vì repo công khai (10/11)
 

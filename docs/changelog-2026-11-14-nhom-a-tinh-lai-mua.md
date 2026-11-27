@@ -46,9 +46,9 @@ merge → mutate → stock_quant → giữ chỗ. Không luồng ký / nhận n�
 
 ## Chưa làm
 
-- **Luồng sắt** (`CuttingProposalsService.approve`, phần của Sang): cũng tính lại dòng mua dưới khoá merge mà không khoá mutate.
+- **Luồng sắt** (`CuttingProposalsService.approve`, phần của IT): cũng tính lại dòng mua dưới khoá merge mà không khoá mutate.
   Không thêm khoá mutate ở đó được vì luồng này khoá `stock_quant` TRƯỚC khoá merge — thêm mutate sau sẽ khoá chéo với nhận
-  hàng. Muốn sửa phải chuyển khoá merge + mutate lên trước bước khoá tồn của approve() — cần bàn với Sang.
+  hàng. Muốn sửa phải chuyển khoá merge + mutate lên trước bước khoá tồn của approve() — cần bàn với IT.
 - Giữ chỗ ở kho khác sau đổi xưởng: nhóm B.
 
 ## Thử sống (14/11, bản sao DB dev chạy local, đã xoá)

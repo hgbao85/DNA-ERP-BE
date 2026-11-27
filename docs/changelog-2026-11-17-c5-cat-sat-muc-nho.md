@@ -45,4 +45,4 @@ Số đỏ "Lệnh sản xuất" của QLSX:
 
 ## Cần làm khi gộp
 
-Chạy migration `20261117180000_widen_cutting_waste_mm` trên DB dev chung và báo Sang.
+Chạy migration `20261117180000_widen_cutting_waste_mm` trên DB dev chung và báo IT.

@@ -90,7 +90,7 @@
 29. Rà soát "bấm thông báo có nhảy đúng màn không" — _2026-10-08, chỉ rà (đã sửa ở mục 30)_
 30. Sửa theo mục 29: mở thẳng đúng mục, link cho thông báo thiếu link, rà người nhận/quyền — _2026-10-08, đã làm, chưa commit_
 31. Rà vòng đời lệnh sản xuất theo 4 nhóm quản lý của ERP — _2026-10-09; P1, P2 đã làm; P3 (quét quá hạn) còn treo, thiết kế ở mục 32_
-32. Nghiên cứu timeline chuẩn ERP + thiết kế thông báo trễ hạn — _2026-10-26, chỉ nghiên cứu, chờ Sếp họp chốt_ (32.1: anh Nhân đã có quy tắc mốc theo N từ 05–06/10; 32.2: Sếp chốt hệ thống đề xuất theo mốc Phú An; 32.3: ĐÃ LÀM ở FE, chưa commit; 32.4: rà vật tư production theo công đoạn; 32.5: Sếp làm rõ khung ngày về vật tư; 32.6: review lệnh gộp + chia hàng về cho SKU; 32.7: Sếp xác nhận nhóm vật tư + tên/vị trí cột mốc; 32.8: ĐÃ LÀM A–C - mốc Mua VT khung & đan / Mua VT còn lại + "về từ", local chưa commit; 32.9: live-test XÁC NHẬN lỗi chặn nhầm chính PI khi xuất tiêu hao/đóng gói; 32.10: ĐÃ SỬA lỗi đó, local chưa commit; 32.11: review commit dbfd2ea của ohey trên origin/main - sửa cả lỗi 1 lẫn lỗi 2, thay bản sửa local 32.10; 32.12: đã bỏ bản local 32.10 và pull dbfd2ea về main, chưa commit gì thêm; 32.13: dbfd2ea không đụng phần code của người dùng, đã STAGE phần cần commit BE + FE, người dùng tự commit (đã commit `ab847fa`); 32.14: review tài liệu "Kế hoạch thực hiện 12 yêu cầu mới" 26/10, chỉ rà; 32.15: review commit 689a93f của ohey - nhả giữ chỗ dư khi PI Kết thúc, còn 1 lỗi nhận hàng sau khi nhả + thiếu nhả bù PI cũ; 32.16: đã pull 689a93f về main; 32.17: review file câu hỏi làm rõ nghiệp vụ part 1 gửi Sếp, chỉ góp ý; 32.18: đề xuất cách làm "tự kiểm tra dữ liệu mỗi đêm" + "bảng lệnh sắp trễ / tin tóm tắt sáng", CHƯA làm; 32.19: ý 1 - nguyên mẫu phép kiểm chạy trên DB test + danh sách file, đã duyệt; 32.20: ĐÃ LÀM ý 1 "Kiểm tra dữ liệu" mỗi đêm, local chưa commit; 32.21: Sếp trả lời 16 câu nghiệp vụ part 1; 32.22: soạn câu trả lời Câu 2 / Mục 3 "Số liệu thống kê"; 32.23: pull + review BE d1e09a3 + FE b6e3f2b của ohey - sửa đúng lỗi giữ chỗ sắt theo chiều dài + 5 lỗi giao diện, E2E qua; lỗi trùng khoá sau khi nhả (32.15) + dữ liệu cũ vẫn còn; 32.24: giải thích `DATA_HEALTH_CRON_KEY`, đề xuất hẹn giờ trong app thay lịch GitHub + kế hoạch mục 3 bảng mốc / tin sáng, đã duyệt; 32.25: ĐÃ LÀM - hẹn giờ trong app (bỏ khoá cron + lịch GitHub), Bảng mốc, tin sáng, cảnh báo nguy cơ trễ hạn giao; local chưa commit; 32.26: rà lỗi biên 32.25 - 10 phát hiện, ĐÃ SỬA 9 (tin vật tư riêng từng người nhận, kho nhận ghi đè, dây của SKU đã Kết thúc, khoá chạy 1 nơi, cảnh báo hạn giao không báo lại mỗi lần đóng thùng...), 1 lệch có sẵn ở FE để lại; local chưa commit; 32.27: 2 agent test chạy thật + 1 agent quản lý rà code mục 1 và 3 - đủ thiết kế, chấm 8 và 8,5/10; tìm 3 lỗi mục 1 + 9 điểm lệch/lỗi nhỏ quanh mục 3, đã sửa ở 32.28; 32.28: ĐÃ SỬA HẾT theo "Sửa hết" (P1 + P2 + Q1–Q7) + 2 vòng test lại bằng agent, local chưa commit; 32.29: đã STAGE BE + FE của mục 1 và 3, người dùng ĐÃ COMMIT (BE `5e34763`, FE `d263e05`), deploy không cần chạy tay gì)
+32. Nghiên cứu timeline chuẩn ERP + thiết kế thông báo trễ hạn — _2026-10-26, chỉ nghiên cứu, chờ Sếp họp chốt_ (32.1: quản lý đã có quy tắc mốc theo N từ 05–06/10; 32.2: Sếp chốt hệ thống đề xuất theo mốc Phú An; 32.3: ĐÃ LÀM ở FE, chưa commit; 32.4: rà vật tư production theo công đoạn; 32.5: Sếp làm rõ khung ngày về vật tư; 32.6: review lệnh gộp + chia hàng về cho SKU; 32.7: Sếp xác nhận nhóm vật tư + tên/vị trí cột mốc; 32.8: ĐÃ LÀM A–C - mốc Mua VT khung & đan / Mua VT còn lại + "về từ", local chưa commit; 32.9: live-test XÁC NHẬN lỗi chặn nhầm chính PI khi xuất tiêu hao/đóng gói; 32.10: ĐÃ SỬA lỗi đó, local chưa commit; 32.11: review commit dbfd2ea của ohey trên origin/main - sửa cả lỗi 1 lẫn lỗi 2, thay bản sửa local 32.10; 32.12: đã bỏ bản local 32.10 và pull dbfd2ea về main, chưa commit gì thêm; 32.13: dbfd2ea không đụng phần code của người dùng, đã STAGE phần cần commit BE + FE, người dùng tự commit (đã commit `ab847fa`); 32.14: review tài liệu "Kế hoạch thực hiện 12 yêu cầu mới" 26/10, chỉ rà; 32.15: review commit 689a93f của ohey - nhả giữ chỗ dư khi PI Kết thúc, còn 1 lỗi nhận hàng sau khi nhả + thiếu nhả bù PI cũ; 32.16: đã pull 689a93f về main; 32.17: review file câu hỏi làm rõ nghiệp vụ part 1 gửi Sếp, chỉ góp ý; 32.18: đề xuất cách làm "tự kiểm tra dữ liệu mỗi đêm" + "bảng lệnh sắp trễ / tin tóm tắt sáng", CHƯA làm; 32.19: ý 1 - nguyên mẫu phép kiểm chạy trên DB test + danh sách file, đã duyệt; 32.20: ĐÃ LÀM ý 1 "Kiểm tra dữ liệu" mỗi đêm, local chưa commit; 32.21: Sếp trả lời 16 câu nghiệp vụ part 1; 32.22: soạn câu trả lời Câu 2 / Mục 3 "Số liệu thống kê"; 32.23: pull + review BE d1e09a3 + FE b6e3f2b của ohey - sửa đúng lỗi giữ chỗ sắt theo chiều dài + 5 lỗi giao diện, E2E qua; lỗi trùng khoá sau khi nhả (32.15) + dữ liệu cũ vẫn còn; 32.24: giải thích `DATA_HEALTH_CRON_KEY`, đề xuất hẹn giờ trong app thay lịch GitHub + kế hoạch mục 3 bảng mốc / tin sáng, đã duyệt; 32.25: ĐÃ LÀM - hẹn giờ trong app (bỏ khoá cron + lịch GitHub), Bảng mốc, tin sáng, cảnh báo nguy cơ trễ hạn giao; local chưa commit; 32.26: rà lỗi biên 32.25 - 10 phát hiện, ĐÃ SỬA 9 (tin vật tư riêng từng người nhận, kho nhận ghi đè, dây của SKU đã Kết thúc, khoá chạy 1 nơi, cảnh báo hạn giao không báo lại mỗi lần đóng thùng...), 1 lệch có sẵn ở FE để lại; local chưa commit; 32.27: 2 agent test chạy thật + 1 agent quản lý rà code mục 1 và 3 - đủ thiết kế, chấm 8 và 8,5/10; tìm 3 lỗi mục 1 + 9 điểm lệch/lỗi nhỏ quanh mục 3, đã sửa ở 32.28; 32.28: ĐÃ SỬA HẾT theo "Sửa hết" (P1 + P2 + Q1–Q7) + 2 vòng test lại bằng agent, local chưa commit; 32.29: đã STAGE BE + FE của mục 1 và 3, người dùng ĐÃ COMMIT (BE `5e34763`, FE `d263e05`), deploy không cần chạy tay gì)
 
 ---
 
@@ -1278,7 +1278,7 @@ live-test FE thật, rồi mới báo cáo.
 - Test: thêm test cho cả 4 service (`cutting-proposals`, `consumable-material-purchase`,
   `piece-material-yield-purchase`, `purchase-proposals`) - đủ nhánh emit CREATED khi còn PENDING,
   KHÔNG emit khi đề xuất đã `PURCHASED` ngay từ đầu, APPROVED + resolve CREATED (có điều kiện còn
-  người mua khác), ITEM_RECEIVED không kèm PURCHASED khi nhận dở, và emit THÊM PURCHASED khi dòng
+  Người mua khác), ITEM_RECEIVED không kèm PURCHASED khi nhận dở, và emit THÊM PURCHASED khi dòng
   cuối cùng đóng đề xuất.
 - **Nghiệm thu:** `npx tsc --noEmit`: 0 lỗi. `npx eslint --fix`: 0 error, 1 warning `no-explicit-any`
   cố ý có sẵn (như mọi lần trước). `npx jest` toàn repo: **1215/1215 pass, 50/50 suite** (tăng từ
@@ -1539,7 +1539,7 @@ phần đang conflict - chọn "theo cả file" dễ nuốt mất phần đã s�
 
 ### 20.3 Thêm `?p=` URL-sync cho `AdminApp.tsx`
 
-Nhân lúc phải làm lại `AdminApp.tsx` sau sự cố 20.2 (file đã có top bar compact mới, lần đầu tiên
+Quản lý lúc phải làm lại `AdminApp.tsx` sau sự cố 20.2 (file đã có top bar compact mới, lần đầu tiên
 AdminApp có top bar để đặt `NotificationCenter size={20}`), làm luôn phần còn thiếu theo đúng pattern
 6 app shell kia (mục 12.5.B/17.3): `ADMIN_PAGE_VALUES`/`isAdminPage` type guard, `useUrlState('p')` +
 `useState<AdminPage>` khởi tạo từ URL + `useEffect` đồng bộ ngược (điều hướng từ ngoài vào, vd
@@ -2696,13 +2696,13 @@ changelog-2026-10-21 mục 32.6), sau đó mới làm thông báo trễ deadline
 - Danh sách việc kỹ thuật sau khi chốt nằm ở mục 9 của trang tài liệu.
 - Trang tài liệu đang riêng tư. Người dùng cần bấm Share trên trang thì Sếp mới mở được.
 
-### 32.1 2026-10-27 — Đối chiếu nhật ký "LICH_SU_TRAO_DOI_CLAUDE_den_10-10-2026" — anh Nhân ĐÃ có quy tắc mốc theo ngày N
+### 32.1 2026-10-27 — Đối chiếu nhật ký "LICH_SU_TRAO_DOI_CLAUDE_den_10-10-2026" — quản lý ĐÃ có quy tắc mốc theo ngày N
 
-Người dùng gửi file nhật ký trao đổi anh Nhân – Claude, 04–10/10/2026, 12.519 dòng, nhờ review và tóm tắt.
-- Nhật ký là một phiên Claude chạy trên máy anh Nhân: đọc Zalo/OneDrive "nhà máy IEA", làm file Excel/PDF, nhắn nhóm Zalo.
+Người dùng gửi file nhật ký trao đổi quản lý – Claude, 04–10/10/2026, 12.519 dòng, nhờ review và tóm tắt.
+- Nhật ký là một phiên Claude chạy trên máy quản lý: đọc Zalo/OneDrive "nhà máy IEA", làm file Excel/PDF, nhắn nhóm Zalo.
 - File gốc chỉ ở `Downloads` của người dùng, không chép vào repo.
 
-**Phát hiện quan trọng cho mục 32:** ngày 05–06/10 anh Nhân đã chốt với Claude quy tắc lên kế hoạch lệnh sản xuất.
+**Phát hiện quan trọng cho mục 32:** ngày 05–06/10 quản lý đã chốt với Claude quy tắc lên kế hoạch lệnh sản xuất.
 - Mọi mốc tính **xuôi từ N = ngày bắt đầu phôi**, không lùi từ hạn giao.
 - Bảng mốc Phú An / Phước An:
 
@@ -2725,16 +2725,16 @@ Người dùng gửi file nhật ký trao đổi anh Nhân – Claude, 04–10/1
   - Lệnh tách xưởng: ghế làm ở Phước An, bàn làm ở Phú An.
 - **Hàng gỗ:** G = ngày gỗ nhập kho = hạn giao − 9. Vật tư đóng gói về G − 3, đóng gói xong G + 2. Số cont gỗ mỗi tháng không vượt
   bảng của Ba Chinh.
-- **Chưa thấy anh Nhân trả lời** câu "có xếp lệnh vào Chủ nhật không".
+- **Chưa thấy quản lý trả lời** câu "có xếp lệnh vào Chủ nhật không".
 
 **Ý nghĩa với tài liệu Timeline (mục 32) — chưa sửa tài liệu, chưa sửa code:**
-- Q3 "ngày cắt sắt": anh Nhân đã dùng N (ngày bắt đầu phôi) làm mốc gốc, khớp phương án b.
+- Q3 "ngày cắt sắt": quản lý đã dùng N (ngày bắt đầu phôi) làm mốc gốc, khớp phương án b.
 - Q1/Q2: vật tư đã được tách theo nhóm và gắn với N: nhóm 1–2 về hết N−1, vật tư còn lại về hết N+8/N+10.
 - Q4: số ngày khác hẳn chuỗi mặc định trong ERP (lùi từ hạn giao: Phôi −25 … Khung −14 … Đóng gói −3).
   - Theo quy tắc N, cắt + hàn + sơn tới lúc xuất đan chỉ 2 ngày (Phú An); từ xuất đan tới đóng gói 12 ngày.
   - ERP hiện không có mốc "thu mảnh", còn quy tắc N có.
 - Xưởng (Phú An/Phước An) làm lệch mốc +2 ngày. ERP chưa có khái niệm này trên timeline.
-- Luật gộp sắt anh Nhân chốt trong nhật ký khớp luật ERP 24/10 ở điểm **tối đa 2 lệnh**. Các luật cắt sắt khác trong nhật ký:
+- Luật gộp sắt quản lý chốt trong nhật ký khớp luật ERP 24/10 ở điểm **tối đa 2 lệnh**. Các luật cắt sắt khác trong nhật ký:
   - mỗi quy cách 1 chiều dài cây, tròn đuôi 0/5 cm, tối đa 6,5 m;
   - mỗi kiểu cắt hao dưới 1%, nhát cưa không tính hao, tề đầu 10 mm có tính;
   - gộp cùng xưởng cùng quy cách; riêng 20×20×0,6 ghép bàn I3 mới với bàn J55;
@@ -2858,7 +2858,7 @@ những vật tư gì và thuộc công đoạn nào.
 | | Sơn dặm | 1 |
 | | Nút phi Ø18 | 1 |
 
-- Người mua: Nhàn 156, Nguyệt 148, Nghi 77.
+- Người mua: người mua A 156, Nguyệt 148, người mua C 77.
 - 3 dòng "Chân nhôm" không có người mua; đây là hàng tự gia công nên không cần người mua.
 
 **Không đọc được công đoạn từ dữ liệu production:**
@@ -2895,7 +2895,7 @@ những vật tư gì và thuộc công đoạn nào.
 
 ### 32.5 2026-10-27 — Sếp làm rõ khung ngày về của 2 nhóm vật tư (hạn chót + ngày sớm nhất) — A–C ĐÃ LÀM ở 32.8, D ĐÃ LÀM ở 32.28
 
-Người dùng gửi ảnh tin nhắn của Sếp Nhân, trả lời câu hỏi về mốc N−1 / N+8:
+Người dùng gửi ảnh tin nhắn của quản lý, trả lời câu hỏi về mốc N−1 / N+8:
 - "N-1 là deadline, còn được về là ngày N-5".
 - "vật tư còn lại thì anh lấy ngày đóng gói trừ đi 7 ngày mới đúng".
 - "trừ đi 7 ngày là deadline, còn về được từ ngày đóng gói trừ đi 11 ngày".
@@ -3483,7 +3483,7 @@ nhờ xem thử. Đối chiếu với code/DB test (chỉ đọc), quyết đị
 8. Câu 5: đề xuất mua đã có ô tải phiếu duyệt Sếp ký (`approvalFileUrl`) - "phiếu đề xuất" dùng lại, lúc nhập kho chỉ cần 2 giấy
    mới; nhận nhiều đợt thì mỗi đợt một phiếu nhà cung cấp.
 9. Câu 6: thiếu các loại xuất vật tư thành phẩm, VTTP theo công thức, chuyển kho nội bộ.
-10. Câu 2 hỏi phần thống kê của anh Sang - người trong nhóm trả lời được, không cần Sếp.
+10. Câu 2 hỏi phần thống kê của IT - người trong nhóm trả lời được, không cần Sếp.
 11. Chữ "lệnh" dùng lẫn cho PI và lệnh SX từng SKU (ERP: mỗi SKU 1 lệnh SX) - nên định nghĩa ở đầu, nhất là trong quy tắc gộp.
 
 **Còn lại:** chưa sửa file docx, chờ người dùng.
@@ -3618,7 +3618,7 @@ Người dùng gửi `Downloads\cau-hoi-lam-ro-nghiep-vu-part1 (2).docx`: "sếp
 | Câu | Mục | Trả lời | So với đề xuất |
 |---|---|---|---|
 | 1 | 1 | Chặn Sales lên đơn SKU chưa duyệt định mức | Đồng ý. FE `OrderManagementPage` đã chỉ liệt kê SKU APPROVED; BE `sales-orders` chưa chặn |
-| 2 | 3 | "anh Sang trả lời" | Người dùng tự trả lời |
+| 2 | 3 | "IT trả lời" | Người dùng tự trả lời |
 | 3 | 9 | 68 m³ đúng là cont 40HQ, cài 40HQ làm mặc định | Đồng ý |
 | 4 | 9 | Ưu tiên số load cont THEO TỪNG THÙNG, thêm 1 ô load cont THEO BỘ | KHÁC: không chỉ chia cho tổng cả bộ |
 | 5 | 4 | Thiếu giấy = CẢNH BÁO; mọi nhóm vật tư; mọi phiếu (kể cả cũ) | KHÁC: không chặn cứng, áp cả phiếu cũ |
@@ -3659,7 +3659,7 @@ Người dùng gửi `Downloads\cau-hoi-lam-ro-nghiep-vu-part1 (2).docx`: "sếp
 
 ### 32.22 2026-10-28 — Soạn câu trả lời Câu 2 (Mục 3 "Số liệu thống kê")
 
-Người dùng: "trả lời mục 3, phần đó tôi vs bạn làm" (Sếp ghi "anh Sang trả lời" ở 32.21). Chỉ soạn chữ, không sửa code.
+Người dùng: "trả lời mục 3, phần đó tôi vs bạn làm" (Sếp ghi "IT trả lời" ở 32.21). Chỉ soạn chữ, không sửa code.
 
 **Đối chiếu:** "Nhập số liệu thống kê" = phần báo sản lượng xưởng bằng QR (changelog `2026-10-08-ke-hoach-tem-qr-bo-sat-phoi.md`
 mục 15-57): QR tại máy, công nhân tự báo, QLSX kiểm rồi gửi KCS, KCS chấm, "Báo cáo sản lượng đạt KCS", nhắc QLSX, PIN + giới
@@ -4083,7 +4083,7 @@ changelog 06/10).
 - Q7: vật tư không có `buyerId` thì gửi tin cho mọi NV mua hay chỉ thủ kho.
   - _Người dùng làm rõ:_ sẽ có 3 NV mua, mỗi người phụ trách vật tư riêng, không trùng nhau. Bản sạch 26/10 khớp: `nhan` 156,
     `nguyet` 148, `nghi` 77 vật tư. Còn 3 vật tư chưa gán người mua: `CHAN-NHOM-01/02/03` "Chân nhôm".
-  - _Người dùng:_ "Chân nhôm là thanh nhôm do Nhàn mua". Lúc đầu mình hiểu sai thành "gán Nhàn làm người mua Chân nhôm" -
+  - _Người dùng:_ "Chân nhôm là thanh nhôm do người mua A mua". Lúc đầu mình hiểu sai thành "gán người mua A làm người mua Chân nhôm" -
     **SAI, đã rút lại**. Kiểm dữ liệu:
     - `CHAN-NHOM-01/02/03` là **vật tư thành phẩm** (`steelSubGroup` = FINISHED_COMPONENT). Phôi tự cắt ra từ Thanh nhôm theo
       công thức `material_yield_recipes` (bước CAT):
@@ -4108,7 +4108,7 @@ Không sửa code, không commit, không push, không deploy.
 ### 32.28 2026-10-29 — ĐÃ SỬA HẾT theo 32.27 ("Sửa hết": P1 + P2 + Q1–Q7) + 2 vòng test lại bằng agent (local, CHƯA commit)
 
 Người dùng: "Sửa hết" (theo đề xuất ở 32.27). Q7 làm rõ thêm: sẽ có 3 NV mua, mỗi người phụ trách vật tư riêng, không trùng; "Chân
-nhôm" là vật tư thành phẩm Phôi cắt từ Thanh nhôm (Nhàn mua Thanh nhôm) - KHÔNG gán người mua cho Chân nhôm.
+nhôm" là vật tư thành phẩm Phôi cắt từ Thanh nhôm (người mua A mua Thanh nhôm) - KHÔNG gán người mua cho Chân nhôm.
 
 **Quyết định đã chốt (theo đề xuất 32.27):**
 - Q1: % Khung CK = trung bình % 3 tổ (như "Theo lệnh").

@@ -37,7 +37,7 @@
   <li><b>Người A – Kế hoạch &amp; Sản xuất</b> (KHSX, QLSX, cắt sắt): khoảng <b>46 ngày công</b>, sau đó nhận thêm máy cắt theo quy cách (8–12 ngày) khi có câu trả lời V7.</li>
   <li><b>Người B – Mua hàng &amp; Kho</b> (mua, nhận hàng, chứng từ, chia kho, xuất hàng): khoảng <b>51 ngày công</b>.</li>
 </ul>
-Nếu bắt đầu 05/11, cả hai luồng xong khoảng <b>cuối tháng 01/2027</b> (thay vì đầu tháng 04/2027 nếu 1 người làm), chưa tính máy cắt theo quy cách (chờ anh Nhân trả lời V7). Có 4 điểm hai người phải ghép code với nhau (mục 3).
+Nếu bắt đầu 05/11, cả hai luồng xong khoảng <b>cuối tháng 01/2027</b> (thay vì đầu tháng 04/2027 nếu 1 người làm), chưa tính máy cắt theo quy cách (chờ quản lý trả lời V7). Có 4 điểm hai người phải ghép code với nhau (mục 3).
 </div>
 
 <h2>1. Nguyên tắc làm</h2>
@@ -134,7 +134,7 @@ Nếu bắt đầu 05/11, cả hai luồng xong khoảng <b>cuối tháng 01/202
 <h3>Đợt 5 – Mua hàng gộp + nhập 1 lần tự chia (YC7, YC8, YC11, YC4 nhập kho) <span class="tag">Người B</span> <span class="tag r">lớn, rủi ro</span></h3>
 <ul>
   <li><b>5a. Sửa số mua (7.2):</b> chưa có API sửa số mua. Thêm: người mua chỉ được tăng, ghi "mua dư"; khoá khi đã tải phiếu ký; "THAY PHIẾU" để sửa lại.</li>
-  <li><b>5b. Chọn NCC + Số đơn đặt hàng (4.10):</b> danh mục NCC đã có (<code>Supplier</code>) nhưng dòng mua chưa gắn NCC. Thêm bước chọn NCC bắt buộc; bộ đếm số đơn theo NCC + năm, nạp số cuối năm 2026 (chờ danh sách của chị Nghi, chị Nhàn).</li>
+  <li><b>5b. Chọn NCC + Số đơn đặt hàng (4.10):</b> danh mục NCC đã có (<code>Supplier</code>) nhưng dòng mua chưa gắn NCC. Thêm bước chọn NCC bắt buộc; bộ đếm số đơn theo NCC + năm, nạp số cuối năm 2026 (chờ danh sách của người mua C, người mua A).</li>
   <li><b>5c. Đơn mua gộp (7.1–7.8, 7.11):</b> bảng mới "đơn mua" gom nhiều dòng mua của nhiều lệnh, cùng 1 người mua + 1 NCC; tự tạo phiếu đề xuất theo mẫu <code>PHIEU_DE_XUAT_MAU_TRONG_IEA.xlsx</code> (15 dòng/trang, cột "lệnh: số cần", dòng "Mua dư → nhập tồn"); gỡ dòng khi chưa nhận; vẫn cho mua lẻ. BE chưa có thư viện Excel – dùng thư viện <code>xlsx</code> FE đang có hoặc thêm <code>exceljs</code> ở BE.</li>
   <li><b>5d. Nhập 1 lần tự chia (YC8, YC11) + chứng từ nhập (YC4):</b> viết lại màn nhận hàng (<code>NhapKhoPage</code>): 1 dòng cho cả đơn gộp; nhập SL theo phiếu giao = SL thực nhận (không dung sai); 3 ô ảnh (+ phiếu cân xe với sắt) bắt buộc ngay lúc nhập; "Từ chối nhận" (chưa có); bảng chia trước khi xác nhận, thủ kho chỉnh được, ghi lịch sử.</li>
   <li><b>Điểm khó:</b> giữ chỗ tồn kho (<code>StockReservation</code>) hiện tính theo cả lệnh, không theo SKU trong lệnh gộp. Để ưu tiên SKU có mốc sớm (YC11) phải thêm SKU vào khoá giữ chỗ, đụng tới mọi luồng xuất đang trừ giữ chỗ. Cần test kỹ cả luồng xuất sắt, tiêu hao, đóng gói.</li>
@@ -185,13 +185,13 @@ Nếu bắt đầu 05/11, cả hai luồng xong khoảng <b>cuối tháng 01/202
 <div class="wrap">
 <table>
 <tr><th>Việc</th><th>Ai</th><th>Cần trước (đợt, người, khoảng tuần)</th></tr>
-<tr><td>Số đơn đặt hàng cuối năm 2026 của từng NCC</td><td>Chị Nghi, chị Nhàn</td><td>5b – B – tuần 2</td></tr>
-<tr><td>File mẫu phiếu: <code>PHIEU_DE_XUAT_MAU_TRONG_IEA.xlsx</code>, <code>PHIEU_NHAP_XUAT_KHO_MAU_MOI_IEA</code>, <code>PHIEU_CHUYEN_KHO_NOI_BO_IEA</code> (bản gốc anh Nhân gửi 30/10)</td><td>Anh (gửi IT)</td><td>5c – B – tuần 2</td></tr>
+<tr><td>Số đơn đặt hàng cuối năm 2026 của từng NCC</td><td>Người mua C, người mua A</td><td>5b – B – tuần 2</td></tr>
+<tr><td>File mẫu phiếu: <code>PHIEU_DE_XUAT_MAU_TRONG_IEA.xlsx</code>, <code>PHIEU_NHAP_XUAT_KHO_MAU_MOI_IEA</code>, <code>PHIEU_CHUYEN_KHO_NOI_BO_IEA</code> (bản gốc quản lý gửi 30/10)</td><td>Anh (gửi IT)</td><td>5c – B – tuần 2</td></tr>
 <tr><td>Tiền tố số LSX theo từng khách/dòng hàng (vd MY, GP)</td><td>KHSX</td><td>2 – A – tuần 1</td></tr>
 <tr><td>Kích thước thùng cho các SKU đang chạy</td><td>KHSX / NV định mức</td><td>3 – A – tuần 2 (để có load cont)</td></tr>
 <tr><td>Tài khoản thủ kho cho từng kho trong 9 kho</td><td>Admin</td><td>7 – B – tuần 7</td></tr>
-<tr><td>Ngày chuyển tồn sang 9 kho + kiểm kê</td><td>Anh Nhân, thủ kho</td><td>7 – B – tuần 8</td></tr>
-<tr><td>Trả lời V7-1 → V7-4 (máy cắt), số máy mỗi xưởng</td><td>Anh Nhân</td><td>11 (riêng câu "Lỗ ô van" nên sớm)</td></tr>
+<tr><td>Ngày chuyển tồn sang 9 kho + kiểm kê</td><td>Quản lý, thủ kho</td><td>7 – B – tuần 8</td></tr>
+<tr><td>Trả lời V7-1 → V7-4 (máy cắt), số máy mỗi xưởng</td><td>Quản lý</td><td>11 (riêng câu "Lỗ ô van" nên sớm)</td></tr>
 </table>
 </div>
 

@@ -2,7 +2,7 @@
 
 Lỗi gốc: FE `docs/audit-2026-11-14-ra-soat-mua-hang-kho.html`, mục 04. Công tắc `SEGMENT_STOCK_ENABLED` vẫn TẮT; các sửa dưới đây chỉ có tác dụng khi bật. Không có migration.
 
-**Báo Sang:** TĐ1 và TĐ4 sửa trong phần Sang viết: `SegmentStockService.syncOrderProduction` (phía cộng) và `releaseOrderHoldings`. `ProductionOrdersService` nhận thêm `SegmentProductionService`.
+**Báo IT:** TĐ1 và TĐ4 sửa trong phần IT viết: `SegmentStockService.syncOrderProduction` (phía cộng) và `releaseOrderHoldings`. `ProductionOrdersService` nhận thêm `SegmentProductionService`.
 
 ## TĐ1 (Cao) — Phía cộng nhập đoạn "ảo" khi tổng của lệnh giảm
 

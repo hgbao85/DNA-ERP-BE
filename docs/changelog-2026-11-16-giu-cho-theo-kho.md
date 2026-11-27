@@ -1,10 +1,10 @@
 # Giữ chỗ đi theo kho — nhóm B rà soát Mua hàng + Kho 14/11 (16/11/2026)
 
-Thiết kế: FE `docs/thiet-ke-2026-11-16-giu-cho-theo-kho.html`, đã cập nhật theo trả lời của anh Nhân và Sang ngày 16/11. Sửa các lỗi CK1–CK5, XK6 và "mảnh sang Sơn".
+Thiết kế: FE `docs/thiet-ke-2026-11-16-giu-cho-theo-kho.html`, đã cập nhật theo trả lời của quản lý và Sang ngày 16/11. Sửa các lỗi CK1–CK5, XK6 và "mảnh sang Sơn".
 
 **Bất biến:** dòng `stock_reservations` ACTIVE nằm ở kho W thì phần còn giữ của nó là hàng đang có thật ở W. Dòng chỉ đổi kho khi hàng đổi kho, tức là lúc xác nhận phiếu chuyển.
 
-## Migration (DB dev chung — báo Sang trước khi chạy)
+## Migration (DB dev chung — báo IT trước khi chạy)
 
 `20261116120000_reservation_key_by_warehouse`:
 
@@ -53,13 +53,13 @@ Thiết kế: FE `docs/thiet-ke-2026-11-16-giu-cho-theo-kho.html`, đã cập nh
 - `drainPool()` / `drainPoolBestEffort()` nhận thêm `warehouseId` (bắt buộc) và chỉ rút dòng ở kho đó. Áp cho các luồng: sắt (kho Phôi của xưởng làm lệnh), tiêu hao, vật tư TP, đóng gói, vật tư kèm đan.
 - Xuất sắt bỏ chỗ so kho của dòng đầu. Kho Phôi của xưởng không đủ giữ chỗ mà lệnh còn giữ ở kho khác thì báo: "Lệnh còn giữ X ở kho Y - cần phiếu chuyển hàng của lệnh sang kho này trước khi xuất".
 
-## B5 (CK4) — Phiếu chuyển kiểm tồn kho gửi (anh Nhân 16/11 câu 2)
+## B5 (CK4) — Phiếu chuyển kiểm tồn kho gửi (quản lý 16/11 câu 2)
 
 - **Lập phiếu chuyển hàng của lệnh:** khoá `stock_quant` kho gửi. Tồn thật trừ mọi phiếu chuyển chờ nhận khác phải đủ từng dòng; thiếu thì 409.
 - **Xác nhận mọi phiếu chuyển (vật tư lẫn mảnh):** khoá `stock_quant` kho gửi theo thứ tự cố định trước khi ghi sổ. Tồn thật nhỏ hơn số thực nhận thì 409 "kiểm tra lại tồn kho gửi, không nhận thiếu được".
 - Nhận theo số thực nhận (hàng hư dọc đường) vẫn giữ: chỉ cần kho gửi đủ số thực nhận.
 
-## B6 (CK5) — Phiếu chuyển của lệnh chưa nhận khi lệnh đổi xưởng tiếp (anh Nhân 16/11 câu 1)
+## B6 (CK5) — Phiếu chuyển của lệnh chưa nhận khi lệnh đổi xưởng tiếp (quản lý 16/11 câu 1)
 
 Thủ kho kho gửi chọn theo thực tế hàng:
 
@@ -75,8 +75,8 @@ Thủ kho kho gửi chọn theo thực tế hàng:
 - **(c) Hàng đã nhập kho đích:** kho đích nhận như thường. Sau khi nhận, `WorkshopMoveService.notifyMovesNeeded()` nhắc thủ kho kho đó lập phiếu chuyển tiếp, nếu kho đó không còn thuộc xưởng của lệnh.
 - **Đánh dấu phiếu sai đích:** response phiếu chuyển có `destinationOutdated`, nghĩa là phiếu chờ nhận mà kho đích không còn thuộc xưởng của lệnh.
 - **Cảnh báo lúc đổi xưởng:** `GET /warehouse-transfers/workshop-moves/pending?productionInvoiceId=`, quyền PRODUCTION_INVOICE:VIEW, trả về các phiếu chuyển hàng của lệnh còn chờ nhận.
-  - **Việc của Sang:** hiện cảnh báo trong `ChangeWorkshopDialog`.
-  - **Việc của Sang:** anh Nhân chốt người đổi xưởng là KHSX. Route `PATCH /production-invoices/:id/workshop` hiện chỉ cho `MfgRole.PRODUCTION_MANAGER`.
+  - **Việc của IT:** hiện cảnh báo trong `ChangeWorkshopDialog`.
+  - **Việc của IT:** quản lý chốt người đổi xưởng là KHSX. Route `PATCH /production-invoices/:id/workshop` hiện chỉ cho `MfgRole.PRODUCTION_MANAGER`.
 
 FE (`InternalTransferSections.tsx`):
 
