@@ -24,7 +24,7 @@ năng xưởng / kho**. Code kiểm kê kho Hàn đã có (28/11, xem cuối fil
 
 | # | Việc | Ai | Ghi chú |
 |---|---|---|---|
-| A1 | Làm xong đợt 2 của 5 tính năng xưởng / kho (giao nhận giữa tổ) | IT | Điều kiện để bật giao nhận cùng ngày |
+| A1 | Làm xong đợt 2 của 5 tính năng xưởng / kho (giao nhận giữa tổ) | IT | Điều kiện để bật giao nhận cùng ngày. Lượt 1 (đầu kỳ + 2 lỗi câu 1) xong 28/11 |
 | A2 | Chạy thử trên bản thử (bản sao DB): bật cả 2 công tắc, chạy chuyển đổi, lập phiếu giao đoạn Phôi → Hàn, cho Phôi / Hàn / Sơn / KCS báo như thật, kiểm kê thử cả kho Phôi lẫn kho Hàn | IT | Quản lý chốt: thử ổn mới chốt ngày nghỉ |
 | A3 | Hỏi quản lý ngày xưởng nghỉ để kiểm kê | IT | Sau A2 |
 | A4 | Trên production (công tắc còn tắt): chạy chuyển đổi **xem thử** `POST /api/v1/segment-stock/legacy-conversion` `{ "dryRun": true }` bằng tài khoản Admin. Đối chiếu báo cáo với sổ thủ kho Phôi | IT + thủ kho Phôi | Xem thử chạy rồi rollback, không ghi gì |
@@ -40,6 +40,8 @@ năng xưởng / kho**. Code kiểm kê kho Hàn đã có (28/11, xem cuối fil
 | B1 | Xác nhận không còn ai báo sản lượng / gửi KCS / chấm KCS. Hàn bấm Gửi KCS hết các mảnh đã hàn xong | QLSX / tổ Hàn | Thanh phôi đã hàn vào mảnh thì không đếm được nữa |
 | B2 | Render: đặt `SEGMENT_STOCK_ENABLED=true` và `STAGE_HANDOVER_ENABLED=true` cho BE, chờ server khởi động lại xong | IT | Giao nhận cần tồn đoạn bật mới có tác dụng |
 | B3 | **Ngay sau khi server lên:** chạy chuyển đổi **thật** `{ "dryRun": false }`. Lưu báo cáo trả về | IT | Báo "Đã có dữ liệu tồn đoạn theo lệnh" = có người báo chen vào: tắt công tắc, dọn dữ liệu vừa sinh rồi làm lại B2–B3 |
+| B3b | QLSX mở "Sản lượng xưởng" > tab "Giao nhận giữa tổ", bấm **Ghi đầu kỳ** (1 lần, ngay sau B3): số đã báo Hàn / Sơn trước ngày bật thành "đã nhận" | QLSX | Câu 2 chốt 28/11 (cách 1). Ghi muộn sẽ tính cả phần báo sau ngày bật |
+| B3c | Thủ kho Hàn Phú An đếm khung đã Hàn đạt đang chờ ở tổ Sơn, nhập ở "Phân phối nội bộ" > "Giao khung cho Sơn" > khối **Đầu kỳ** (mỗi SKU, mảnh 1 lần) | Thủ kho Hàn Phú An | Sơn coi như đã nhận, khung vào tồn kho Sơn |
 | B4 | Tổ Hàn đếm thanh phôi còn ở tổ, **theo lệnh và mã đoạn** | Tổ trưởng Hàn | Để lập phiếu giao đoạn đúng lệnh |
 | B5 | Thủ kho Phôi lập **phiếu giao đoạn** cho Hàn đúng số B4, thủ kho Hàn xác nhận phiếu | Thủ kho Phôi + thủ kho Hàn | Chuyển cả phần giữ của lệnh sang kho Hàn |
 | B6 | Thủ kho Phôi đếm đoạn còn ở kho Phôi, nhập tại tab **Tồn đoạn**, nút **Kiểm kê** từng mã | Thủ kho Phôi | Nhập SỐ ĐẾM, không phải số chênh; hệ thống tự ghi phần chênh |

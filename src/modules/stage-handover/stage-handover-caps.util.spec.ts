@@ -1,6 +1,7 @@
 import {
   effectiveMaxNow,
   framePieceCap,
+  outstandingAdvance,
   segmentPieceCaps,
   segmentPool,
   SegmentPieceInput,
@@ -93,5 +94,61 @@ describe('stage-handover-caps.util - trần theo hàng đã nhận (giao nhận 
     expect(effectiveMaxNow(2, 9)).toBe(2);
     expect(effectiveMaxNow(5, null)).toBe(5);
     expect(effectiveMaxNow(5, undefined)).toBe(5);
+  });
+});
+
+describe('outstandingAdvance - mở chặn là ứng trước (lượt 1, chốt 28/11/2026)', () => {
+  const t = (h: number) => new Date(Date.UTC(2026, 10, 28, h));
+  it('phiếu sau lần mở chặn trả dần; phiếu trước không trả', () => {
+    expect(
+      outstandingAdvance([
+        { at: t(1), receipt: 10 },
+        { at: t(2), advance: 5 },
+      ]),
+    ).toBe(5);
+    expect(
+      outstandingAdvance([
+        { at: t(2), advance: 5 },
+        { at: t(3), receipt: 3 },
+      ]),
+    ).toBe(2);
+    expect(
+      outstandingAdvance([
+        { at: t(2), advance: 5 },
+        { at: t(3), receipt: 8 },
+      ]),
+    ).toBe(0);
+  });
+  it('phiếu trả dư không để dành cho lần mở chặn sau', () => {
+    expect(
+      outstandingAdvance([
+        { at: t(1), advance: 2 },
+        { at: t(2), receipt: 10 },
+        { at: t(3), advance: 4 },
+      ]),
+    ).toBe(4);
+  });
+  it('cùng thời điểm: ứng trước tính trước; không thứ tự đầu vào', () => {
+    expect(
+      outstandingAdvance([
+        { at: t(2), receipt: 3 },
+        { at: t(2), advance: 5 },
+      ]),
+    ).toBe(2);
+    expect(outstandingAdvance([])).toBe(0);
+  });
+  it('segmentPieceCaps dùng phần ứng còn lại thay cho tổng mở chặn', () => {
+    const piece: SegmentPieceInput = {
+      key: '70:7',
+      usedQty: 6,
+      overrideQty: 2,
+      qtyPerPieceByCode: new Map([['1:', 1]]),
+    };
+    // Nhận 6 (gồm 2 phiếu bù), ứng còn 0 -> còn 0 (trước: 6 + 2 - 6 = 2).
+    expect(
+      segmentPieceCaps([piece], new Map([['1:', 6]]), new Map([['1:', 0]])).get('70:7')
+        ?.receivedLeft,
+    ).toBe(0);
+    expect(segmentPieceCaps([piece], new Map([['1:', 6]])).get('70:7')?.receivedLeft).toBe(2);
   });
 });

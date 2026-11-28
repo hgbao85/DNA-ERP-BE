@@ -12,6 +12,9 @@ import {
 } from './stage-handover.service';
 
 const dec = (n: number) => ({ toNumber: () => n });
+const T1 = new Date('2026-11-28T01:00:00Z');
+const T2 = new Date('2026-11-28T02:00:00Z');
+const T3 = new Date('2026-11-28T03:00:00Z');
 const sumQty = (n: number | null) => ({ _sum: { qty: n === null ? null : dec(n) } });
 
 /** Lệnh 100: SKU 70 (bản định mức 9, số lượng 10). Mảnh 7 cần Hàn, 2 mã đoạn (cỡ 1 ×1, cỡ 2 ×2). Mảnh 8 cần Hàn + Sơn, không đoạn. */
@@ -41,9 +44,13 @@ function makeDb(over: Record<string, unknown> = {}) {
       ]),
     },
     productionBatch: { groupBy: jest.fn().mockResolvedValue([]) },
-    stageHandoverOverride: { groupBy: jest.fn().mockResolvedValue([]), create: jest.fn() },
-    issueSlipLine: { groupBy: jest.fn().mockResolvedValue([]), aggregate: jest.fn() },
-    warehouseTransferPieceItem: { groupBy: jest.fn().mockResolvedValue([]) },
+    stageHandoverOverride: { findMany: jest.fn().mockResolvedValue([]), create: jest.fn() },
+    issueSlipLine: {
+      groupBy: jest.fn().mockResolvedValue([]),
+      findMany: jest.fn().mockResolvedValue([]),
+      aggregate: jest.fn(),
+    },
+    warehouseTransferPieceItem: { findMany: jest.fn().mockResolvedValue([]) },
     piece: { findUnique: jest.fn().mockResolvedValue({ name: 'Chân A', code: 'CA' }) },
     productionInvoice: { findUnique: jest.fn() },
     productionInvoiceItem: { findFirst: jest.fn() },
@@ -141,9 +148,14 @@ describe('StageHandoverService - giao nhận giữa tổ (24/11/2026)', () => {
   describe('assertReceivedCapInTx - Hàn theo đoạn đã nhận', () => {
     beforeEach(() => {
       // Đã giao cho Hàn: cỡ 1 × 6, cỡ 2 × 10 -> mảnh 7 còn min(6/1, 10/2) = 5.
-      db.issueSlipLine.groupBy.mockResolvedValue([
-        { segmentSpecId: 1n, segmentSteps: '', _sum: { qty: dec(6) } },
-        { segmentSpecId: 2n, segmentSteps: '', _sum: { qty: dec(10) } },
+      db.issueSlipLine.findMany.mockResolvedValue([
+        { segmentSpecId: 1n, segmentSteps: '', qty: dec(6), slip: { issuedAt: T1, createdAt: T1 } },
+        {
+          segmentSpecId: 2n,
+          segmentSteps: '',
+          qty: dec(10),
+          slip: { issuedAt: T1, createdAt: T1 },
+        },
       ]);
     });
 
@@ -175,8 +187,8 @@ describe('StageHandoverService - giao nhận giữa tổ (24/11/2026)', () => {
     });
 
     it('QLSX mở chặn N mảnh nâng phần còn theo hàng đã nhận', async () => {
-      db.stageHandoverOverride.groupBy.mockResolvedValue([
-        { productionOrderId: 70n, pieceId: 7n, _sum: { qty: dec(2) } },
+      db.stageHandoverOverride.findMany.mockResolvedValue([
+        { productionOrderId: 70n, pieceId: 7n, qty: dec(2), createdAt: T2 },
       ]);
       await expect(
         service.assertReceivedCapInTx(tx(), {
@@ -202,11 +214,16 @@ describe('StageHandoverService - giao nhận giữa tổ (24/11/2026)', () => {
 
   describe('assertReceivedCapInTx - Sơn theo mảnh đã hàn đã nhận', () => {
     it('nhận qua phiếu giao + phiếu chuyển kho vào kho Sơn đã xác nhận', async () => {
-      db.issueSlipLine.groupBy.mockResolvedValue([
-        { productionOrderId: 70n, pieceId: 8n, _sum: { qty: dec(3) } },
+      db.issueSlipLine.findMany.mockResolvedValue([
+        { productionOrderId: 70n, pieceId: 8n, qty: dec(3), slip: { issuedAt: T1, createdAt: T1 } },
       ]);
-      db.warehouseTransferPieceItem.groupBy.mockResolvedValue([
-        { productionOrderId: 70n, pieceId: 8n, _sum: { quantity: 2 } },
+      db.warehouseTransferPieceItem.findMany.mockResolvedValue([
+        {
+          productionOrderId: 70n,
+          pieceId: 8n,
+          quantity: 2,
+          transfer: { confirmedAt: T1, createdAt: T1 },
+        },
       ]);
       db.productionBatch.groupBy.mockResolvedValue([
         { productionOrderId: 70n, pieceId: 8n, _sum: { reportedQty: 1 } },
@@ -227,6 +244,49 @@ describe('StageHandoverService - giao nhận giữa tổ (24/11/2026)', () => {
         .catch((e: unknown) => e);
       expect((err as Error).message).toContain('đã nhận 5, đã làm 1, còn 4');
       expect((err as Error).message).toContain('qua kho Hàn');
+    });
+
+    it('lượt 1 (28/11, cách a): mở chặn 2 rồi kho lập phiếu bù 2 -> chỉ tính 1 lần, không cộng thành 4', async () => {
+      // Đã nhận 3 lúc T1, đã làm 5 (3 + 2 mở chặn lúc T2), phiếu bù 2 lúc T3.
+      db.issueSlipLine.findMany.mockResolvedValue([
+        { productionOrderId: 70n, pieceId: 8n, qty: dec(3), slip: { issuedAt: T1, createdAt: T1 } },
+        { productionOrderId: 70n, pieceId: 8n, qty: dec(2), slip: { issuedAt: T3, createdAt: T3 } },
+      ]);
+      db.stageHandoverOverride.findMany.mockResolvedValue([
+        { productionOrderId: 70n, pieceId: 8n, qty: dec(2), createdAt: T2 },
+      ]);
+      db.productionBatch.groupBy.mockResolvedValue([
+        { productionOrderId: 70n, pieceId: 8n, _sum: { reportedQty: 5 } },
+      ]);
+      const err = await service
+        .assertReceivedCapInTx(tx(), {
+          productionOrderId: 70n,
+          pieceId: 8n,
+          stage: MfgStage.SON,
+          qty: 1,
+        })
+        .catch((e: unknown) => e);
+      expect((err as Error).message).toContain('đã nhận 5, đã làm 5, còn 0');
+    });
+
+    it('phiếu lập TRƯỚC lần mở chặn không trả phần mở chặn', async () => {
+      db.issueSlipLine.findMany.mockResolvedValue([
+        { productionOrderId: 70n, pieceId: 8n, qty: dec(3), slip: { issuedAt: T1, createdAt: T1 } },
+      ]);
+      db.stageHandoverOverride.findMany.mockResolvedValue([
+        { productionOrderId: 70n, pieceId: 8n, qty: dec(2), createdAt: T2 },
+      ]);
+      db.productionBatch.groupBy.mockResolvedValue([
+        { productionOrderId: 70n, pieceId: 8n, _sum: { reportedQty: 3 } },
+      ]);
+      await expect(
+        service.assertReceivedCapInTx(tx(), {
+          productionOrderId: 70n,
+          pieceId: 8n,
+          stage: MfgStage.SON,
+          qty: 2,
+        }),
+      ).resolves.toBeUndefined();
     });
   });
 
