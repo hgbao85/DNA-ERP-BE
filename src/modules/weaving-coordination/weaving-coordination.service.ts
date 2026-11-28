@@ -6,6 +6,7 @@ import {
   WeavingFollowUpPromiseStatus,
 } from '../../generated/prisma/client';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
+import { isCancelledOrder } from '../../common/utils/cancelled-order.util';
 import { auditEvent } from '../../common/utils/audit-event.util';
 import { vnDayKey } from '../../common/utils/floor-stats.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
@@ -52,6 +53,8 @@ export interface WeavingPromiseView {
 
 export interface WeavingBoardRow {
   key: string;
+  /** Câu 17 (chốt 25/11/2026): lệnh đã huỷ mà điểm đan còn giữ hàng - vẫn hiện để đòi về (đã trả hết thì ẩn). */
+  cancelled: boolean;
   weavingPointId: string;
   weavingPointCode: string;
   weavingPointName: string;
@@ -233,6 +236,7 @@ export class WeavingCoordinationService {
         select: {
           id: true,
           poNumber: true,
+          status: true,
           mfgProduct: { select: { name: true } },
           productionInvoiceItem: {
             select: {
@@ -288,9 +292,13 @@ export class WeavingCoordinationService {
       const stage = item.stages[0];
       const dueDate = stage ? vnDayKey(stage.deadline) : null;
       const { status, held, daysLeft } = weavingRowStatus(a.sent, a.returned, dueDate, today);
+      // Câu 17 (chốt 25/11/2026): lệnh đã huỷ - ẩn, trừ khi điểm đan còn giữ hàng của lệnh đó (vẫn hiện để đòi về).
+      const cancelled = isCancelledOrder(order);
+      if (cancelled && held <= 0) continue;
       const lp = latestPromise.get(key);
       allRows.push({
         key,
+        cancelled,
         weavingPointId: a.pointId.toString(),
         weavingPointCode: point.code,
         weavingPointName: pointName(point),
