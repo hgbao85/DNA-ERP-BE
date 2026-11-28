@@ -239,8 +239,11 @@ describe('CkDgQrService', () => {
           service.gradeBatch('7', { passedQty: 8, reworkQty: 0, scrapQty: 0 }, 'k'),
         ).rejects.toThrow('phải bằng');
         await expect(
-          service.gradeBatch('7', { passedQty: 6, reworkQty: 3, scrapQty: 1 }, 'k'),
+          service.gradeBatch('7', { passedQty: 6, reworkQty: 4, scrapQty: 0 }, 'k'),
         ).rejects.toThrow('nguyên nhân');
+        await expect(
+          service.gradeBatch('7', { passedQty: 6, reworkQty: 3, scrapQty: 1 }, 'k'),
+        ).rejects.toThrow('không còn chấm');
         expect(prisma.$transaction).not.toHaveBeenCalled();
       });
     });

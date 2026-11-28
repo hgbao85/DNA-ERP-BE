@@ -860,7 +860,7 @@ export class FloorReviewService {
 
   // ─── KCS chốt để chấm ───────────────────────────────────────────────────────
   //
-  // Luật chung 5 hàm: không kiểm xưởng (KCS chấm mọi xưởng), không phát tin *_TO_KCS (KCS tự thấy đợt), truyền VAI CỦA TỔ
+  // Luật chung 5 hàm: không kiểm xưởng (từ câu 10 - 25/11/2026 - màn KCS đã lọc theo xưởng của tài khoản, KCS không thấy đợt xưởng khác), không phát tin *_TO_KCS (KCS tự thấy đợt), truyền VAI CỦA TỔ
   // (HAN / SON / PHOI) chứ không phải 'KCS' (assertMfgRoleMatchesStage), nhãn cổng lệnh dừng = 'chốt để chấm'.
   // Đợt bị QLSX hủy hết thì đã bị xoá: hàm cũ ném 404 kỹ thuật -> đổi thành 409 câu lời thường.
 

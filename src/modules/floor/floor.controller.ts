@@ -79,7 +79,8 @@ function parseStage(raw: string): FloorWorkerStage {
  * QR tại máy (2026-10-13, changelog-2026-10-08-ke-hoach-tem-qr-bo-sat-phoi.md mục 22).
  * - `floor/scan/*`, `floor/my-output`: công nhân (FLOOR_WORKER hoặc tài khoản thống kê của tổ) - FLOOR_REPORT
  *   VIEW/CREATE.
- * - `floor/review`: QLSX xem đợt đang mở + KCS (KCS_STAFF) xem để chấm (P1, 18/11/2026: KCS tự chốt, không lọc xưởng).
+ * - `floor/review`: QLSX xem đợt đang mở + KCS (KCS_STAFF) xem để chấm (P1, 18/11/2026: KCS tự chốt). Câu 10 (25/11/2026): KCS
+ *   gắn xưởng chỉ thấy đợt xưởng mình; chưa gắn xưởng thấy hết.
  * - `floor/kcs/.../close`: KCS chốt đợt công nhân vừa báo để chấm - QC_REVIEW:CREATE + @RequireRole(KCS_STAFF).
  * - còn lại: QLSX - thêm @RequireRole(PRODUCTION_MANAGER) như floor-start, để BOSS (VIEW+APPROVE mọi module)
  *   không tự thao tác được. 3 route `send-kcs` cũ của QLSX giữ nguyên decorator, trả 403 (KCS tự chấm).
@@ -408,19 +409,14 @@ export class FloorController {
   // ─── QLSX + KCS: xem đợt đang mở; KCS chốt để chấm; QLSX xem ───────────
 
   /**
-   * QLSX lọc theo xưởng như cũ. Tài khoản KCS_STAFF không có vai QLSX thì KHÔNG lọc xưởng (kể cả khi gắn xưởng: getScope
-   * áp cho mọi tài khoản có workshopId) - KCS chấm mọi xưởng.
+   * Lọc theo xưởng của tài khoản: QLSX như cũ; câu 10 (chốt 25/11/2026) KCS Hàn / Sơn mỗi xưởng 1 người, chỉ thấy đợt xưởng mình
+   * (Admin gắn xưởng cho tài khoản KCS). Tài khoản chưa gắn xưởng thấy hết như trước.
    */
   @Get('review')
   @RequirePermissions(perm(PermissionAction.VIEW))
   @RequireRole(QLSX, KCS)
-  listOpen(
-    @Query() query: FloorReviewQueryDto,
-    @CurrentUser('id') userId: string,
-    @CurrentUser('roles') roles: string[],
-  ) {
-    const limitToWorkshop = (roles ?? []).includes(QLSX);
-    return this.review.listOpen(query.stage, query.productionInvoiceId, userId, limitToWorkshop);
+  listOpen(@Query() query: FloorReviewQueryDto, @CurrentUser('id') userId: string) {
+    return this.review.listOpen(query.stage, query.productionInvoiceId, userId, true);
   }
 
   /** 3 route gửi KCS cũ: KCS tự chấm nên không còn bước gửi - giữ route để bản FE cũ nhận câu rõ ràng thay vì 404. */

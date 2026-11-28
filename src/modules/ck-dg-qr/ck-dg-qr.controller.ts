@@ -8,6 +8,7 @@ import { RequirePermissions } from '../../common/decorators/require-permissions.
 import type { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
 import { CkDgQrService } from './ck-dg-qr.service';
 import {
+  AddKcsDefectReasonDto,
   CancelPackingReportDto,
   CkDgScanQueryDto,
   GradeTransferCheckBatchDto,
@@ -103,6 +104,14 @@ export class CkDgQrController {
     @CurrentUser('id') userId: string,
   ) {
     return this.service.gradeBatch(id, dto, userId);
+  }
+
+  /** Câu 10 (25/11/2026): KCS chuyền kiểm tự thêm nguyên nhân lỗi khi chấm. */
+  @Post('kcs/defect-reasons')
+  @RequirePermissions(floor(PermissionAction.CREATE))
+  @RequireMfgRole(MfgRole.KCS_CHUYEN_KIEM)
+  addDefectReason(@Body() dto: AddKcsDefectReasonDto) {
+    return this.service.addDefectReason(dto.label);
   }
 
   // ─── Kho Thành phẩm ──────────────────────────────────────────────────────────────────────

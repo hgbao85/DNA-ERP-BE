@@ -224,16 +224,11 @@ describe('FloorController - KCS xem / chốt, QLSX bỏ gửi KCS (P1)', () => {
     expect(Object.values(review).every((m) => m.mock.calls.length === 0)).toBe(true);
   });
 
-  it('GET review: QLSX (kể cả vừa QLSX vừa KCS) lọc xưởng; KCS không có vai QLSX thì KHÔNG lọc xưởng', async () => {
-    await controller.listOpen({ stage: 'PHOI' }, 'u1', [QLSX]);
+  it('GET review: luôn lọc theo xưởng của tài khoản - QLSX và (câu 10, chốt 25/11/2026) KCS', async () => {
+    await controller.listOpen({ stage: 'PHOI' }, 'u1');
     expect(review.listOpen).toHaveBeenLastCalledWith('PHOI', undefined, 'u1', true);
-    await controller.listOpen({ stage: 'HAN', productionInvoiceId: '9' }, 'u2', [
-      QLSX,
-      BUSINESS_ROLES.KCS_STAFF,
-    ]);
-    expect(review.listOpen).toHaveBeenLastCalledWith('HAN', '9', 'u2', true);
-    await controller.listOpen({ stage: 'SON' }, 'u3', [BUSINESS_ROLES.KCS_STAFF]);
-    expect(review.listOpen).toHaveBeenLastCalledWith('SON', undefined, 'u3', false);
+    await controller.listOpen({ stage: 'SON', productionInvoiceId: '9' }, 'u3');
+    expect(review.listOpen).toHaveBeenLastCalledWith('SON', '9', 'u3', true);
   });
 
   it('5 route close chuyển đúng body + người chốt cho FloorReviewService', async () => {
