@@ -48,6 +48,7 @@ import { SegmentProductionService } from '../../segment-stock/segment-production
 import { StockLedgerService } from '../../stock/stock-ledger.service';
 import { WovenStockService } from '../../woven-stock/woven-stock.service';
 import { WorkshopWarehouseResolver } from '../../stock/workshop-warehouse.util';
+import { loadSteelUsage } from '../../steel-issues/steel-usage.util';
 import { DecideCutDto, PendingSteelReturnDto } from './order-cancellation.dto';
 import {
   barsLeftCutTeamById,
@@ -177,6 +178,8 @@ export interface CancelImpactDto {
   }[];
   signedPurchases: {
     itemId: string;
+    /** Lỗi 4 (28/11): true = đã mua xong / đã nhập kho (PURCHASED); false = đang mua (đã ký NCC, chờ hàng). */
+    purchased: boolean;
     materialCode: string;
     materialName: string;
     unit: string;
@@ -191,6 +194,8 @@ export interface CancelImpactDto {
   }[];
   /** Tổng tiền các dòng có giá (dòng thiếu giá không cộng - xem missingPriceCount). */
   signedAmountTotal: number;
+  /** Phần tiền của dòng đã mua xong (nằm trong signedAmountTotal). */
+  purchasedAmountTotal: number;
   missingPriceCount: number;
   /** Hàng đã làm ra của SKU này theo công đoạn. */
   stages: { stage: string; label: string; rows: { name: string; qty: number }[] }[];
@@ -319,10 +324,13 @@ export class OrderCancellationService {
         : await this.prisma.purchaseProposalItem.findMany({
             where: {
               proposal: { productionInvoiceId: piId },
-              status: PurchaseProposalStatus.PURCHASING,
+              // Lỗi 4 (nghiệp vụ báo 28/11): cả dòng đã mua xong / đã nhập kho (PURCHASED) - trước chỉ đếm dòng đang mua nên Sếp không
+              // thấy tiền đã bỏ ra cho sắt / vật tư đã về.
+              status: { in: [PurchaseProposalStatus.PURCHASING, PurchaseProposalStatus.PURCHASED] },
             },
             select: {
               id: true,
+              status: true,
               buyQty: true,
               orderQty: true,
               receivedQty: true,
@@ -421,24 +429,28 @@ export class OrderCancellationService {
       },
     ].filter((s) => s.rows.length > 0);
 
-    const signedPurchases = purchases.map((p) => {
-      const signedQty = (p.orderQty ?? p.buyQty).toNumber();
-      const price = p.quotes[0]?.unitPrice?.toNumber() ?? null;
-      return {
-        itemId: p.id.toString(),
-        materialCode: p.material.code,
-        materialName: p.material.name,
-        unit: p.material.unit,
-        signedQty,
-        receivedQty: p.receivedQty.toNumber(),
-        unitPrice: price,
-        amount: price == null ? null : Math.round(signedQty * price),
-        supplierName: p.supplierOrder?.supplier.name ?? p.quotes[0]?.supplierName ?? null,
-        supplierOrderCode: p.supplierOrder
-          ? supplierOrderCode(p.supplierOrder.seq, p.supplierOrder.year)
-          : null,
-      };
-    });
+    const signedPurchases = purchases
+      .map((p) => {
+        const signedQty = (p.orderQty ?? p.buyQty).toNumber();
+        const price = p.quotes[0]?.unitPrice?.toNumber() ?? null;
+        return {
+          itemId: p.id.toString(),
+          purchased: p.status === PurchaseProposalStatus.PURCHASED,
+          materialCode: p.material.code,
+          materialName: p.material.name,
+          unit: p.material.unit,
+          signedQty,
+          receivedQty: p.receivedQty.toNumber(),
+          unitPrice: price,
+          amount: price == null ? null : Math.round(signedQty * price),
+          supplierName: p.supplierOrder?.supplier.name ?? p.quotes[0]?.supplierName ?? null,
+          supplierOrderCode: p.supplierOrder
+            ? supplierOrderCode(p.supplierOrder.seq, p.supplierOrder.year)
+            : null,
+        };
+      })
+      // Dòng đã đóng về 0 (huỷ lệnh đóng dòng chưa ký) không có tiền - bỏ.
+      .filter((p) => p.signedQty > 0 || p.receivedQty > 0);
     return {
       requestId: req.id.toString(),
       fromSnapshot: saved != null,
@@ -454,6 +466,9 @@ export class OrderCancellationService {
       })),
       signedPurchases,
       signedAmountTotal: signedPurchases.reduce((sum, p) => sum + (p.amount ?? 0), 0),
+      purchasedAmountTotal: signedPurchases
+        .filter((p) => p.purchased)
+        .reduce((sum, p) => sum + (p.amount ?? 0), 0),
       missingPriceCount: signedPurchases.filter((p) => p.amount == null).length,
       stages,
     };
@@ -548,7 +563,7 @@ export class OrderCancellationService {
   }
 
   private async cutSteelRow(r: RequestRow, piId: bigint): Promise<CutSteelRowDto> {
-    const [pi, issues, leftover, returns, otherActive] = await Promise.all([
+    const [pi, issues, returns, otherActive] = await Promise.all([
       this.prisma.productionInvoice.findUnique({ where: { id: piId }, select: { isMerged: true } }),
       this.prisma.steelIssue.findMany({
         where: { productionInvoiceId: piId },
@@ -560,7 +575,6 @@ export class OrderCancellationService {
           material: { select: { code: true, name: true } },
         },
       }),
-      this.steelLeftoverMm(this.prisma, piId),
       this.prisma.steelReturn.findMany({
         where: { productionInvoiceId: piId },
         select: {
@@ -598,12 +612,21 @@ export class OrderCancellationService {
       if (i.status === SteelIssueStatus.ISSUED) m.unreceivedBars += i.barCount;
       byMat.set(k, m);
     }
-    for (const [materialId, mm] of leftover) {
-      const m = byMat.get(materialId);
-      if (m) m.leftoverMm = mm;
-    }
     // Nghiệp vụ 28/11 (phương án a): "đã nhập trả" = số cây đã rời tổ cắt (thủ kho đếm thiếu thì phần chênh còn ở tổ).
     const left = barsLeftCutTeamById(returns);
+    // Lỗi 3 (nghiệp vụ báo 28/11): "Tổ cắt còn" hiện cùng công thức với lúc báo cắt / cho cắt tiếp (sắt dùng được sau tề đầu - đoạn đã
+    // báo kể cả mạch cưa - đã nhập trả) - trước hiện cận trên không trừ tề đầu / mạch cưa nên lệch với số báo cắt (3.010 / 2.998).
+    // Phép chặn "Ngưng - nhập trả" vẫn dùng cận trên (steelLeftoverMm) để trả được cây nguyên chưa cắt.
+    for (const materialId of byMat.keys()) {
+      const usage = await loadSteelUsage(this.prisma, piId, BigInt(materialId));
+      const returnedMm = returns
+        .filter((x) => x.materialId.toString() === materialId)
+        .reduce((t, x) => t + x.lengthMm * (left.get(x.id.toString()) ?? x.bars), 0);
+      byMat.get(materialId)!.leftoverMm = Math.max(
+        0,
+        Math.floor(usage.usableMm - usage.reportedMm - returnedMm),
+      );
+    }
     const outstanding = outstandingShortById(returns);
     for (const ret of returns) {
       const m = byMat.get(ret.materialId.toString());

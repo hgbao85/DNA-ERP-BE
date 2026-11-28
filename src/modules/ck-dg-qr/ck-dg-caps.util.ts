@@ -1,4 +1,9 @@
-import { TransferCheckBatchStatus, TransferStatus } from '../../generated/prisma/client';
+import {
+  CancelledGoodsKind,
+  TransferCheckBatchStatus,
+  TransferStatus,
+} from '../../generated/prisma/client';
+import { WOVEN_TRANSFER_RECEIVED } from '../woven-stock/woven-stock.service';
 import type { PrismaServiceType, PrismaTx } from '../../prisma/prisma.service';
 import { PIECE_TRANSFER_LEAVES_FRAME } from '../warehouse-transfers/transfer-routes.constant';
 
@@ -93,7 +98,11 @@ export const kcsExtraDefect = (reportedPassed: number, kcsPassed: number): numbe
 
 type Db = Pick<
   PrismaTx,
-  'transferCheckResult' | 'transferCheckBatch' | 'weavingReceipt' | 'warehouseTransferPieceItem'
+  | 'transferCheckResult'
+  | 'transferCheckBatch'
+  | 'weavingReceipt'
+  | 'warehouseTransferPieceItem'
+  | 'cancelledGoodsTransfer'
 >;
 
 /** Phần đợt QR đang chiếm của (SKU, mảnh): chờ KCS (đạt + lỗi) và đã bỏ. Dùng cả ở recordTransferCheck khi bật công tắc. */
@@ -126,19 +135,35 @@ export async function loadBatchReservations(
   };
 }
 
-/** "Hiện có" của 1 mảnh - cùng nguồn recordTransferCheck: mảnh đan = Σ nhập đan về, mảnh không đan = Σ phiếu chuyển kho CONFIRMED. */
+/**
+ * "Hiện có" của 1 mảnh - cùng nguồn recordTransferCheck: mảnh đan = Σ nhập đan về + khung đã đan lấy từ SKU huỷ (đã nhận), mảnh
+ * không đan = Σ phiếu chuyển kho CONFIRMED. Lỗi 5 (nghiệp vụ báo 28/11): trước chỉ cộng nhập đan nên quét QR chuyền kiểm báo vượt
+ * (0) với khung lấy từ SKU huỷ, trong khi màn thủ kho (recordTransferCheck) đếm đúng.
+ */
 export async function loadReadyQty(
-  db: Pick<PrismaTx, 'weavingReceipt' | 'warehouseTransferPieceItem'>,
+  db: Pick<PrismaTx, 'weavingReceipt' | 'warehouseTransferPieceItem' | 'cancelledGoodsTransfer'>,
   productionOrderId: bigint,
   pieceId: bigint,
   isWoven: boolean,
+  itemId: bigint,
 ): Promise<number> {
   if (isWoven) {
-    const r = await db.weavingReceipt.aggregate({
-      where: { productionOrderId, pieceId },
-      _sum: { qty: true },
-    });
-    return r._sum.qty ?? 0;
+    const [r, t] = await Promise.all([
+      db.weavingReceipt.aggregate({
+        where: { productionOrderId, pieceId },
+        _sum: { qty: true },
+      }),
+      db.cancelledGoodsTransfer.aggregate({
+        where: {
+          targetItemId: itemId,
+          pieceId,
+          kind: CancelledGoodsKind.WOVEN,
+          ...WOVEN_TRANSFER_RECEIVED,
+        },
+        _sum: { qty: true },
+      }),
+    ]);
+    return (r._sum.qty ?? 0) + (t._sum.qty ?? 0);
   }
   const r = await db.warehouseTransferPieceItem.aggregate({
     where: {
@@ -157,7 +182,7 @@ export async function loadTransferCheckUsage(
   input: { itemId: bigint; productionOrderId: bigint; pieceId: bigint; isWoven: boolean },
 ): Promise<{ readyQty: number; usage: TransferCheckUsage }> {
   const [readyQty, checked, reserved] = await Promise.all([
-    loadReadyQty(db, input.productionOrderId, input.pieceId, input.isWoven),
+    loadReadyQty(db, input.productionOrderId, input.pieceId, input.isWoven, input.itemId),
     db.transferCheckResult.aggregate({
       where: { productionInvoiceItemId: input.itemId, pieceId: input.pieceId },
       _sum: { checkedQty: true },
