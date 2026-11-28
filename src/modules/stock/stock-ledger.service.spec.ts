@@ -389,6 +389,38 @@ describe('StockLedgerService', () => {
         expect(prisma.stockLedger.create).not.toHaveBeenCalled();
       });
 
+      it('28/11 kiểm kê mảnh (thủ kho Sơn): so tồn đúng ô (kho, mảnh), khớp thì ghi, lệch thì 409 không ghi', async () => {
+        prisma.$queryRaw.mockResolvedValue([{ qty: { toNumber: () => 40 } }]);
+        prisma.stockLedger.findUnique.mockResolvedValue(null);
+        prisma.stockLedger.create.mockResolvedValue(ledgerRow());
+        const call = (expected: number, key: string) =>
+          service.adjust(
+            {
+              fromWarehouseId: '2',
+              toWarehouseId: '1',
+              pieceId: '77',
+              qty: 4,
+              note: 'Kiểm kê mảnh',
+              expectedWarehouseId: '2',
+              expectedCurrentQty: expected,
+            },
+            key,
+            'user-1',
+            toWh.code,
+          );
+
+        await call(40, 'idem-piece-1');
+        const sql = (
+          (prisma.$queryRaw.mock.calls as unknown[][])[1][0] as TemplateStringsArray
+        ).join('?');
+        expect(sql).toContain('"pieceId" = ?');
+        expect((prisma.$queryRaw.mock.calls as unknown[][])[1].slice(1)).toEqual([2n, 77n]);
+        expect(prisma.stockLedger.create).toHaveBeenCalledTimes(1);
+
+        await expect(call(45, 'idem-piece-2')).rejects.toThrow(ConflictException);
+        expect(prisma.stockLedger.create).toHaveBeenCalledTimes(1);
+      });
+
       it('CHẶN (400) khi expectedWarehouseId không trùng fromWarehouseId hoặc toWarehouseId', async () => {
         await expect(
           service.adjust(

@@ -324,8 +324,33 @@ export class StockLedgerService {
         'expectedWarehouseId phải trùng fromWarehouseId hoặc toWarehouseId',
       );
     }
+    // 28/11/2026 (nghiệp vụ 27/11: thủ kho Sơn đếm mảnh): kiểm kê mảnh cũng so tồn lúc mở form - 1 ô (kho, mảnh).
+    if (input.pieceId !== undefined) {
+      const pieceId = input.pieceId;
+      const done = await this.prisma.$transaction(async (tx) => {
+        const raced = await this.replayAdjustInTx(tx, input);
+        if (raced) return { raced };
+        const locked = await tx.$queryRaw<{ qty: Prisma.Decimal }[]>`
+          SELECT "qty" FROM "stock_quant"
+          WHERE "warehouseId" = ${expectedWarehouseId} AND "pieceId" = ${pieceId}
+          FOR UPDATE
+        `;
+        const currentQty = locked.reduce((sum, row) => sum + row.qty.toNumber(), 0);
+        if (Math.abs(currentQty - dto.expectedCurrentQty!) > 1e-6) {
+          throw new ConflictException(
+            `Tồn mảnh hiện tại đã đổi (đang là ${currentQty}, bạn thấy ${dto.expectedCurrentQty}) - tải lại trang và thử lại`,
+          );
+        }
+        return this.postAdjustLockedInTx(tx, input, realWarehouseId);
+      });
+      if ('raced' in done) return done.raced;
+      this.publishRealtime('STOCK', pieceId, 'ADJUSTED', userId);
+      return Object.assign(done.entry, { reservationWarning: done.warning });
+    }
     if (input.materialId === undefined) {
-      throw new BadRequestException('expectedCurrentQty chỉ hỗ trợ điều chỉnh theo materialId');
+      throw new BadRequestException(
+        'expectedCurrentQty chỉ hỗ trợ điều chỉnh theo vật tư (materialId) hoặc mảnh (pieceId)',
+      );
     }
     const materialId = input.materialId;
 
