@@ -8,6 +8,7 @@ import {
 import { StockLedgerRefType, WarehouseKind } from '../../generated/prisma/client';
 import { lockBusinessKey, lockBusinessKeyShared } from '../../common/utils/advisory-lock.util';
 import { SEGMENT_LEGACY_CONVERSION_LOCK } from './segment-stock.config';
+import { isStageHandoverEnabled } from '../stage-handover/stage-handover.config';
 import {
   isNormalizedSegmentSteps,
   segmentBucketLockKey,
@@ -40,6 +41,15 @@ export interface SegmentStocktakeInput {
   warehouseScope: string | null;
 }
 
+/**
+ * Loại kho được kiểm kê đoạn. Kho Hàn chỉ có tồn đoạn riêng khi bật giao nhận giữa tổ (Phôi giao đoạn sang kho Hàn bằng phiếu).
+ * Tắt thì đoạn ở tổ Hàn vẫn tính trong kho Phôi - kiểm kê kho Hàn lúc đó sẽ ghi tồn ảo. Sơn không kiểm thanh phôi (nghiệp vụ
+ * 27/11: Sơn chỉ đếm mảnh).
+ */
+export function segmentStocktakeKinds(): WarehouseKind[] {
+  return isStageHandoverEnabled() ? [WarehouseKind.PHOI, WarehouseKind.HAN] : [WarehouseKind.PHOI];
+}
+
 export interface SegmentStocktakeResult {
   label: string;
   beforeQty: number;
@@ -51,7 +61,7 @@ export interface SegmentStocktakeResult {
 
 /**
  * Kiểm kê đoạn (nghiệp vụ 13/11/2026: thủ kho Phôi không nhập tay, chỉ chỉnh khi kiểm kê). Thủ kho nhập SỐ ĐẾM của 1 mã đoạn ở kho
- * Phôi, hệ thống ghi phần chênh bằng bút toán ADJUST (đối ứng "Cân đối tồn kho"). Khoá CÙNG khoá ô (kho, mã đoạn) với phía cộng /
+ * Phôi - hoặc kho Hàn khi bật giao nhận giữa tổ (nghiệp vụ 27/11: Hàn cũng đếm thanh phôi) -, hệ thống ghi phần chênh bằng bút toán ADJUST (đối ứng "Cân đối tồn kho"). Khoá CÙNG khoá ô (kho, mã đoạn) với phía cộng /
  * phía trừ (SegmentStockService) nên không đan xen với Hàn / Sơn đang trừ. Phần chênh vào / ra cột Dư (tồn - còn giữ); không đụng
  * phần giữ của lệnh.
  */
@@ -84,8 +94,13 @@ export class SegmentStocktakeService {
         select: { id: true },
       }),
     ]);
-    if (!warehouse || warehouse.kind !== WarehouseKind.PHOI) {
-      throw new BadRequestException('Chỉ kiểm kê đoạn ở kho Phôi');
+    const stocktakeKinds = segmentStocktakeKinds();
+    if (!warehouse?.kind || !stocktakeKinds.includes(warehouse.kind)) {
+      throw new BadRequestException(
+        warehouse?.kind === WarehouseKind.HAN
+          ? 'Kho Hàn chỉ kiểm kê đoạn khi đã bật giao nhận giữa tổ (đoạn ở tổ Hàn đang tính trong kho Phôi)'
+          : 'Chỉ kiểm kê đoạn ở kho Phôi hoặc kho Hàn',
+      );
     }
     if (!spec) throw new BadRequestException(`Không tìm thấy cỡ đoạn ${input.segmentSpecId}`);
     if (input.warehouseScope && input.warehouseScope !== warehouse.code) {
