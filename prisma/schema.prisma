@@ -2427,12 +2427,22 @@ model SteelReturn {
   confirmedBars       Int?
   confirmedById       String?
   confirmedAt         DateTime?
+  /// Nghiệp vụ 28/11 (phương án a): thủ kho đếm thiếu thì phần chênh (bars - confirmedBars) vẫn tính còn ở tổ cắt. QLSX tìm thấy
+  /// thì "Ghi trả thêm" = 1 dòng mới trỏ về dòng thiếu (makeupForId); không tìm thấy thì "Xác nhận mất" (shortLost*) - phần chênh
+  /// rời tổ cắt thành hao hụt, không ghi sổ kho.
+  makeupForId         BigInt?
+  shortLostAt         DateTime?
+  shortLostById       String?
+  shortLostNote       String?
 
   cancelRequest ProductionOrderCancelRequest @relation(fields: [cancelRequestId], references: [id])
   material      Material                     @relation(fields: [materialId], references: [id])
+  makeupFor     SteelReturn?                 @relation("SteelReturnMakeup", fields: [makeupForId], references: [id])
+  makeups       SteelReturn[]                @relation("SteelReturnMakeup")
 
   @@index([productionInvoiceId, materialId])
   @@index([warehouseId, status])
+  @@index([makeupForId])
   @@map("steel_returns")
 }
 

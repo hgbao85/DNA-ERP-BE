@@ -13,6 +13,7 @@ import {
   MfgStage,
   ProductionBatchStatus,
   ProductionOrderFloorStage,
+  ProductionOrderStatus,
   SteelIssueStatus,
   Workstation,
   WorkstationKind,
@@ -637,6 +638,7 @@ export class FloorScanService {
           poNumber: true,
           quantity: true,
           floorStage: true,
+          status: true,
           mfgProduct: { select: { name: true, factoryCode: true } },
         },
       }),
@@ -651,6 +653,8 @@ export class FloorScanService {
         productName: o.mfgProduct.name,
         quantity: o.quantity,
         floorStage: o.floorStage,
+        // Lỗi 2 (nghiệp vụ báo 28/11): SKU đã huỷ mà QLSX cho cắt tiếp có floorStage FINISHED - FE không được báo "chưa cho làm".
+        ...(o.status === ProductionOrderStatus.CANCELLED ? { cutContinued: true } : {}),
       })),
     };
 

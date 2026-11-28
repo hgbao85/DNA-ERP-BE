@@ -16,6 +16,8 @@ import {
   TransferCancelledGoodsDto,
   DecideOrderCancelRequestDto,
   ListOrderCancelRequestsQueryDto,
+  MakeupSteelReturnDto,
+  MarkSteelReturnLostDto,
 } from './order-cancellation.dto';
 import { OrderCancellationService } from './order-cancellation.service';
 import { CancelledGoodsService } from './cancelled-goods.service';
@@ -125,6 +127,30 @@ export class OrderCancellationController {
   @RequireRole(BUSINESS_ROLES.PRODUCTION_MANAGER, DEFAULT_ROLES.ADMIN)
   cutSteel() {
     return this.service.listCutSteel();
+  }
+
+  /** Nghiệp vụ 28/11 (phương án a): thủ kho đếm thiếu cây trả về - QLSX tìm thấy thì ghi trả thêm. */
+  @Post('steel-returns/:id/makeup')
+  @RequirePermissions(ORDER_UPDATE)
+  @RequireRole(BUSINESS_ROLES.PRODUCTION_MANAGER, DEFAULT_ROLES.ADMIN)
+  makeupSteelReturn(
+    @Param('id') id: string,
+    @Body() dto: MakeupSteelReturnDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.service.makeupSteelReturn(actorOf(user), id, dto.bars);
+  }
+
+  /** Nghiệp vụ 28/11 (phương án a): không tìm thấy cây thiếu - QLSX xác nhận mất (kèm lý do). */
+  @Post('steel-returns/:id/lost')
+  @RequirePermissions(ORDER_UPDATE)
+  @RequireRole(BUSINESS_ROLES.PRODUCTION_MANAGER, DEFAULT_ROLES.ADMIN)
+  markSteelReturnLost(
+    @Param('id') id: string,
+    @Body() dto: MarkSteelReturnLostDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.service.markSteelReturnLost(actorOf(user), id, dto.note);
   }
 
   @Post(':id/cut-decision')

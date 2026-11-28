@@ -361,6 +361,16 @@ export interface PoCancelReplanKeptNotificationParams {
   reason: string;
 }
 
+/** Nghiệp vụ 28/11 (phương án a): thủ kho Phôi đếm thiếu cây tổ cắt trả về - phần chênh vẫn tính còn ở tổ, QLSX đi tìm. */
+export interface SteelReturnShortNotificationParams {
+  lenhCode: string;
+  factoryCode: string;
+  materialCode: string;
+  lengthMm: number;
+  recordedBars: number;
+  countedBars: number;
+}
+
 const deadlineChangeCodes = (codes: string[]) =>
   codes.slice(0, 3).join(', ') + (codes.length > 3 ? '…' : '');
 
@@ -2431,6 +2441,21 @@ const notificationTypeDefinitions = {
     link: () => ({ module: 'production_plan', page: 'lenh-sx' }),
     recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_PLANNER] }),
   } satisfies NotificationTypeDef<PoCancelReplanKeptNotificationParams>,
+
+  /** Nghiệp vụ 28/11 (phương án a): thủ kho Phôi xác nhận ít cây hơn số QLSX ghi trả. Phần chênh vẫn tính còn ở tổ cắt; QLSX tìm thấy
+   *  thì "Ghi trả thêm", không thấy thì "Xác nhận mất" ở "Sắt SKU đã huỷ" (xử lý xong thì thông báo tự đóng). */
+  STEEL_RETURN_SHORT: {
+    category: 'ACTION_REQUIRED',
+    severity: 'WARNING',
+    entityType: 'STEEL_RETURN',
+    title: (p: SteelReturnShortNotificationParams) =>
+      `Lệnh ${p.lenhCode}: thiếu ${p.recordedBars - p.countedBars} cây sắt trả về`,
+    message: (p: SteelReturnShortNotificationParams) =>
+      `SKU ${p.factoryCode} đã huỷ: QLSX ghi trả ${p.recordedBars} cây ${p.materialCode} ${p.lengthMm} mm, thủ kho Phôi đếm được ${p.countedBars} cây. ` +
+      `${p.recordedBars - p.countedBars} cây chênh vẫn tính còn ở tổ cắt - tìm thấy thì "Ghi trả thêm", không thấy thì "Xác nhận mất" ở "Sắt SKU đã huỷ".`,
+    link: () => ({ module: 'production', page: 'sat-sku-huy' }),
+    recipients: () => ({ roles: [BUSINESS_ROLES.PRODUCTION_MANAGER] }),
+  } satisfies NotificationTypeDef<SteelReturnShortNotificationParams>,
 };
 
 /** Danh mục loại thông báo - 1 nguồn duy nhất cho text/link/mức độ/người nhận (mục 5.2 changelog

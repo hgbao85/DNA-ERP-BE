@@ -954,6 +954,24 @@ describe('FloorScanService', () => {
       });
     });
 
+    it('lỗi 2 (báo 28/11): SKU đã huỷ mà QLSX cho cắt tiếp trả cờ cutContinued - FE không báo nhầm "chưa cho làm"', async () => {
+      prisma.productionOrder.findMany.mockResolvedValue([
+        order,
+        { ...order, id: 42n, floorStage: 'FINISHED', status: 'CANCELLED' },
+      ]);
+      steelIssues.getPhoiProgress.mockResolvedValue(progress());
+      prisma.steelIssue.groupBy.mockResolvedValue([{ materialId: 7n }]);
+
+      const res = await service.getContext('tok', worker('PHOI'));
+      const orders = (res as { pi: { orders: Record<string, unknown>[] } }).pi.orders;
+      expect(orders[0]).not.toHaveProperty('cutContinued');
+      expect(orders[1]).toMatchObject({
+        productionOrderId: '42',
+        floorStage: 'FINISHED',
+        cutContinued: true,
+      });
+    });
+
     it('máy công đoạn phụ (STEP): tiến độ lấy theo công đoạn của máy', async () => {
       prisma.workstation.findUnique.mockResolvedValue({
         ...laser,
