@@ -23,10 +23,11 @@ const fmtDay = (day: string) => {
 /**
  * Nhắc lời hẹn trả của điểm đan (Đ2, 25/11/2026). Mỗi lượt xét mọi lời hẹn OPEN / REMINDED:
  *  - về thêm từ lúc ghi (tổng đã trả bây giờ − tổng đã trả lúc ghi) ≥ số hẹn, hoặc điểm đan không còn giữ gì -> KEPT, đóng tin nhắc;
- *  - chưa đủ mà đã tới ngày hẹn (giờ VN) và chưa nhắc -> phát WEAVING_PROMISE_DUE cho người ghi rồi đánh REMINDED (nhắc 1 lần, tin mở
+ *  - chưa đủ mà đã tới ngày hẹn (giờ VN, nhắc từ đầu ngày hẹn - chốt 25/11) và chưa nhắc -> phát WEAVING_PROMISE_DUE cho mọi Điều phối
+ *    đan + người ghi rồi đánh REMINDED (nhắc 1 lần, tin mở
  *    tới khi hàng về đủ hoặc có lời hẹn mới).
  * Phát TRƯỚC rồi mới đánh dấu: phát lỗi thì lượt sau thử lại (dedupeKey theo id ghi chú nên không ra 2 tin).
- * Công tắc DIEU_PHOI_DAN_ENABLED tắt: không làm gì (đọc mỗi lượt). NODE_ENV=test hoặc FLOOR_ALERTS=off: không chạy nền (test gọi
+ * Công tắc DIEU_PHOI_DAN_ENABLED tắt: không làm gì (đọc mỗi lượt). NODE_ENV=test hoặc WEAVING_REMINDERS=off: không chạy nền (test gọi
  * thẳng syncAll()).
  */
 @Injectable()
@@ -42,7 +43,9 @@ export class WeavingFollowUpReminderService implements OnModuleInit, OnModuleDes
   ) {}
 
   onModuleInit(): void {
-    if (process.env.NODE_ENV === 'test' || process.env.FLOOR_ALERTS === 'off') return;
+    // Câu 17 (28/11/2026): tách khỏi FLOOR_ALERTS (tắt nhắc xưởng không được tắt luôn nhắc hẹn trả đan) - tắt riêng bằng
+    // WEAVING_REMINDERS=off. Công tắc DIEU_PHOI_DAN_ENABLED vẫn chặn trong syncAll.
+    if (process.env.NODE_ENV === 'test' || process.env.WEAVING_REMINDERS === 'off') return;
     this.interval = setInterval(() => void this.tick(), CHECK_INTERVAL_MS);
     this.interval.unref();
     this.first = setTimeout(() => void this.tick(), FIRST_RUN_MS);

@@ -1972,7 +1972,7 @@ const notificationTypeDefinitions = {
    *  thuộc gia đình đó, dù có nhiều kho vật lý - `warehouseCodes` do call site tự liệt kê qua
    *  `resolveThanhPhamWarehouseCodes()`, không phải field hiển thị). */
   /**
-   * Điều phối đan (Đ2, 25/11/2026): tới ngày hẹn mà hàng về (kể từ lúc hẹn) chưa đủ số hẹn - nhắc đúng người đã ghi lời hẹn. Tự đóng
+   * Điều phối đan (Đ2, 25/11/2026): đầu ngày hẹn mà hàng về (kể từ lúc hẹn) chưa đủ số hẹn - nhắc mọi Điều phối đan + người ghi hẹn. Tự đóng
    * khi về đủ / điểm đan hết giữ hàng / có lời hẹn mới (WeavingFollowUpReminderService, WeavingCoordinationService.createFollowUp).
    */
   WEAVING_PROMISE_DUE: {
@@ -1988,7 +1988,11 @@ const notificationTypeDefinitions = {
       page: 'theo-doi',
       params: { point: p.weavingPointId ?? null },
     }),
-    recipients: (p: WeavingPromiseDueParams) => ({ userIds: [p.createdById] }),
+    // Câu 17 (chốt 25/11/2026): nhắc MỌI tài khoản Điều phối đan (trước chỉ người ghi hẹn - Admin ghi thì điều phối không nhận) + người ghi.
+    recipients: (p: WeavingPromiseDueParams) => ({
+      roles: [BUSINESS_ROLES.WEAVING_COORDINATOR],
+      userIds: [p.createdById],
+    }),
     notifyActor: true,
   } satisfies NotificationTypeDef<WeavingPromiseDueParams>,
   WEAVING_ISSUE_TO_POINT: {
