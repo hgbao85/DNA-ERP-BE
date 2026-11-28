@@ -1,13 +1,17 @@
-import { Body, Controller, HttpCode, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiProperty, ApiTags } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsInt, IsNumber, IsString, Matches, MaxLength, Min, MinLength } from 'class-validator';
-import { PermissionAction } from '../../generated/prisma/client';
+import { PermissionAction, WarehouseKind } from '../../generated/prisma/client';
 import { PERMISSION_MODULES } from '../../common/constants/permission-modules.constant';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
-import { SegmentStocktakeResult, SegmentStocktakeService } from './segment-stocktake.service';
+import {
+  SegmentStocktakeResult,
+  SegmentStocktakeService,
+  segmentStocktakeKinds,
+} from './segment-stocktake.service';
 import { RequireAssignedWarehouse } from '../../common/decorators/require-assigned-warehouse.decorator';
 
 export class SegmentStocktakeDto {
@@ -32,6 +36,16 @@ export class SegmentStocktakeDto {
 @Controller({ path: 'segment-stock', version: '1' })
 export class SegmentStocktakeController {
   constructor(private readonly service: SegmentStocktakeService) {}
+
+  /** Loại kho được kiểm kê đoạn lúc này - FE hiện tab "Tồn đoạn" cho thủ kho Hàn khi có HAN (bật giao nhận giữa tổ). */
+  @Get('stocktake-config')
+  @RequirePermissions({ module: PERMISSION_MODULES.STOCK, action: PermissionAction.VIEW })
+  @ApiOperation({
+    summary: 'Loại kho được kiểm kê đoạn (PHOI; thêm HAN khi bật giao nhận giữa tổ)',
+  })
+  stocktakeConfig(): { kinds: WarehouseKind[] } {
+    return { kinds: segmentStocktakeKinds() };
+  }
 
   @Post('stocktake')
   @RequireAssignedWarehouse()

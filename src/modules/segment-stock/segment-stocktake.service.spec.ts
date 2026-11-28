@@ -3,6 +3,7 @@ import { StockLedgerRefType } from '../../generated/prisma/client';
 import {
   SEGMENT_STOCKTAKE_NOT_CONVERTED_MESSAGE,
   SegmentStocktakeService,
+  segmentStocktakeKinds,
 } from './segment-stocktake.service';
 
 describe('SegmentStocktakeService', () => {
@@ -162,5 +163,57 @@ describe('SegmentStocktakeService', () => {
   it('kho khác phạm vi -> 403; kho không phải Phôi -> 400', async () => {
     await expect(make({ code: 'phoi-pha' }).run()).rejects.toBeInstanceOf(ForbiddenException);
     await expect(make({ kind: 'SON' }).run()).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  describe('kho Hàn (nghiệp vụ 27/11: Hàn cũng đếm thanh phôi)', () => {
+    const env = { ...process.env };
+    afterEach(() => {
+      process.env = { ...env };
+    });
+    const turn = (segment: string, handover: string) => {
+      process.env.SEGMENT_STOCK_ENABLED = segment;
+      process.env.STAGE_HANDOVER_ENABLED = handover;
+    };
+
+    it('stocktake-config: chỉ PHOI khi tắt, thêm HAN khi bật cả tồn đoạn lẫn giao nhận', () => {
+      turn('true', 'false');
+      expect(segmentStocktakeKinds()).toEqual(['PHOI']);
+      turn('true', 'true');
+      expect(segmentStocktakeKinds()).toEqual(['PHOI', 'HAN']);
+    });
+
+    it('giao nhận giữa tổ tắt -> 400 nêu lý do, không ghi gì (đoạn ở tổ Hàn còn tính trong kho Phôi)', async () => {
+      turn('true', 'false');
+      const { run, ledger } = make({ kind: 'HAN', code: 'han-pa' });
+      await expect(run({ warehouseScope: 'han-pa' })).rejects.toThrow(/giao nhận giữa tổ/);
+      expect(ledger.postEntry).not.toHaveBeenCalled();
+    });
+
+    it('bật giao nhận nhưng tồn đoạn tắt -> coi như tắt -> 400', async () => {
+      turn('false', 'true');
+      const { run } = make({ kind: 'HAN', code: 'han-pa' });
+      await expect(run({ warehouseScope: 'han-pa' })).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('bật giao nhận -> thủ kho Hàn kiểm kê kho mình, ghi phần chênh như kho Phôi', async () => {
+      turn('true', 'true');
+      const { run, ledger } = make({ kind: 'HAN', code: 'han-pa' });
+      const r = await run({ warehouseScope: 'han-pa' });
+      expect(r.deltaQty).toBe(-3);
+      expect(ledger.postEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ fromWarehouseId: 1n, toWarehouseId: 98n, qty: 3 }),
+        expect.anything(),
+      );
+    });
+
+    it('bật giao nhận: Sơn vẫn không kiểm kê đoạn; thủ kho Hàn không kiểm kê kho Phôi', async () => {
+      turn('true', 'true');
+      await expect(
+        make({ kind: 'SON', code: 'son-pa' }).run({ warehouseScope: 'son-pa' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(make().run({ warehouseScope: 'han-pa' })).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+    });
   });
 });
