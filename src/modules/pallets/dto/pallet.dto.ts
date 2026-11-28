@@ -6,6 +6,7 @@ import {
   IsString,
   Max,
   MaxLength,
+  MinLength,
   Min,
   ValidateIf,
 } from 'class-validator';
@@ -115,4 +116,13 @@ export class PaintPalletDto {
   @IsString()
   @MaxLength(300)
   shortReason?: string;
+}
+
+/** Câu 7a (25/11/2026): lý do thủ kho Sơn gỡ pallet đã sơn. */
+export class ClearPaintedPalletDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(3, { message: 'Ghi lý do gỡ pallet (ít nhất 3 ký tự)' })
+  @MaxLength(500)
+  reason!: string;
 }
