@@ -45,7 +45,7 @@ năng xưởng / kho**. Code kiểm kê kho Hàn đã có (28/11, xem cuối fil
 | B6 | Thủ kho Phôi đếm đoạn còn ở kho Phôi, nhập tại tab **Tồn đoạn**, nút **Kiểm kê** từng mã | Thủ kho Phôi | Nhập SỐ ĐẾM, không phải số chênh; hệ thống tự ghi phần chênh |
 | B7 | Thủ kho Hàn mở tab **Tồn đoạn** (tiêu đề "Thanh phôi tại kho Hàn"), kiểm kê nếu còn lệch sau B5 | Thủ kho Hàn | Chỉ hiện khi bật giao nhận giữa tổ |
 | B8 | Kế toán hoặc KCS kiểm lại số đếm | Kế toán / KCS | Quản lý chốt 26/11 |
-| B9 | Thủ kho Sơn đếm số mảnh | Thủ kho Sơn | **Chưa có màn chỉnh tồn mảnh** (API có, FE chưa) - xem chỗ hở 2 |
+| B9 | Thủ kho Sơn đếm số mảnh, nhập tại tab **Tồn mảnh**, nút **Kiểm kê** từng mảnh | Thủ kho Sơn | Có từ 28/11. Chỉ hiện mảnh đã có dòng tồn ở kho Sơn |
 | B10 | Báo các tổ báo sản lượng lại bình thường | QLSX | |
 
 ## C. Sau khi bật
@@ -60,8 +60,8 @@ năng xưởng / kho**. Code kiểm kê kho Hàn đã có (28/11, xem cuối fil
 
 1. **Không có khoá báo sản lượng lúc kiểm kê.** B1 chỉ dựa vào dặn miệng (28/11: tạm không làm - hệ thống đã tự chặn chuyển đổi
    khi có người báo chen, và kiểm kê báo lệch khi tồn vừa đổi).
-2. **Chưa có màn chỉnh tồn mảnh cho thủ kho Sơn.** `POST /stock-ledger/adjust` nhận `pieceId`, nhưng màn chỉnh tồn
-   (`MfgWarehousesPage`) chỉ gửi vật tư. Không ảnh hưởng việc bật tồn đoạn.
+2. **Kiểm kê mảnh ở kho Sơn: đã có (28/11).** Tab "Tồn mảnh" của thủ kho Sơn (`KiemKeManhPage`); BE `POST /stock-ledger/adjust`
+   nay so tồn lúc mở (`expectedCurrentQty`) cả với `pieceId`. Mảnh chưa từng có dòng tồn ở kho Sơn thì chưa nhập được.
 3. **Đoạn Phôi giao thẳng Sơn** (mảnh không hàn): khi bật giao nhận, đoạn nằm ở kho Sơn. Quản lý nói Sơn không đếm thanh phôi -
    cần chốt với IT đoạn ở kho Sơn có cần kiểm kê không (hiện code chỉ cho kho Phôi và kho Hàn).
 

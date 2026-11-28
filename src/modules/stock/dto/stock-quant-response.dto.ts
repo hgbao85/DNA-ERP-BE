@@ -12,6 +12,7 @@ export class StockQuantResponseDto {
   @Expose() @ApiPropertyOptional({ nullable: true }) segmentSpecLabel!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) pieceId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) pieceCode!: string | null;
+  @Expose() @ApiPropertyOptional({ nullable: true }) pieceName!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) productVariantId!: string | null;
   @Expose() @ApiPropertyOptional({ nullable: true }) productVariantLabel!: string | null;
   /** Chiều dài cây (mm) với sắt bán theo chiều dài, 0 cho loại khác - cùng mã sắt khác chiều dài là
