@@ -3394,8 +3394,9 @@ export class ProductionInvoicesService {
     const pi = await this.findOneOrThrow(piId);
     const item = await this.findItemOrThrow(pi.id, itemId);
     const productionOrder = await this.findProductionOrderOrThrow(item.id, itemId);
-    await assertPiHasActiveFloor(this.prisma, pi.id, 'ghi nhận chuyền kiểm');
+    // Lỗi 6 (nghiệp vụ báo 28/11): kiểm SKU đã huỷ TRƯỚC - lệnh huỷ hết thì không còn SKU nào "Bắt đầu", trước báo nhầm câu đó.
     await assertItemNotCancelled(this.prisma, item.id, 'ghi nhận chuyền kiểm');
+    await assertPiHasActiveFloor(this.prisma, pi.id, 'ghi nhận chuyền kiểm');
     const pieceBigId = parseBigIntId(dto.pieceId);
 
     const bomPiece = await this.prisma.bomPiece.findUnique({
@@ -3688,8 +3689,9 @@ export class ProductionInvoicesService {
     const pi = await this.findOneOrThrow(piId);
     const item = await this.findItemOrThrow(pi.id, itemId);
     const productionOrder = await this.findProductionOrderOrThrow(item.id, itemId);
-    await assertPiHasActiveFloor(this.prisma, pi.id, 'ghi nhận đóng gói');
+    // Lỗi 6 (nghiệp vụ báo 28/11): kiểm SKU đã huỷ TRƯỚC - lệnh huỷ hết thì không còn SKU nào "Bắt đầu", trước báo nhầm câu đó.
     await assertItemNotCancelled(this.prisma, item.id, 'ghi nhận đóng gói');
+    await assertPiHasActiveFloor(this.prisma, pi.id, 'ghi nhận đóng gói');
     const capBySets = isCkDgQrEnabled();
     // L4 16/11: đọc "đã đóng" + ghi trong 1 transaction dưới khoá theo SKU - 2 lần báo cùng lúc không vượt trần.
     const { soFar: packedSoFar, recordId } = await this.prisma.$transaction(async (tx) => {

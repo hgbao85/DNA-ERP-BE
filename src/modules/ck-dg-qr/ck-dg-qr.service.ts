@@ -10,6 +10,7 @@ import {
 import { ClsService } from 'nestjs-cls';
 import {
   AuditAction,
+  CancelledGoodsKind,
   MfgStage,
   Prisma,
   PrismaClient,
@@ -20,6 +21,7 @@ import {
   WorkstationKind,
 } from '../../generated/prisma/client';
 import type { AppClsStore } from '../../common/interfaces/cls-store.interface';
+import { WOVEN_TRANSFER_RECEIVED } from '../woven-stock/woven-stock.service';
 import type { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
 import { assertItemNotCancelled, assertPiHasActiveFloor } from '../../common/utils/floor-gate.util';
@@ -633,44 +635,60 @@ export class CkDgQrService {
       select: { id: true, quantity: true, bomRevisionId: true },
     });
     if (!order) return [];
-    const [bomPieces, receipts, transfers, checked, pending, scrapped] = await Promise.all([
-      this.prisma.bomPiece.findMany({
-        where: { bomRevisionId: order.bomRevisionId },
-        include: { piece: { select: { name: true, code: true } } },
-        orderBy: { pieceId: 'asc' },
-      }),
-      this.prisma.weavingReceipt.groupBy({
-        by: ['pieceId'],
-        where: { productionOrderId: order.id },
-        _sum: { qty: true },
-      }),
-      this.prisma.warehouseTransferPieceItem.groupBy({
-        by: ['pieceId'],
-        where: {
-          productionOrderId: order.id,
-          transfer: { status: TransferStatus.CONFIRMED, ...PIECE_TRANSFER_LEAVES_FRAME },
-        },
-        _sum: { quantity: true },
-      }),
-      this.prisma.transferCheckResult.groupBy({
-        by: ['pieceId'],
-        where: { productionInvoiceItemId: itemId },
-        _sum: { checkedQty: true },
-      }),
-      this.prisma.transferCheckBatch.groupBy({
-        by: ['pieceId'],
-        where: { productionInvoiceItemId: itemId, status: TransferCheckBatchStatus.AWAITING_KCS },
-        _sum: { passedQty: true, defectQty: true },
-      }),
-      this.prisma.transferCheckBatch.groupBy({
-        by: ['pieceId'],
-        where: { productionInvoiceItemId: itemId, status: TransferCheckBatchStatus.KCS_DONE },
-        _sum: { kcsScrapQty: true },
-      }),
-    ]);
+    const [bomPieces, receipts, fromCancelled, transfers, checked, pending, scrapped] =
+      await Promise.all([
+        this.prisma.bomPiece.findMany({
+          where: { bomRevisionId: order.bomRevisionId },
+          include: { piece: { select: { name: true, code: true } } },
+          orderBy: { pieceId: 'asc' },
+        }),
+        this.prisma.weavingReceipt.groupBy({
+          by: ['pieceId'],
+          where: { productionOrderId: order.id },
+          _sum: { qty: true },
+        }),
+        // Lỗi 5 (nghiệp vụ báo 28/11): khung đã đan lấy từ SKU huỷ (đã nhận) cũng là "hiện có" - cùng loadReadyQty / recordTransferCheck.
+        this.prisma.cancelledGoodsTransfer.groupBy({
+          by: ['pieceId'],
+          where: {
+            targetItemId: itemId,
+            kind: CancelledGoodsKind.WOVEN,
+            ...WOVEN_TRANSFER_RECEIVED,
+          },
+          _sum: { qty: true },
+        }),
+        this.prisma.warehouseTransferPieceItem.groupBy({
+          by: ['pieceId'],
+          where: {
+            productionOrderId: order.id,
+            transfer: { status: TransferStatus.CONFIRMED, ...PIECE_TRANSFER_LEAVES_FRAME },
+          },
+          _sum: { quantity: true },
+        }),
+        this.prisma.transferCheckResult.groupBy({
+          by: ['pieceId'],
+          where: { productionInvoiceItemId: itemId },
+          _sum: { checkedQty: true },
+        }),
+        this.prisma.transferCheckBatch.groupBy({
+          by: ['pieceId'],
+          where: { productionInvoiceItemId: itemId, status: TransferCheckBatchStatus.AWAITING_KCS },
+          _sum: { passedQty: true, defectQty: true },
+        }),
+        this.prisma.transferCheckBatch.groupBy({
+          by: ['pieceId'],
+          where: { productionInvoiceItemId: itemId, status: TransferCheckBatchStatus.KCS_DONE },
+          _sum: { kcsScrapQty: true },
+        }),
+      ]);
     const map = <T extends { pieceId: bigint }>(rows: T[], f: (r: T) => number) =>
       new Map(rows.map((r) => [r.pieceId.toString(), f(r)]));
     const received = map(receipts, (r) => r._sum.qty ?? 0);
+    for (const r of fromCancelled) {
+      if (r.pieceId == null) continue;
+      const k = r.pieceId.toString();
+      received.set(k, (received.get(k) ?? 0) + (r._sum.qty ?? 0));
+    }
     const transferred = map(transfers, (r) => r._sum.quantity ?? 0);
     const checkedBy = map(checked, (r) => r._sum.checkedQty ?? 0);
     const pendingBy = map(pending, (r) => (r._sum.passedQty ?? 0) + (r._sum.defectQty ?? 0));
