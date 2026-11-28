@@ -31,7 +31,7 @@ import { nextProductionInvoiceCode } from '../../common/utils/production-invoice
 import { assertPiHasActiveFloor, assertItemNotCancelled } from '../../common/utils/floor-gate.util';
 import { toMaterialChoiceRef } from '../../common/utils/material-choice-ref.util';
 import { lockBusinessKey } from '../../common/utils/advisory-lock.util';
-import { isCkDgQrEnabled } from '../ck-dg-qr/ck-dg-qr.config';
+import { assertManualCkDgAllowed, isCkDgQrEnabled } from '../ck-dg-qr/ck-dg-qr.config';
 import {
   loadBatchReservations,
   loadSetsPassed,
@@ -3391,6 +3391,7 @@ export class ProductionInvoicesService {
     dto: RecordTransferCheckDto,
     actorUserId: string,
   ): Promise<TransferCheckPieceResponseDto> {
+    assertManualCkDgAllowed('chuyền kiểm');
     const pi = await this.findOneOrThrow(piId);
     const item = await this.findItemOrThrow(pi.id, itemId);
     const productionOrder = await this.findProductionOrderOrThrow(item.id, itemId);
@@ -3662,6 +3663,7 @@ export class ProductionInvoicesService {
     dto: RecordPackagingDto,
     actorUserId: string,
   ): Promise<PackagingResponseDto> {
+    assertManualCkDgAllowed('đóng gói');
     const { response } = await this.recordPackagingEntry({
       piId,
       itemId,

@@ -311,10 +311,32 @@ describe('WorkQueueService', () => {
     expect(result.counts.kcsSon).toBe(0);
   });
 
-  it('KCS - không lọc xưởng: đọc cả PI của mọi xưởng, kể cả khi KCS có gắn xưởng (AC12)', async () => {
+  it('KCS chưa gắn xưởng: đếm đợt của mọi xưởng (AC12)', async () => {
     listKcsPendingMock.mockResolvedValue([
       kcsItem({ productionInvoiceId: 1n }),
       kcsItem({ productionInvoiceId: 2n }),
+    ]);
+
+    const result = await service.getWorkQueue({
+      id: 'kcs-all',
+      roles: ['KCS_STAFF'],
+      warehouseScope: null,
+    });
+
+    expect(result.counts.kcsPhoi).toBe(2);
+    expect(listKcsPendingMock).toHaveBeenCalledWith(prisma);
+  });
+
+  it('câu 10 (chốt 25/11/2026): KCS gắn xưởng Phước An chỉ đếm đợt xưởng mình', async () => {
+    listKcsPendingMock.mockResolvedValue([
+      kcsItem({ productionInvoiceId: 1n }),
+      kcsItem({ productionInvoiceId: 2n }),
+      kcsItem({ productionInvoiceId: 2n, stage: 'HAN' }),
+    ]);
+    // PI 1 ở Phước An (2), PI 2 ở Phú An (1).
+    prisma.productionInvoiceItem.findMany.mockResolvedValue([
+      { productionInvoiceId: 1n, workshopId: 2n },
+      { productionInvoiceId: 2n, workshopId: 1n },
     ]);
 
     const result = await service.getWorkQueue({
@@ -323,9 +345,7 @@ describe('WorkQueueService', () => {
       warehouseScope: null,
     });
 
-    expect(result.counts.kcsPhoi).toBe(2);
-    // Chỉ truyền db, không truyền phạm vi xưởng.
-    expect(listKcsPendingMock).toHaveBeenCalledWith(prisma);
+    expect(result.counts).toMatchObject({ kcsPhoi: 1, kcsHan: 0, kcsSon: 0 });
   });
 
   it('user không có vai KCS - không đọc kcs-pending', async () => {

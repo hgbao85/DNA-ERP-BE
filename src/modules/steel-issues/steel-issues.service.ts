@@ -1400,16 +1400,31 @@ export class SteelIssuesService {
     p: { piId: bigint; materialId: bigint; lines: { qty: number; cutLengthMm: number }[] },
   ): Promise<void> {
     await lockBusinessKey(tx, `cut-steel:${p.piId}:${p.materialId}`);
-    const [usage, override] = await Promise.all([
+    const [usage, override, returned] = await Promise.all([
       loadSteelUsage(tx, p.piId, p.materialId),
       tx.stageHandoverOverride.aggregate({
         where: { productionInvoiceId: p.piId, stage: MfgStage.PHOI, materialId: p.materialId },
         _sum: { qty: true },
       }),
+      tx.steelReturn.findMany({
+        where: { productionInvoiceId: p.piId, materialId: p.materialId },
+        select: { ...STEEL_RETURN_BARS_SELECT, lengthMm: true },
+      }),
     ]);
     const overrideMm = override._sum.qty?.toNumber() ?? 0;
     const addMm = p.lines.reduce((t, l) => t + l.qty * (l.cutLengthMm + usage.kerfMm), 0);
-    const limitMm = steelReportLimitMm(usage.usableMm, PHOI_STEEL_TOLERANCE, overrideMm);
+    // 28/11: trừ cây tổ cắt đã nhập trả (SKU huỷ ngưng cắt) - cây đã rời tổ thì không còn để cắt. Trước đây giới hạn vẫn tính cả cây đã
+    // trả nên báo vượt lọt. Số cây theo phương án a (thủ kho đếm thiếu thì phần chênh còn ở tổ) - cùng continuedCutRoomMm.
+    const leftBars = barsLeftCutTeamById(returned);
+    const returnedMm = returned.reduce(
+      (t, r) => t + r.lengthMm * (leftBars.get(r.id.toString()) ?? r.bars),
+      0,
+    );
+    const limitMm = steelReportLimitMm(
+      Math.max(0, usage.usableMm - returnedMm),
+      PHOI_STEEL_TOLERANCE,
+      overrideMm,
+    );
     if (usage.reportedMm + addMm <= limitMm + 1e-6) return;
     const material = await tx.material.findUnique({
       where: { id: p.materialId },

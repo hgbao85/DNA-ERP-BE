@@ -276,11 +276,13 @@ export class UsersService {
       await this.assertNoBuyerMaterials(id, 'bỏ chức năng Mua hàng');
     }
 
-    // Xưởng chỉ có nghĩa với QLSX; đổi mfgRole khỏi QLSX thì bỏ gắn xưởng để không còn phạm vi "mồ côi".
+    // Xưởng chỉ có nghĩa với QLSX và KCS (câu 10, chốt 25/11/2026: KCS Hàn / Sơn mỗi xưởng 1 người, chỉ thấy xưởng mình); đổi
+    // mfgRole khỏi 2 vai đó thì bỏ gắn xưởng để không còn phạm vi "mồ côi".
+    const workshopRole = effectiveMfgRole === 'PRODUCTION_MANAGER' || effectiveMfgRole === 'KCS';
     let workshopId: bigint | null | undefined;
     if (dto.workshopId !== undefined && dto.workshopId !== null) {
-      if (effectiveMfgRole !== 'PRODUCTION_MANAGER') {
-        throw new BadRequestException('Chỉ tài khoản QLSX mới được gắn xưởng');
+      if (!workshopRole) {
+        throw new BadRequestException('Chỉ tài khoản QLSX hoặc KCS mới được gắn xưởng');
       }
       workshopId = BigInt(dto.workshopId);
       const workshop = await this.prisma.workshop.findFirst({
@@ -290,7 +292,7 @@ export class UsersService {
       if (!workshop) throw new BadRequestException('Xưởng không tồn tại hoặc đã ngừng dùng');
     } else if (dto.workshopId === null) {
       workshopId = null;
-    } else if (effectiveMfgRole !== 'PRODUCTION_MANAGER' && current.workshopId != null) {
+    } else if (!workshopRole && current.workshopId != null) {
       workshopId = null;
     }
 

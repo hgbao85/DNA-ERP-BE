@@ -88,10 +88,12 @@ export class GradeTransferCheckBatchDto {
   @Min(0)
   reworkQty!: number;
 
-  @ApiProperty({ minimum: 0, description: 'Trong phần lỗi: số bỏ' })
+  /** Câu 9a (25/11/2026): bỏ lựa chọn 'bỏ' - không gửi = 0, gửi > 0 thì 400 (validateKcsGrade). */
+  @ApiPropertyOptional({ minimum: 0, maximum: 0, description: 'Không còn dùng - chỉ nhận 0' })
+  @IsOptional()
   @IsInt()
   @Min(0)
-  scrapQty!: number;
+  scrapQty?: number;
 
   @ApiPropertyOptional({
     description: 'Nguyên nhân cho phần KCS chấm lỗi thêm (bắt buộc khi đạt KCS < báo đạt)',
@@ -149,6 +151,15 @@ export class CancelPackingReportDto {
   @MinLength(3, { message: 'Ghi lý do huỷ (ít nhất 3 ký tự)' })
   @MaxLength(500)
   reason!: string;
+}
+
+/** Câu 10 (chốt 25/11/2026, phương án c): KCS chuyền kiểm tự thêm nguyên nhân lỗi mới (tài khoản PIN không có quyền DEFECT_REASON). */
+export class AddKcsDefectReasonDto {
+  @ApiProperty({ maxLength: 100 })
+  @IsString()
+  @MinLength(2, { message: 'Ghi nguyên nhân lỗi (ít nhất 2 ký tự)' })
+  @MaxLength(100, { message: 'Nguyên nhân lỗi tối đa 100 ký tự' })
+  label!: string;
 }
 
 /** Danh sách đợt chuyền kiểm (KCS chuyền kiểm / màn kho Thành phẩm). */

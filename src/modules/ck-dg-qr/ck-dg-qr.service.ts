@@ -404,7 +404,8 @@ export class CkDgQrService {
     if (batch.status !== TransferCheckBatchStatus.AWAITING_KCS) {
       throw new ConflictException('Đợt này đã được KCS chuyền kiểm chấm rồi');
     }
-    const invalid = validateKcsGrade(batch, dto);
+    const scrapQty = dto.scrapQty ?? 0;
+    const invalid = validateKcsGrade(batch, { ...dto, scrapQty });
     if (invalid) throw new BadRequestException(invalid);
     const extra = kcsExtraDefect(batch.passedQty, dto.passedQty);
     let kcsReason: { id: bigint; label: string } | null = null;
@@ -438,7 +439,7 @@ export class CkDgQrService {
     ];
     const note =
       `Đợt chuyền kiểm QR #${batch.id}: báo đạt ${batch.passedQty}, lỗi ${batch.defectQty} · ` +
-      `KCS đạt ${dto.passedQty}, làm lại ${dto.reworkQty}, bỏ ${dto.scrapQty}` +
+      `KCS đạt ${dto.passedQty}, làm lại ${dto.reworkQty}` +
       (dto.note?.trim() ? ` · ${dto.note.trim()}` : '');
 
     const resultId = await this.prisma.$transaction(async (tx) => {
@@ -461,7 +462,7 @@ export class CkDgQrService {
           status: TransferCheckBatchStatus.KCS_DONE,
           kcsPassedQty: dto.passedQty,
           kcsReworkQty: dto.reworkQty,
-          kcsScrapQty: dto.scrapQty,
+          kcsScrapQty: scrapQty,
           kcsDefectReasonId: kcsReason?.id ?? null,
           kcsPhotoUrl: dto.photoUrl ?? null,
           kcsNote: dto.note?.trim() || null,
@@ -839,10 +840,41 @@ export class CkDgQrService {
     return rows.map((r) => this.toPackingDto(r, lenh));
   }
 
-  /** Nguyên nhân lỗi: danh mục riêng của chuyền kiểm (stageType CHUYEN_KIEM); chưa khai thì dùng cả danh mục. */
+  /**
+   * Câu 10 (chốt 25/11/2026): KCS chuyền kiểm tự thêm nguyên nhân lỗi - ghi vào danh mục chuyền kiểm (stageType CHUYEN_KIEM). Trùng
+   * tên (không phân biệt hoa thường, bỏ khoảng trắng thừa) thì dùng lại dòng cũ, không tạo thêm. Trả nguyên nhân + danh mục mới.
+   */
+  async addDefectReason(labelRaw: string) {
+    this.assertEnabled();
+    const label = labelRaw.trim().replace(/\s+/g, ' ');
+    if (label.length < 2) throw new BadRequestException('Ghi nguyên nhân lỗi (ít nhất 2 ký tự)');
+    const existing = await this.prisma.defectReason.findFirst({
+      where: {
+        label: { equals: label, mode: 'insensitive' },
+        OR: [{ stageType: MfgStage.CHUYEN_KIEM }, { stageType: null }],
+      },
+      select: { id: true, label: true },
+    });
+    const reason =
+      existing ??
+      (await this.prisma.defectReason.create({
+        data: { label, stageType: MfgStage.CHUYEN_KIEM },
+        select: { id: true, label: true },
+      }));
+    return {
+      reason: { id: reason.id.toString(), label: reason.label },
+      created: !existing,
+      defectReasons: await this.listDefectReasons(),
+    };
+  }
+
+  /**
+   * Nguyên nhân lỗi: danh mục chuyền kiểm (stageType CHUYEN_KIEM) + nguyên nhân chung (không gắn công đoạn); cả 2 đều trống thì dùng
+   * cả danh mục như trước.
+   */
   async listDefectReasons() {
     const own = await this.prisma.defectReason.findMany({
-      where: { stageType: MfgStage.CHUYEN_KIEM },
+      where: { OR: [{ stageType: MfgStage.CHUYEN_KIEM }, { stageType: null }] },
       orderBy: { label: 'asc' },
       select: { id: true, label: true },
     });

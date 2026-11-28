@@ -190,7 +190,7 @@ describe('UsersService', () => {
     });
   });
 
-  // QLSX theo xưởng (2026-11-12): workshopId chỉ hợp lệ với mfgRole PRODUCTION_MANAGER.
+  // QLSX theo xưởng (2026-11-12): workshopId chỉ hợp lệ với mfgRole PRODUCTION_MANAGER (+ KCS từ 28/11/2026, câu 10).
   describe('updateMfgAttributes - workshopId', () => {
     const qlsx = { id: 'user-1', mfgRole: 'PRODUCTION_MANAGER', workshopId: null };
 
@@ -229,12 +229,26 @@ describe('UsersService', () => {
       );
     });
 
-    it('đổi mfgRole khỏi QLSX thì tự bỏ gắn xưởng', async () => {
+    it('đổi mfgRole khỏi QLSX / KCS thì tự bỏ gắn xưởng', async () => {
+      prisma.user.findUnique.mockResolvedValue({ ...qlsx, workshopId: 1n });
+      prisma.role.findMany.mockResolvedValue([{ id: 'r1', name: 'PHOI_STAFF' }]);
+      await usersService.updateMfgAttributes('user-1', { mfgRole: 'PHOI' }, ADMIN);
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ workshopId: null }) }),
+      );
+    });
+
+    it('câu 10 (25/11): KCS được gắn xưởng; đổi QLSX -> KCS giữ xưởng', async () => {
+      prisma.user.findUnique.mockResolvedValue({ id: 'user-1', mfgRole: 'KCS', workshopId: null });
+      await usersService.updateMfgAttributes('user-1', { workshopId: '1' }, ADMIN);
+      expect(prisma.user.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ workshopId: 1n }) }),
+      );
       prisma.user.findUnique.mockResolvedValue({ ...qlsx, workshopId: 1n });
       prisma.role.findMany.mockResolvedValue([{ id: 'r1', name: 'KCS_STAFF' }]);
       await usersService.updateMfgAttributes('user-1', { mfgRole: 'KCS' }, ADMIN);
-      expect(prisma.user.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: expect.objectContaining({ workshopId: null }) }),
+      expect(prisma.user.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ workshopId: undefined }) }),
       );
     });
   });

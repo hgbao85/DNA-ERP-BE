@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { MfgRole } from '../../generated/prisma/client';
+import { MfgRole, MfgStage } from '../../generated/prisma/client';
 import { isCkDgQrEnabled } from '../ck-dg-qr/ck-dg-qr.config';
 import { BUSINESS_ROLES } from '../../common/constants/roles.constant';
 import { WorkshopScopeService } from '../../common/workshop-scope/workshop-scope.service';
@@ -11,6 +11,7 @@ import { PaintTransferReminderService } from '../warehouse-transfers/paint-trans
 // Phần A – Đợt 4 (YC6): badge Vật tư cần về
 import { MaterialsDueService } from '../materials-due/materials-due.service';
 import { countKcsByStage, listKcsPendingItems } from '../floor/kcs-pending.util';
+import { filterByQueueWorkshop } from '../floor/floor-queue-workshop.util';
 import { WorkQueueResponseDto } from './dto/work-queue-response.dto';
 
 /**
@@ -136,7 +137,7 @@ export class WorkQueueService {
       );
     }
     if (has(BUSINESS_ROLES.KCS_STAFF)) {
-      const kcs = this.countKcs();
+      const kcs = this.countKcs(user.id);
       tasks.push(
         kcs.then(({ phoi, han, son }) => {
           counts.kcsPhoi = phoi;
@@ -312,10 +313,29 @@ export class WorkQueueService {
   /**
    * Số đỏ menu KCS (P1, 18/11/2026): đợt công nhân đã báo mà KCS chưa chấm - đang mở (chưa bấm Chấm) + đã chốt (AWAITING_QC)
    * của 5 loại (đợt cắt, nhóm công đoạn phụ, lô mảnh Phôi / Hàn / Sơn, pat, chân nhôm), bỏ dòng có blockedReason (lệnh dừng /
-   * chưa gắn SKU - dòng xám). Cùng nguồn kcs-pending với summary của QLSX và tin chờ lâu. KCS thấy hết xưởng, không lọc xưởng.
+   * chưa gắn SKU - dòng xám). Cùng nguồn kcs-pending với summary của QLSX và tin chờ lâu. Câu 10 (chốt 25/11/2026): KCS gắn xưởng
+   * chỉ đếm đợt của xưởng mình (xưởng hàng đợi - Sơn theo xưởng sơn nhờ), cùng lọc màn KCS; KCS chưa gắn xưởng đếm hết như cũ.
    * tab kcs-phoi = Cắt / công đoạn phụ / pat / chân nhôm / lô mảnh Phôi; kcs-han / kcs-son = lô mảnh của tổ.
    */
-  private async countKcs(): Promise<{ phoi: number; han: number; son: number }> {
-    return countKcsByStage(await listKcsPendingItems(this.prisma));
+  private async countKcs(userId?: string): Promise<{ phoi: number; han: number; son: number }> {
+    const [items, scope] = await Promise.all([
+      listKcsPendingItems(this.prisma),
+      this.workshopScope.getScope(userId),
+    ]);
+    if (scope.workshopId == null) return countKcsByStage(items);
+    const byStage = new Map<string, typeof items>();
+    for (const i of items) byStage.set(i.stage, [...(byStage.get(i.stage) ?? []), i]);
+    const kept = await Promise.all(
+      [...byStage.entries()].map(([stage, rows]) =>
+        filterByQueueWorkshop(
+          this.prisma,
+          scope.workshopId,
+          stage as MfgStage,
+          rows,
+          (r) => r.productionInvoiceId,
+        ),
+      ),
+    );
+    return countKcsByStage(kept.flat());
   }
 }

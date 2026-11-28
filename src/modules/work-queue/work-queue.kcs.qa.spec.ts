@@ -185,9 +185,11 @@ function makePrisma(d: Db) {
 
 function makeService(d: Db) {
   const prisma = makePrisma(d);
-  // Nếu KCS bị lọc theo xưởng thì getScope sẽ bị gọi: để nó ném lỗi cho lộ ngay.
+  // Câu 10 (chốt 25/11/2026): KCS gắn xưởng chỉ đếm xưởng mình (test riêng ở work-queue.service.spec). Ở đây KCS chưa gắn xưởng.
   const workshopScope = {
-    getScope: jest.fn().mockRejectedValue(new Error('KCS không được hỏi phạm vi xưởng')),
+    getScope: jest
+      .fn()
+      .mockResolvedValue({ workshopId: null, workshopName: null, visibleWorkshopIds: null }),
   };
   const never = (n: string) =>
     new Proxy(
@@ -257,7 +259,7 @@ describe('UB9 AC1 - đợt cắt đang mở (CUTTING) tính vào số đỏ KCS 
   });
 });
 
-describe('UB9 AC10 - KCS thấy mọi xưởng; số đỏ = số dòng chờ (đang mở + đã chốt) trên 3 màn', () => {
+describe('UB9 AC10 - KCS chưa gắn xưởng thấy mọi xưởng; số đỏ = số dòng chờ (đang mở + đã chốt) trên 3 màn', () => {
   const full = (): Db => {
     const d = emptyDb();
     // PI 45 = Phú An, PI 46 = Phước An (lô Sơn của PI 46 sơn ở Phú An) - số đếm không phân biệt xưởng.
@@ -283,18 +285,6 @@ describe('UB9 AC10 - KCS thấy mọi xưởng; số đỏ = số dòng chờ (�
     const { counts: c } = await counts(full());
 
     expect(c).toMatchObject({ kcsPhoi: 7, kcsHan: 2, kcsSon: 1 });
-  });
-
-  it('KCS có gắn xưởng Phú An: số đỏ giống hệt KCS không gắn xưởng, và không hề hỏi phạm vi xưởng', async () => {
-    const withWorkshop = await counts(full(), {
-      id: 'kcs-pa',
-      roles: ['KCS_STAFF'],
-      warehouseScope: null,
-    });
-    const without = await counts(full());
-
-    expect(withWorkshop.counts).toEqual(without.counts);
-    expect(withWorkshop.workshopScope.getScope).not.toHaveBeenCalled();
   });
 
   it('lô đã QC_DONE / bị loại không còn trong số đỏ (chỉ OPEN + AWAITING_QC)', async () => {

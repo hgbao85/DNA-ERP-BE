@@ -66,6 +66,7 @@ export function packingAvailable(input: {
 export interface KcsGradeInput {
   passedQty: number;
   reworkQty: number;
+  /** Câu 9a (25/11/2026): chỉ còn nhận 0 - FE cũ có thể vẫn gửi 0. */
   scrapQty: number;
 }
 
@@ -79,14 +80,19 @@ export function validateKcsGrade(
 ): string | null {
   const { passedQty, reworkQty, scrapQty } = grade;
   if ([passedQty, reworkQty, scrapQty].some((n) => !Number.isInteger(n) || n < 0)) {
-    return 'Số đạt / làm lại / bỏ phải là số nguyên không âm';
+    return 'Số đạt / làm lại phải là số nguyên không âm';
+  }
+  // Câu 9 (chốt 20/11 + 25/11/2026, phương án a): KCS chuyền kiểm không còn chấm 'bỏ' - hỏng thì chấm 'làm lại', người phụ trách đan
+  // mang trả điểm đan sửa rồi báo lại. Cột kcsScrapQty giữ cho đợt cũ đã chấm bỏ (vẫn chiếm 'Hiện có' như trước).
+  if (scrapQty > 0) {
+    return 'KCS chuyền kiểm không còn chấm "bỏ" - hàng hỏng chấm "làm lại" để trả điểm đan / tổ sửa';
   }
   if (passedQty > reported.passedQty) {
     return `Số đạt KCS (${passedQty}) không được vượt số công nhân báo đạt (${reported.passedQty})`;
   }
   const total = reported.passedQty + reported.defectQty;
-  if (passedQty + reworkQty + scrapQty !== total) {
-    return `Đạt (${passedQty}) + làm lại (${reworkQty}) + bỏ (${scrapQty}) phải bằng số công nhân báo (${total})`;
+  if (passedQty + reworkQty !== total) {
+    return `Đạt (${passedQty}) + làm lại (${reworkQty}) phải bằng số công nhân báo (${total})`;
   }
   return null;
 }

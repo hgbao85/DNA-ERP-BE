@@ -58,11 +58,16 @@ describe('ck-dg-caps.util (Chuyền kiểm / Đóng gói QR, 24/11/2026)', () =>
 
   describe('validateKcsGrade (C2)', () => {
     const reported = { passedQty: 8, defectQty: 2 };
-    it('hợp lệ: đạt + làm lại + bỏ = báo', () => {
-      expect(validateKcsGrade(reported, { passedQty: 7, reworkQty: 2, scrapQty: 1 })).toBeNull();
+    it('hợp lệ: đạt + làm lại = báo', () => {
+      expect(validateKcsGrade(reported, { passedQty: 7, reworkQty: 3, scrapQty: 0 })).toBeNull();
+    });
+    it('câu 9a (25/11): chấm bỏ > 0 -> lỗi, kể cả khi tổng khớp', () => {
+      expect(validateKcsGrade(reported, { passedQty: 7, reworkQty: 2, scrapQty: 1 })).toMatch(
+        /không còn chấm/,
+      );
     });
     it('đạt KCS vượt số báo đạt -> lỗi', () => {
-      expect(validateKcsGrade(reported, { passedQty: 9, reworkQty: 0, scrapQty: 1 })).toMatch(
+      expect(validateKcsGrade(reported, { passedQty: 9, reworkQty: 1, scrapQty: 0 })).toMatch(
         /không được vượt/,
       );
     });

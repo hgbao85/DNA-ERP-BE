@@ -46,7 +46,7 @@ export class UpdateUserMfgAttributesDto {
   @ApiPropertyOptional({
     type: String,
     nullable: true,
-    description: 'Xưởng của QLSX (chỉ mfgRole PRODUCTION_MANAGER); null = bỏ gắn xưởng',
+    description: 'Xưởng của QLSX / KCS (mfgRole PRODUCTION_MANAGER hoặc KCS); null = bỏ gắn xưởng',
   })
   @IsOptional()
   @IsNumberString()
