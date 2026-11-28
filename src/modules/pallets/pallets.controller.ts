@@ -6,6 +6,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequireAssignedWarehouse } from '../../common/decorators/require-assigned-warehouse.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import {
+  ClearPaintedPalletDto,
   CreatePalletsDto,
   ListPalletsQueryDto,
   LoadPalletDto,
@@ -95,6 +96,19 @@ export class PalletsController {
     @CurrentUser('warehouseScope') scope: string | null,
   ) {
     return this.service.unload(id, scope, userId);
+  }
+
+  /** Câu 7a (25/11/2026): thủ kho Sơn gỡ pallet đã sơn (lý do bắt buộc) - pallet về Trống. */
+  @Post(':id/clear-painted')
+  @RequireAssignedWarehouse()
+  @RequirePermissions(CREATE)
+  clearPainted(
+    @Param('id') id: string,
+    @Body() dto: ClearPaintedPalletDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('warehouseScope') scope: string | null,
+  ) {
+    return this.service.clearPainted(id, dto.reason, scope, userId);
   }
 
   /** Sức chứa pallet của 1 mảnh (chỉ để cảnh báo). */

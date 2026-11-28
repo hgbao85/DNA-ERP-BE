@@ -5293,8 +5293,10 @@ model PalletLoad {
   /// Pallet về Trống (xác nhận phiếu xuất đan, hoặc thủ kho gỡ lượt xếp chưa sơn).
   clearedAt           DateTime?
   clearedById         String?
-  /// 'ISSUED' (xác nhận phiếu đan) | 'UNLOADED' (gỡ lượt xếp chưa sơn).
+  /// 'ISSUED' (xác nhận phiếu đan) | 'UNLOADED' (gỡ lượt xếp chưa sơn) | 'REMOVED_PAINTED' (thủ kho Sơn gỡ pallet đã sơn, câu 7a 28/11/2026).
   clearedReason       String?
+  /// Lý do thủ kho ghi khi gỡ pallet đã sơn (bắt buộc với REMOVED_PAINTED).
+  clearNote           String?
 
   pallet            Pallet            @relation("PalletLoads", fields: [palletId], references: [id])
   currentOf         Pallet?           @relation("PalletCurrentLoad")

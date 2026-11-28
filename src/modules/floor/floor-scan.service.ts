@@ -37,7 +37,7 @@ import { pieceMaxNow } from './floor-review.service';
 import { FloorStageService, type StagePi } from './floor-stage.service';
 import { StageHandoverService } from '../stage-handover/stage-handover.service';
 import { PalletsService } from '../pallets/pallets.service';
-import { PALLET_SON_DISABLED_MESSAGE } from '../pallets/pallet-son.config';
+import { isPalletSonEnabled, PALLET_SON_DISABLED_MESSAGE } from '../pallets/pallet-son.config';
 import type { PaintPalletDto } from '../pallets/dto/pallet.dto';
 
 const STAGE_LABEL: Record<string, string> = { PHOI: 'Phôi', HAN: 'Hàn', SON: 'Sơn' };
@@ -147,6 +147,7 @@ export class FloorScanService {
         throw new BadRequestException('Chọn mảnh và nhập số mảnh');
       }
       await this.assertOrderInPi(dto.productionOrderId, dto.productionInvoiceId);
+      await this.assertNotPalletPiece(ws.stage, dto.productionOrderId, dto.pieceId);
       const batch = await this.productionBatches.recordProductionBatch(
         dto.productionOrderId,
         { pieceId: dto.pieceId, qty: dto.qty, stage: ws.stage },
@@ -198,6 +199,33 @@ export class FloorScanService {
 
   // ─── Pallet Sơn (24/11/2026, docs THIET-KE-PALLET-SON) ────────────────────────────────────
 
+  /**
+   * Câu 6 (chốt 25/11/2026): bật pallet Sơn thì mảnh CÓ đan chỉ báo Sơn qua quét tem pallet ("Sơn xong"), không báo tay ở điểm sơn -
+   * trước đây 2 đường dùng chung số kế hoạch, báo tay chen trước làm pallet đã xếp không báo được. Mảnh không đan báo tay như cũ.
+   */
+  private async assertNotPalletPiece(stage: MfgStage, orderIdRaw: string, pieceIdRaw: string) {
+    if (stage !== MfgStage.SON || !isPalletSonEnabled()) return;
+    const order = await this.prisma.productionOrder.findUnique({
+      where: { id: parseBigIntId(orderIdRaw) },
+      select: { bomRevisionId: true },
+    });
+    if (!order) return;
+    const bp = await this.prisma.bomPiece.findUnique({
+      where: {
+        bomRevisionId_pieceId: {
+          bomRevisionId: order.bomRevisionId,
+          pieceId: parseBigIntId(pieceIdRaw),
+        },
+      },
+      select: { isWoven: true },
+    });
+    if (bp?.isWoven) {
+      throw new BadRequestException(
+        'Mảnh có đan báo Sơn bằng cách quét tem pallet rồi bấm "Sơn xong" - không báo tay ở điểm sơn. Chưa có pallet thì báo thủ kho Sơn xếp pallet.',
+      );
+    }
+  }
+
   /** Công nhân Sơn vừa quét tem pallet: pallet + lệnh + mảnh + số. Tắt công tắc: { enabled: false }. */
   async palletView(palletToken: string, user: AuthenticatedUser) {
     if (user.mfgRole !== MfgStage.SON) {
@@ -247,6 +275,52 @@ export class FloorScanService {
       idempotencyKey,
       {
         workstationId: ws.id,
+        afterWriteInTx: (tx, written) =>
+          pallets.markPaintedInTx(tx, p, { ...written, userId: user.id }),
+      },
+    );
+    await pallets.notifyShort(p, user.id);
+    return { ...(await pallets.workerView(palletToken)), productionBatch: batch, short: p.short };
+  }
+
+  /**
+   * Câu 8 (chốt 25/11/2026): mảnh có đan chỉ quét TEM PALLET (không quét tem điểm sơn trước) rồi "Sơn xong" / "Báo thiếu". Xưởng lấy
+   * theo kho Sơn của pallet; lần báo không gắn máy (workstationId null - thống kê theo máy không có dòng này, theo công nhân vẫn đủ).
+   */
+  async paintPalletDirect(
+    palletToken: string,
+    user: AuthenticatedUser,
+    dto: PaintPalletDto,
+    idempotencyKey: string | undefined,
+  ) {
+    if (!idempotencyKey) throw new BadRequestException('Header Idempotency-Key là bắt buộc');
+    const pallets = this.pallets;
+    if (!pallets) throw new BadRequestException(PALLET_SON_DISABLED_MESSAGE);
+    pallets.assertEnabled();
+    const prep = await pallets.preparePaint(palletToken, dto, idempotencyKey);
+    if (prep.replay) {
+      return { ...(await pallets.workerView(palletToken)), productionBatch: null, short: false };
+    }
+    const p = prep.prepared;
+    const pallet = await this.prisma.pallet.findUnique({
+      where: { qrToken: palletToken },
+      select: { warehouse: { select: { workshopId: true } } },
+    });
+    const workshopId = await workstationQueueWorkshopId(
+      this.prisma,
+      pallet?.warehouse.workshopId ?? null,
+    );
+    const stagePis = await this.stages.listReportablePis(MfgStage.SON, workshopId, [
+      p.productionInvoiceId,
+    ]);
+    this.assertPiReportable(MfgStage.SON, p.productionInvoiceId.toString(), [], stagePis);
+    const batch = await this.productionBatches.recordProductionBatch(
+      p.productionOrderId.toString(),
+      { pieceId: p.pieceId.toString(), qty: p.qty, stage: MfgStage.SON },
+      user.id,
+      user.mfgRole,
+      idempotencyKey,
+      {
         afterWriteInTx: (tx, written) =>
           pallets.markPaintedInTx(tx, p, { ...written, userId: user.id }),
       },

@@ -134,6 +134,19 @@ export class FloorController {
     return this.scan.palletView(palletToken, user);
   }
 
+  /** Câu 8 (25/11/2026): "Sơn xong" / "Báo thiếu" chỉ bằng tem pallet (không cần quét tem điểm sơn trước). Idempotency-Key bắt buộc. */
+  @Post('pallets/:palletToken/paint')
+  @RequirePermissions(perm(PermissionAction.CREATE))
+  @RequireMfgRole(MfgRole.SON)
+  paintPalletDirect(
+    @Param('palletToken') palletToken: string,
+    @Body() dto: PaintPalletDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ) {
+    return this.scan.paintPalletDirect(palletToken, user, dto, idempotencyKey);
+  }
+
   /** "Sơn xong pallet này" / "Báo thiếu" - báo qua điểm sơn `:token` (máy quét gần nhất). Idempotency-Key bắt buộc. */
   @Post('scan/:token/pallets/:palletToken/paint')
   @RequirePermissions(perm(PermissionAction.CREATE))

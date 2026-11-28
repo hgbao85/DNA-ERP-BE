@@ -320,11 +320,17 @@ export class PalletsService {
     }
     const bp = await this.prisma.bomPiece.findUnique({
       where: { bomRevisionId_pieceId: { bomRevisionId: order.bomRevisionId, pieceId } },
-      select: { needsSon: true },
+      select: { needsSon: true, isWoven: true },
     });
     if (!bp?.needsSon) {
       throw new BadRequestException(
         'Mảnh này không qua tổ Sơn trong định mức của SKU - không xếp pallet được',
+      );
+    }
+    // Câu 7a (chốt 25/11/2026): chỉ xếp pallet mảnh cần đan - mảnh không đan sơn xong không có phiếu xuất đan nào lấy pallet, kẹt mãi.
+    if (!bp.isWoven) {
+      throw new BadRequestException(
+        'Mảnh này không đan - không xếp pallet (công nhân Sơn quét tem điểm sơn rồi báo tay như cũ)',
       );
     }
     const sonWh = await stageWarehouseOfPi(this.prisma, piId, MfgStage.SON);
@@ -393,6 +399,43 @@ export class PalletsService {
       await tx.palletLoad.update({
         where: { id: p.currentLoadId },
         data: { clearedAt: new Date(), clearedById: userId, clearedReason: 'UNLOADED' },
+      });
+      await tx.pallet.update({
+        where: { id: palletId },
+        data: { status: PalletStatus.EMPTY, currentLoadId: null },
+      });
+    });
+    const [dto] = await this.toDtos([await this.findPalletOrThrow(palletId)]);
+    return dto;
+  }
+
+  /**
+   * Câu 7a (chốt 25/11/2026): thủ kho Sơn gỡ pallet ĐÃ SƠN (bắt ghi lý do) để dùng lại - pallet kẹt khi SKU huỷ, KCS Sơn chấm lỗi hết,
+   * mảnh đi đan bằng phiếu nhập tay... Lượt xếp giữ trong lịch sử (REMOVED_PAINTED + lý do), số đã báo Sơn không đổi. Pallet đang
+   * trên phiếu xuất đan chờ ký thì không gỡ được (huỷ phiếu trước).
+   */
+  async clearPainted(id: string, reasonRaw: string, scope: string | null, userId: string) {
+    this.assertEnabled();
+    const reason = (reasonRaw ?? '').trim();
+    if (reason.length < 3) throw new BadRequestException('Ghi lý do gỡ pallet (ít nhất 3 ký tự)');
+    const palletId = parseBigIntId(id);
+    const pallet = await this.findPalletOrThrow(palletId);
+    this.assertPalletScope(pallet, scope);
+    await this.prisma.$transaction(async (tx) => {
+      const p = (await this.lockPalletsInTx(tx, [palletId])).get(palletId.toString());
+      if (p?.status !== PalletStatus.PAINTED || !p.currentLoadId) {
+        throw new ConflictException(
+          `Chỉ gỡ được pallet đã Sơn xong - pallet ${pallet.code} đang ${STATUS_LABEL[p?.status ?? PalletStatus.EMPTY]}${p?.status === PalletStatus.ON_SLIP ? ' (huỷ phiếu xuất đan chờ ký trước)' : ''}`,
+        );
+      }
+      await tx.palletLoad.update({
+        where: { id: p.currentLoadId },
+        data: {
+          clearedAt: new Date(),
+          clearedById: userId,
+          clearedReason: 'REMOVED_PAINTED',
+          clearNote: reason,
+        },
       });
       await tx.pallet.update({
         where: { id: palletId },
@@ -762,6 +805,8 @@ export class PalletsService {
         where: {
           bomRevisionId: { in: [...new Set(orders.map((o) => o.bomRevisionId))] },
           needsSon: true,
+          // Câu 7a (25/11/2026): chỉ mảnh cần đan mới lên pallet.
+          isWoven: true,
         },
         select: {
           bomRevisionId: true,
@@ -974,6 +1019,8 @@ export class PalletsService {
         clearedAt: l.clearedAt,
         clearedByName: name(l.clearedById),
         clearedReason: l.clearedReason,
+        /** Câu 7a (28/11/2026): lý do thủ kho Sơn gỡ pallet đã sơn. */
+        clearNote: l.clearNote,
       };
     });
   }

@@ -70,6 +70,7 @@ const MATRIX: Record<string, Rule> = {
   // pallet Sơn (24/11/2026): chỉ công nhân tổ Sơn xem / báo Sơn xong qua tem pallet
   'GET pallets/:palletToken': { action: VIEW, mfg: [MfgRole.SON] },
   'POST scan/:token/pallets/:palletToken/paint': { action: CREATE, mfg: [MfgRole.SON] },
+  'POST pallets/:palletToken/paint': { action: CREATE, mfg: [MfgRole.SON] },
   // số của CHÍNH người gọi (id lấy từ token) nên không cần giới hạn vai trò
   'GET my-output': { action: VIEW },
   'GET my-stats': { action: VIEW },
