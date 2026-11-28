@@ -100,6 +100,10 @@ import {
 } from '../stage-handover/stage-handover.config';
 import { loadSteelUsage, steelReportLimitMm, steelUsage } from './steel-usage.util';
 import {
+  barsLeftCutTeamById,
+  STEEL_RETURN_BARS_SELECT,
+} from '../production-invoices/order-cancellation/steel-return.util';
+import {
   StepBundleResponseDto,
   StepBundleSegmentResponseDto,
 } from './dto/step-bundle-response.dto';
@@ -1437,10 +1441,15 @@ export class SteelIssuesService {
       loadSteelUsage(db, p.piId, p.materialId),
       db.steelReturn.findMany({
         where: { productionInvoiceId: p.piId, materialId: p.materialId },
-        select: { lengthMm: true, bars: true },
+        select: { ...STEEL_RETURN_BARS_SELECT, lengthMm: true },
       }),
     ]);
-    const returnedMm = returned.reduce((t, r) => t + r.lengthMm * r.bars, 0);
+    // Nghiệp vụ 28/11 (phương án a): số cây đã rời tổ cắt - thủ kho đếm thiếu thì phần chênh còn ở tổ, vẫn cắt tiếp được.
+    const leftBars = barsLeftCutTeamById(returned);
+    const returnedMm = returned.reduce(
+      (t, r) => t + r.lengthMm * (leftBars.get(r.id.toString()) ?? r.bars),
+      0,
+    );
     const live = p.piOrders.filter((o) => o.status !== ProductionOrderStatus.CANCELLED);
     let remainingLiveMm = 0;
     if (live.length > 0) {
@@ -2292,8 +2301,15 @@ export class SteelIssuesService {
     // Huỷ lệnh đợt 2 - Q3: cây tổ cắt đã nhập trả kho.
     const steelReturnRows = await this.prisma.steelReturn.findMany({
       where: { productionInvoiceId: { in: invoiceIds } },
-      select: { productionInvoiceId: true, materialId: true, lengthMm: true, bars: true },
+      select: {
+        ...STEEL_RETURN_BARS_SELECT,
+        productionInvoiceId: true,
+        materialId: true,
+        lengthMm: true,
+      },
     });
+    // Nghiệp vụ 28/11 (phương án a): số cây đã rời tổ cắt theo từng dòng (thủ kho đếm thiếu thì phần chênh còn ở tổ).
+    const steelReturnLeftBars = barsLeftCutTeamById(steelReturnRows);
     // Huỷ lệnh theo SKU (23/11/2026): bỏ lệnh đã huỷ khỏi số cần. Đoạn đã làm của SKU huỷ vẫn nạp (dòng theo PI) - thành
     // nhóm riêng trong byOrder, không cộng vào số của cỡ đoạn (xem buildPhoiProgress).
     // Q3 (review IT 26/11 mục 2.1): SKU đã huỷ mà QLSX cho cắt tiếp cũng nạp (cutContinued) - màn quét lấy cỡ đoạn từ đây.
@@ -2534,7 +2550,8 @@ export class SteelIssuesService {
       for (const r of steelReturnRows) {
         if (r.productionInvoiceId.toString() !== piKey) continue;
         const k = r.materialId.toString();
-        returnedMmByMaterial.set(k, (returnedMmByMaterial.get(k) ?? 0) + r.lengthMm * r.bars);
+        const bars = steelReturnLeftBars.get(r.id.toString()) ?? r.bars;
+        returnedMmByMaterial.set(k, (returnedMmByMaterial.get(k) ?? 0) + r.lengthMm * bars);
       }
       cut.set(piKey, {
         returnedMmByMaterial,

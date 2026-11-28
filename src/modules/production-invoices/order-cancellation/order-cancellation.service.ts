@@ -49,6 +49,11 @@ import { StockLedgerService } from '../../stock/stock-ledger.service';
 import { WovenStockService } from '../../woven-stock/woven-stock.service';
 import { WorkshopWarehouseResolver } from '../../stock/workshop-warehouse.util';
 import { DecideCutDto, PendingSteelReturnDto } from './order-cancellation.dto';
+import {
+  barsLeftCutTeamById,
+  outstandingShortById,
+  STEEL_RETURN_BARS_SELECT,
+} from './steel-return.util';
 
 /** Người gọi (KHSX / Admin / Sếp) - roles để biết có được thao tác đề nghị của người khác không. */
 export interface CancelActor {
@@ -104,7 +109,27 @@ export interface CutSteelRowDto {
     /** Đã nhập trả (mm). */
     returnedMm: number;
   }[];
-  returns: { materialCode: string; lengthMm: number; bars: number; createdAt: Date }[];
+  /** bars = số QLSX ghi; confirmedBars = số thủ kho đếm (null = chờ xác nhận); lostBars = phần thiếu đã xác nhận mất. */
+  returns: {
+    id: string;
+    materialCode: string;
+    lengthMm: number;
+    bars: number;
+    confirmedBars: number | null;
+    lostBars: number;
+    makeupForId: string | null;
+    createdAt: Date;
+  }[];
+  /** Nghiệp vụ 28/11 (phương án a): dòng thủ kho đếm thiếu còn treo - QLSX "Ghi trả thêm" hoặc "Xác nhận mất". */
+  shortReturns: {
+    id: string;
+    materialCode: string;
+    lengthMm: number;
+    bars: number;
+    confirmedBars: number;
+    outstandingBars: number;
+    confirmedAt: Date | null;
+  }[];
 }
 
 /** Số hàng của SKU đang nằm ở từng công đoạn lúc Sếp duyệt huỷ - đợt 2 dùng để đưa vào tồn. Chỉ đọc, không đổi gì. */
@@ -455,7 +480,7 @@ export class OrderCancellationService {
       }),
       db.steelReturn.findMany({
         where: { productionInvoiceId: piId },
-        select: { materialId: true, lengthMm: true, bars: true },
+        select: { ...STEEL_RETURN_BARS_SELECT, materialId: true, lengthMm: true },
       }),
     ]);
     const m = new Map<string, number>();
@@ -468,19 +493,39 @@ export class OrderCancellationService {
         -c.qty * c.segmentSpec.cutLengthMm.toNumber(),
       );
     }
-    for (const r of returns) add(r.materialId.toString(), -r.lengthMm * r.bars);
+    // Nghiệp vụ 28/11 (phương án a): trừ số cây đã rời tổ cắt (thủ kho đếm thiếu thì phần chênh còn ở tổ), không trừ số QLSX ghi.
+    const left = barsLeftCutTeamById(returns);
+    for (const r of returns) {
+      add(r.materialId.toString(), -r.lengthMm * (left.get(r.id.toString()) ?? r.bars));
+    }
     for (const [k, v] of m) m.set(k, Math.max(0, Math.round(v)));
     return m;
   }
 
   // ─── Q3: sắt đã xuất chưa cắt của SKU đã huỷ (QLSX quyết) ──────────────────────────────────────────────────────────────
 
-  /** Đề nghị đã duyệt mà lệnh có phiếu xuất sắt, chưa "Ngưng" - QLSX cần quyết (hoặc đang cho cắt tiếp). */
+  /**
+   * Đề nghị đã duyệt mà lệnh có phiếu xuất sắt, chưa "Ngưng" - QLSX cần quyết (hoặc đang cho cắt tiếp). Nghiệp vụ 28/11 (phương án
+   * a): đã "Ngưng" mà thủ kho đếm thiếu cây trả về, phần thiếu chưa xử lý -> vẫn hiện để QLSX "Ghi trả thêm" / "Xác nhận mất".
+   */
   async listCutSteel(): Promise<CutSteelRowDto[]> {
     const rows = await this.prisma.productionOrderCancelRequest.findMany({
       where: {
         status: ProductionOrderCancelStatus.APPROVED,
-        OR: [{ cutDecision: null }, { cutDecision: ProductionOrderCutDecision.CONTINUE }],
+        OR: [
+          { cutDecision: null },
+          { cutDecision: ProductionOrderCutDecision.CONTINUE },
+          {
+            cutDecision: ProductionOrderCutDecision.STOP,
+            steelReturns: {
+              some: {
+                status: SteelReturnStatus.CONFIRMED,
+                shortLostAt: null,
+                confirmedBars: { lt: this.prisma.steelReturn.fields.bars },
+              },
+            },
+          },
+        ],
         productionOrder: {
           productionInvoiceItem: { productionInvoice: { steelIssues: { some: {} } } },
         },
@@ -493,7 +538,11 @@ export class OrderCancellationService {
     for (const r of rows) {
       const piId = r.productionOrder.productionInvoiceItem.productionInvoice?.id;
       if (piId == null) continue;
-      out.push(await this.cutSteelRow(r, piId));
+      const row = await this.cutSteelRow(r, piId);
+      // Đã ngưng: chỉ hiện khi còn phần thiếu treo (dòng thiếu đã ghi trả thêm đủ thì thôi).
+      if (r.cutDecision === ProductionOrderCutDecision.STOP && row.shortReturns.length === 0)
+        continue;
+      out.push(row);
     }
     return out;
   }
@@ -515,10 +564,12 @@ export class OrderCancellationService {
       this.prisma.steelReturn.findMany({
         where: { productionInvoiceId: piId },
         select: {
+          ...STEEL_RETURN_BARS_SELECT,
+          cancelRequestId: true,
           materialId: true,
           lengthMm: true,
-          bars: true,
           createdAt: true,
+          confirmedAt: true,
           material: { select: { code: true } },
         },
         orderBy: { id: 'asc' },
@@ -551,9 +602,12 @@ export class OrderCancellationService {
       const m = byMat.get(materialId);
       if (m) m.leftoverMm = mm;
     }
+    // Nghiệp vụ 28/11 (phương án a): "đã nhập trả" = số cây đã rời tổ cắt (thủ kho đếm thiếu thì phần chênh còn ở tổ).
+    const left = barsLeftCutTeamById(returns);
+    const outstanding = outstandingShortById(returns);
     for (const ret of returns) {
       const m = byMat.get(ret.materialId.toString());
-      if (m) m.returnedMm += ret.lengthMm * ret.bars;
+      if (m) m.returnedMm += ret.lengthMm * (left.get(ret.id.toString()) ?? ret.bars);
     }
     return {
       request: this.toDto(r),
@@ -564,11 +618,30 @@ export class OrderCancellationService {
         barLengthsMm: m.barLengthsMm.sort((a, b) => b - a),
       })),
       returns: returns.map((x) => ({
+        id: x.id.toString(),
         materialCode: x.material.code,
         lengthMm: x.lengthMm,
         bars: x.bars,
+        confirmedBars:
+          x.status === SteelReturnStatus.CONFIRMED ? (x.confirmedBars ?? x.bars) : null,
+        lostBars: x.shortLostAt
+          ? Math.max(0, (left.get(x.id.toString()) ?? 0) - (x.confirmedBars ?? x.bars))
+          : 0,
+        makeupForId: x.makeupForId?.toString() ?? null,
         createdAt: x.createdAt,
       })),
+      // Chỉ dòng của chính đề nghị này (lệnh gộp có thể có nhiều SKU huỷ cùng PI).
+      shortReturns: returns
+        .filter((x) => x.cancelRequestId === r.id && outstanding.has(x.id.toString()))
+        .map((x) => ({
+          id: x.id.toString(),
+          materialCode: x.material.code,
+          lengthMm: x.lengthMm,
+          bars: x.bars,
+          confirmedBars: x.confirmedBars ?? x.bars,
+          outstandingBars: outstanding.get(x.id.toString())!,
+          confirmedAt: x.confirmedAt,
+        })),
     };
   }
 
@@ -768,7 +841,7 @@ export class OrderCancellationService {
     if (!Number.isInteger(countedBars) || countedBars < 0) {
       throw new BadRequestException('Số cây đếm được phải là số nguyên không âm');
     }
-    await this.prisma.$transaction(async (tx) => {
+    const confirmed = await this.prisma.$transaction(async (tx) => {
       await lockBusinessKey(tx, `steel-return-confirm:${id}`);
       const row = await tx.steelReturn.findUnique({ where: { id } });
       if (!row) throw new NotFoundException(`Không tìm thấy dòng trả sắt ${returnId}`);
@@ -816,8 +889,153 @@ export class OrderCancellationService {
           tx,
         );
       }
+      return row;
     });
+    // Nghiệp vụ 28/11 (phương án a): đếm thiếu -> phần chênh vẫn tính còn ở tổ cắt, báo QLSX đi tìm (sau commit, lỗi không chặn).
+    if (countedBars < confirmed.bars) await this.emitSteelReturnShort(confirmed, countedBars);
     return this.listPendingSteelReturns(warehouseScope);
+  }
+
+  private async emitSteelReturnShort(
+    row: {
+      id: bigint;
+      productionInvoiceId: bigint;
+      materialId: bigint;
+      lengthMm: number;
+      bars: number;
+      cancelRequestId: bigint;
+    },
+    countedBars: number,
+  ): Promise<void> {
+    try {
+      const [codes, material, req] = await Promise.all([
+        loadLenhDisplayCodes(this.prisma, [row.productionInvoiceId]),
+        this.prisma.material.findUnique({ where: { id: row.materialId }, select: { code: true } }),
+        this.prisma.productionOrderCancelRequest.findUnique({
+          where: { id: row.cancelRequestId },
+          select: {
+            productionOrder: { select: { mfgProduct: { select: { factoryCode: true } } } },
+          },
+        }),
+      ]);
+      await this.notifications.emit('STEEL_RETURN_SHORT', {
+        entityId: row.id.toString(),
+        dedupeKey: `STEEL_RETURN_SHORT:${row.id}`,
+        params: {
+          lenhCode: codes.get(row.productionInvoiceId.toString()) ?? `#${row.productionInvoiceId}`,
+          factoryCode: req?.productionOrder.mfgProduct.factoryCode ?? '',
+          materialCode: material?.code ?? '',
+          lengthMm: row.lengthMm,
+          recordedBars: row.bars,
+          countedBars,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Không báo được thiếu cây sắt trả về (dòng ${row.id}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Nghiệp vụ 28/11 (phương án a): QLSX tìm thấy cây thủ kho đếm thiếu -> ghi trả thêm `bars` cây (≤ phần thiếu còn treo) thành 1
+   * dòng mới chờ thủ kho Phôi xác nhận, trỏ về dòng thiếu. Khoá steel-return:{PI} (cùng khoá "Ngưng cắt").
+   */
+  async makeupSteelReturn(
+    actor: CancelActor,
+    returnId: string,
+    bars: number,
+  ): Promise<CutSteelRowDto[]> {
+    const id = parseBigIntId(returnId);
+    if (!Number.isInteger(bars) || bars < 1) {
+      throw new BadRequestException('Số cây ghi trả thêm phải là số nguyên từ 1');
+    }
+    const row = await this.prisma.steelReturn.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException(`Không tìm thấy dòng trả sắt ${returnId}`);
+    const done = await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `steel-return:${row.productionInvoiceId}`);
+      const outstanding = await this.outstandingShortInTx(tx, row.productionInvoiceId, id);
+      if (bars > outstanding) {
+        throw new BadRequestException(
+          outstanding === 0
+            ? 'Dòng này không còn thiếu cây nào để ghi trả thêm'
+            : `Chỉ còn thiếu ${outstanding} cây - không ghi trả thêm ${bars} cây được`,
+        );
+      }
+      await tx.steelReturn.create({
+        data: {
+          cancelRequestId: row.cancelRequestId,
+          productionInvoiceId: row.productionInvoiceId,
+          materialId: row.materialId,
+          lengthMm: row.lengthMm,
+          bars,
+          warehouseId: row.warehouseId,
+          createdById: actor.id,
+          status: SteelReturnStatus.PENDING,
+          makeupForId: id,
+        },
+      });
+      return outstanding - bars === 0;
+    });
+    if (done) await this.resolveSteelReturnShort(id);
+    return this.listCutSteel();
+  }
+
+  /**
+   * Nghiệp vụ 28/11 (phương án a): QLSX không tìm thấy -> xác nhận mất phần thiếu còn treo. Phần đó rời tổ cắt (hao hụt), không ghi
+   * sổ kho. Bắt buộc ghi lý do.
+   */
+  async markSteelReturnLost(
+    actor: CancelActor,
+    returnId: string,
+    note: string,
+  ): Promise<CutSteelRowDto[]> {
+    const id = parseBigIntId(returnId);
+    const reason = note?.trim();
+    if (!reason) throw new BadRequestException('Phải ghi lý do xác nhận mất');
+    const row = await this.prisma.steelReturn.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException(`Không tìm thấy dòng trả sắt ${returnId}`);
+    await this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, `steel-return:${row.productionInvoiceId}`);
+      const outstanding = await this.outstandingShortInTx(tx, row.productionInvoiceId, id);
+      if (outstanding === 0) {
+        throw new ConflictException(
+          'Dòng này không còn thiếu cây nào (đã ghi trả thêm đủ hoặc đã xác nhận mất)',
+        );
+      }
+      await tx.steelReturn.update({
+        where: { id },
+        data: { shortLostAt: new Date(), shortLostById: actor.id, shortLostNote: reason },
+      });
+    });
+    await this.resolveSteelReturnShort(id);
+    return this.listCutSteel();
+  }
+
+  /** Phần thiếu còn treo của 1 dòng (đọc trong khoá steel-return:{PI}). */
+  private async outstandingShortInTx(tx: PrismaTx, piId: bigint, rowId: bigint): Promise<number> {
+    const rows = await tx.steelReturn.findMany({
+      where: { productionInvoiceId: piId },
+      select: STEEL_RETURN_BARS_SELECT,
+    });
+    if (!rows.some((r) => r.id === rowId)) {
+      throw new NotFoundException(`Không tìm thấy dòng trả sắt ${rowId}`);
+    }
+    return outstandingShortById(rows).get(rowId.toString()) ?? 0;
+  }
+
+  private async resolveSteelReturnShort(rowId: bigint): Promise<void> {
+    try {
+      await this.notifications.resolve({
+        entityType: 'STEEL_RETURN',
+        entityId: rowId.toString(),
+        types: ['STEEL_RETURN_SHORT'],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Không đóng được thông báo thiếu cây (dòng ${rowId}): ${(error as Error).message}`,
+      );
+    }
   }
 
   // ─── KHSX đề nghị / rút lại ─────────────────────────────────────────────────────────────────────────────────────────────

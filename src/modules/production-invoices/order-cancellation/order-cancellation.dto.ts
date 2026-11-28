@@ -161,6 +161,22 @@ export class ConfirmSteelReturnDto {
   countedBars!: number;
 }
 
+/** Nghiệp vụ 28/11 (phương án a): QLSX ghi trả thêm cây thủ kho đếm thiếu (≤ phần thiếu còn treo). */
+export class MakeupSteelReturnDto {
+  @IsInt()
+  @Min(1)
+  bars!: number;
+}
+
+/** Nghiệp vụ 28/11 (phương án a): QLSX xác nhận mất phần cây thiếu - bắt buộc lý do. */
+export class MarkSteelReturnLostDto {
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MinLength(3, { message: 'Ghi lý do xác nhận mất (ít nhất 3 ký tự)' })
+  @MaxLength(500)
+  note!: string;
+}
+
 /** Nghiệp vụ 26/11 câu 1: khung đan lấy tồn khác kho thành phẩm, đang chuyển - chờ thủ kho nơi nhận xác nhận. */
 export interface WovenInTransitDto {
   id: string;
