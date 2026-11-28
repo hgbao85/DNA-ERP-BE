@@ -5199,17 +5199,27 @@ model IssueSlipLine {
 /// chuyền. Chỉ nâng trần "theo hàng đã nhận", KHÔNG nâng trần kế hoạch (maxNow). Chỉ thêm, không sửa / xoá.
 ///  - HAN / SON: theo (lệnh, SKU, mảnh), qty = số mảnh. Mảnh làm từ đoạn: quy ra đoạn = qty × định mức đoạn / mảnh.
 ///  - PHOI: theo (lệnh, loại sắt), qty = số mm đoạn được báo thêm ngoài 102% sắt đã nhận.
+/// Đợt 2 lượt 1 (28/11/2026, câu 2 cách 1): loại dòng. OVERRIDE = QLSX mở chặn (ứng trước - phiếu giao sau đó trả dần).
+/// OPENING_DONE = đầu kỳ tự tính ngày bật: số đã báo Hàn / Sơn trước ngày bật coi như đã nhận. OPENING_WAITING = đầu kỳ thủ kho Hàn
+/// đếm: khung đã Hàn đạt đang chờ ở tổ Sơn (Sơn đã nhận, ghi tồn kho Sơn). 2 loại đầu kỳ là "đã nhận" thật, không bị phiếu trả.
+enum StageHandoverOverrideKind {
+  OVERRIDE
+  OPENING_DONE
+  OPENING_WAITING
+}
+
 model StageHandoverOverride {
-  id                  BigInt   @id @default(autoincrement())
+  id                  BigInt                    @id @default(autoincrement())
   productionInvoiceId BigInt
   productionOrderId   BigInt?
   stage               MfgStage
   pieceId             BigInt?
   materialId          BigInt?
-  qty                 Decimal  @db.Decimal(14, 4)
+  qty                 Decimal                   @db.Decimal(14, 4)
   reason              String
   createdById         String
-  createdAt           DateTime @default(now())
+  createdAt           DateTime                  @default(now())
+  kind                StageHandoverOverrideKind @default(OVERRIDE)
 
   productionInvoice ProductionInvoice @relation(fields: [productionInvoiceId], references: [id], onDelete: Cascade)
 

@@ -68,6 +68,8 @@ jobs:
       - run: pnpm test:e2e
         env:
           DATABASE_URL: postgresql://erp_test:erp_test@localhost:5432/dna_erp_test?schema=public
+          # 28/11/2026: e2e (ts-jest dựng cả app trong 1 tiến trình) hết heap mặc định của Node (exit 134) -> nới lên 6 GB như lint.
+          NODE_OPTIONS: --max-old-space-size=6144
 
   build:
     runs-on: ubuntu-latest

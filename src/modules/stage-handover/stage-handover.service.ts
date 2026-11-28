@@ -14,12 +14,14 @@ import {
   Prisma,
   ProductionBatchStatus,
   ProductionInvoiceStatus,
+  StageHandoverOverrideKind,
   StockLedgerRefType,
   TransferStatus,
   WarehouseKind,
 } from '../../generated/prisma/client';
 import { lockBusinessKey, lockBusinessKeyShared } from '../../common/utils/advisory-lock.util';
 import { NOT_CANCELLED_ORDER } from '../../common/utils/cancelled-order.util';
+import { DEFAULT_ROLES } from '../../common/constants/roles.constant';
 import { loadLenhDisplayCodes } from '../../common/utils/lenh-code.util';
 import { parseBigIntId } from '../../common/utils/parse-bigint-id.util';
 import {
@@ -46,6 +48,7 @@ import {
 } from './dto/stage-handover.dto';
 import {
   framePieceCap,
+  outstandingAdvance,
   PieceReceivedCap,
   SegmentPieceInput,
   segmentPieceCaps,
@@ -410,6 +413,53 @@ export class StageHandoverService {
         `${p.pieceName}: kho ${p.warehouse.code} còn ${round4(onHand)} mảnh, đang trên phiếu chờ ký ${draftQty}, phiếu chuyển chờ nhận ${pendingQty} - còn giao được ${Math.max(0, physical)}, phiếu ghi ${p.qty}.`,
       );
     }
+    // Đợt 2 lượt 1 (28/11/2026): tồn mảnh kho Hàn là chung mọi SKU - 2 SKU dùng chung mảnh thì SKU này giao lố sang khung của SKU kia.
+    // Chặn thêm theo SKU: khung của SKU đạt KCS Hàn vào kho này − đã giao Sơn − đang trên phiếu giao chờ ký khác.
+    const own = await this.frameSkuAvailableInTx(tx, p, excludeSlipId);
+    if (p.qty > own.available + EPS) {
+      throw new BadRequestException(
+        `${p.pieceName}: SKU này có ${own.passed} mảnh đạt KCS Hàn vào kho ${p.warehouse.code}, đã giao Sơn ${own.handed}, đang trên phiếu chờ ký ${own.draft} - còn giao được ${Math.max(0, own.available)}, phiếu ghi ${p.qty}. Tồn mảnh còn lại của kho là của SKU khác.`,
+      );
+    }
+  }
+
+  /** Phần khung của đúng 1 SKU còn giao được ở kho Hàn (xem assertFrameCapInTx). */
+  private async frameSkuAvailableInTx(
+    db: Db,
+    p: { productionOrderId: bigint; pieceId: bigint; warehouse: { id: bigint } },
+    excludeSlipId: bigint | null,
+  ): Promise<{ passed: number; handed: number; draft: number; available: number }> {
+    const base = {
+      kind: IssueSlipLineKind.FRAME_HANDOVER,
+      productionOrderId: p.productionOrderId,
+      pieceId: p.pieceId,
+    };
+    const [passed, handed, draft] = await Promise.all([
+      this.framePassedQty(db, p.productionOrderId, p.pieceId, p.warehouse.id),
+      db.issueSlipLine.aggregate({
+        where: { ...base, slip: { status: IssueSlipStatus.ISSUED, warehouseId: p.warehouse.id } },
+        _sum: { qty: true },
+      }),
+      db.issueSlipLine.aggregate({
+        where: {
+          ...base,
+          slip: {
+            status: IssueSlipStatus.DRAFT,
+            warehouseId: p.warehouse.id,
+            ...(excludeSlipId ? { id: { not: excludeSlipId } } : {}),
+          },
+        },
+        _sum: { qty: true },
+      }),
+    ]);
+    const handedQty = handed._sum.qty?.toNumber() ?? 0;
+    const draftQty = draft._sum.qty?.toNumber() ?? 0;
+    return {
+      passed,
+      handed: handedQty,
+      draft: draftQty,
+      available: round4(passed - handedQty - draftQty),
+    };
   }
 
   async confirmFrameInTx(
@@ -530,18 +580,38 @@ export class StageHandoverService {
         where: { stage, productionOrderId: { in: orderIds } },
         _sum: { reportedQty: true },
       }),
-      db.stageHandoverOverride.groupBy({
-        by: ['productionOrderId', 'pieceId'],
+      // Từng lần mở chặn kèm thời điểm: phiếu giao xác nhận sau đó trả dần phần đã ứng (lượt 1, 28/11/2026 - outstandingAdvance).
+      db.stageHandoverOverride.findMany({
         where: { productionInvoiceId: piId, stage },
-        _sum: { qty: true },
+        select: {
+          productionOrderId: true,
+          pieceId: true,
+          qty: true,
+          createdAt: true,
+          kind: true,
+        },
       }),
     ]);
     const usedOf = new Map(
       used.map((u) => [`${u.productionOrderId}:${u.pieceId}`, u._sum.reportedQty ?? 0]),
     );
-    const overrideOf = new Map(
-      overrides.map((o) => [`${o.productionOrderId}:${o.pieceId}`, o._sum.qty?.toNumber() ?? 0]),
-    );
+    const overrideOf = new Map<string, number>();
+    const overridesOf = new Map<string, { at: Date; qty: number }[]>();
+    // Câu 2 cách 1 (28/11/2026): dòng đầu kỳ (đã báo trước ngày bật / khung chờ Sơn) là "đã nhận" thật, không phải ứng trước.
+    const openingOf = new Map<string, number>();
+    for (const o of overrides) {
+      const k = `${o.productionOrderId}:${o.pieceId}`;
+      const q = o.qty.toNumber();
+      if (
+        o.kind === StageHandoverOverrideKind.OPENING_DONE ||
+        o.kind === StageHandoverOverrideKind.OPENING_WAITING
+      ) {
+        openingOf.set(k, round4((openingOf.get(k) ?? 0) + q));
+        continue;
+      }
+      overrideOf.set(k, round4((overrideOf.get(k) ?? 0) + q));
+      overridesOf.set(k, [...(overridesOf.get(k) ?? []), { at: o.createdAt, qty: q }]);
+    }
     const segmentPieces: SegmentPieceInput[] = [];
     const framePieces: PiPieceRow[] = [];
     for (const r of rows) {
@@ -561,26 +631,52 @@ export class StageHandoverService {
 
     let pool = new Map<string, SegmentPoolRow>();
     if (segmentPieces.length > 0) {
-      const received = await db.issueSlipLine.groupBy({
-        by: ['segmentSpecId', 'segmentSteps'],
+      const received = await db.issueSlipLine.findMany({
         where: {
           kind: IssueSlipLineKind.SEGMENT_HANDOVER,
           productionInvoiceId: piId,
           stage,
           slip: { status: IssueSlipStatus.ISSUED },
         },
-        _sum: { qty: true },
+        select: {
+          segmentSpecId: true,
+          segmentSteps: true,
+          qty: true,
+          slip: { select: { issuedAt: true, createdAt: true } },
+        },
       });
       const receivedByCode = new Map<string, number>();
+      const events = new Map<string, { at: Date; advance?: number; receipt?: number }[]>();
+      const push = (code: string, e: { at: Date; advance?: number; receipt?: number }) =>
+        events.set(code, [...(events.get(code) ?? []), e]);
       for (const g of received) {
         if (g.segmentSpecId == null) continue;
-        receivedByCode.set(
-          segmentCodeKey(g.segmentSpecId, g.segmentSteps),
-          g._sum.qty?.toNumber() ?? 0,
-        );
+        const code = segmentCodeKey(g.segmentSpecId, g.segmentSteps);
+        const q = g.qty.toNumber();
+        receivedByCode.set(code, round4((receivedByCode.get(code) ?? 0) + q));
+        push(code, { at: g.slip.issuedAt ?? g.slip.createdAt, receipt: q });
       }
-      pool = segmentPool(segmentPieces, receivedByCode);
-      for (const [key, c] of segmentPieceCaps(segmentPieces, receivedByCode)) {
+      // Đầu kỳ (câu 2 cách 1): số mảnh coi như đã nhận quy ra đoạn, cộng thẳng vào kho đoạn đã nhận (không bị phiếu trả).
+      for (const p of segmentPieces) {
+        const opening = openingOf.get(p.key) ?? 0;
+        if (opening <= 0) continue;
+        for (const [code, perPiece] of p.qtyPerPieceByCode) {
+          receivedByCode.set(code, round4((receivedByCode.get(code) ?? 0) + opening * perPiece));
+        }
+      }
+      // Mở chặn của mảnh quy ra đoạn theo từng mã (cùng cách segmentPool), rồi phiếu sau đó trả dần.
+      for (const p of segmentPieces) {
+        for (const o of overridesOf.get(p.key) ?? []) {
+          for (const [code, perPiece] of p.qtyPerPieceByCode) {
+            push(code, { at: o.at, advance: round4(o.qty * perPiece) });
+          }
+        }
+      }
+      const advanceLeftByCode = new Map(
+        [...events].map(([code, ev]) => [code, outstandingAdvance(ev)]),
+      );
+      pool = segmentPool(segmentPieces, receivedByCode, advanceLeftByCode);
+      for (const [key, c] of segmentPieceCaps(segmentPieces, receivedByCode, advanceLeftByCode)) {
         caps.set(key, { ...c, mode: 'SEGMENT' });
       }
     }
@@ -588,18 +684,21 @@ export class StageHandoverService {
     if (framePieces.length > 0) {
       const frameOrderIds = [...new Set(framePieces.map((r) => r.orderId))];
       const [viaSlip, viaTransfer] = await Promise.all([
-        db.issueSlipLine.groupBy({
-          by: ['productionOrderId', 'pieceId'],
+        db.issueSlipLine.findMany({
           where: {
             kind: IssueSlipLineKind.FRAME_HANDOVER,
             productionOrderId: { in: frameOrderIds },
             slip: { status: IssueSlipStatus.ISSUED },
           },
-          _sum: { qty: true },
+          select: {
+            productionOrderId: true,
+            pieceId: true,
+            qty: true,
+            slip: { select: { issuedAt: true, createdAt: true } },
+          },
         }),
         // Phước An: mảnh sang Sơn Phú An bằng phiếu chuyển kho (giữ nguyên) - số Sơn đã nhận cộng cả phiếu chuyển đã xác nhận.
-        db.warehouseTransferPieceItem.groupBy({
-          by: ['productionOrderId', 'pieceId'],
+        db.warehouseTransferPieceItem.findMany({
           where: {
             productionOrderId: { in: frameOrderIds },
             transfer: {
@@ -607,24 +706,37 @@ export class StageHandoverService {
               toWarehouse: { kind: WarehouseKind.SON },
             },
           },
-          _sum: { quantity: true },
+          select: {
+            productionOrderId: true,
+            pieceId: true,
+            quantity: true,
+            transfer: { select: { confirmedAt: true, createdAt: true } },
+          },
         }),
       ]);
       const recvOf = new Map<string, number>();
+      const events = new Map<string, { at: Date; advance?: number; receipt?: number }[]>();
+      const push = (k: string, e: { at: Date; advance?: number; receipt?: number }) =>
+        events.set(k, [...(events.get(k) ?? []), e]);
       for (const g of viaSlip) {
         const k = `${g.productionOrderId}:${g.pieceId}`;
-        recvOf.set(k, (recvOf.get(k) ?? 0) + (g._sum.qty?.toNumber() ?? 0));
+        const q = g.qty.toNumber();
+        recvOf.set(k, (recvOf.get(k) ?? 0) + q);
+        push(k, { at: g.slip.issuedAt ?? g.slip.createdAt, receipt: q });
       }
       for (const g of viaTransfer) {
         const k = `${g.productionOrderId}:${g.pieceId}`;
-        recvOf.set(k, (recvOf.get(k) ?? 0) + (g._sum.quantity ?? 0));
+        recvOf.set(k, (recvOf.get(k) ?? 0) + g.quantity);
+        push(k, { at: g.transfer.confirmedAt ?? g.transfer.createdAt, receipt: g.quantity });
       }
       for (const r of framePieces) {
         const key = `${r.orderId}:${r.pieceId}`;
+        for (const o of overridesOf.get(key) ?? []) push(key, { at: o.at, advance: o.qty });
         caps.set(key, {
           ...framePieceCap({
-            receivedQty: recvOf.get(key) ?? 0,
-            overrideQty: overrideOf.get(key) ?? 0,
+            receivedQty: (recvOf.get(key) ?? 0) + (openingOf.get(key) ?? 0),
+            // Lượt 1 (28/11/2026): chỉ phần mở chặn chưa được phiếu sau đó trả (outstandingAdvance).
+            overrideQty: outstandingAdvance(events.get(key) ?? []),
             usedQty: usedOf.get(key) ?? 0,
           }),
           mode: 'FRAME',
@@ -743,6 +855,351 @@ export class StageHandoverService {
     return this.toOverrideDto(row);
   }
 
+  // ─── Đầu kỳ ngày bật (câu 2, chốt 28/11/2026 cách 1) ───────────────────────────────────────
+
+  /** Đã ghi đầu kỳ tự tính chưa (ghi 1 lần cho cả nhà máy). */
+  async getOpening() {
+    const enabled = isStageHandoverEnabled();
+    const [first, doneCount, waitingCount] = await Promise.all([
+      this.prisma.stageHandoverOverride.findFirst({
+        where: { kind: StageHandoverOverrideKind.OPENING_DONE },
+        orderBy: { id: 'asc' },
+        select: { createdAt: true, createdById: true },
+      }),
+      this.prisma.stageHandoverOverride.count({
+        where: { kind: StageHandoverOverrideKind.OPENING_DONE },
+      }),
+      this.prisma.stageHandoverOverride.count({
+        where: { kind: StageHandoverOverrideKind.OPENING_WAITING },
+      }),
+    ]);
+    const by = first
+      ? await this.prisma.user.findUnique({
+          where: { id: first.createdById },
+          select: { firstName: true, lastName: true },
+        })
+      : null;
+    return {
+      enabled,
+      done: !!first,
+      doneAt: first?.createdAt ?? null,
+      doneByName: by ? `${by.lastName} ${by.firstName}`.trim() : null,
+      doneCount,
+      waitingCount,
+    };
+  }
+
+  /**
+   * QLSX bấm "Ghi đầu kỳ" ngay sau khi bật giao nhận: với mọi lệnh chưa kết thúc, số đã báo Hàn / Sơn của từng (SKU, mảnh) có cổng
+   * nhận được ghi là "đã nhận đầu kỳ" - phần làm trước ngày bật không có phiếu nên không bị chặn oan. Thanh phôi còn ở tổ Hàn vẫn đi
+   * phiếu giao đoạn (quy trình B5); khung Hàn đạt đang chờ Sơn do thủ kho Hàn nhập riêng (createOpeningWaiting). Chỉ ghi 1 lần cho cả
+   * nhà máy: ghi muộn sẽ tính cả phần báo sau ngày bật là đầu kỳ.
+   */
+  async createOpeningDone(userId: string) {
+    this.assertEnabled();
+    return this.prisma.$transaction(async (tx) => {
+      await lockBusinessKey(tx, 'stage-handover-opening');
+      const existing = await tx.stageHandoverOverride.findFirst({
+        where: { kind: StageHandoverOverrideKind.OPENING_DONE },
+        select: { createdAt: true },
+      });
+      if (existing) {
+        throw new ConflictException(
+          `Đã ghi đầu kỳ lúc ${existing.createdAt.toISOString()} - chỉ ghi 1 lần (ghi lại sẽ tính cả phần báo sau ngày bật)`,
+        );
+      }
+      const used = await tx.productionBatch.groupBy({
+        by: ['productionOrderId', 'pieceId', 'stage'],
+        where: {
+          stage: { in: [MfgStage.HAN, MfgStage.SON] },
+          productionOrder: {
+            ...NOT_CANCELLED_ORDER,
+            productionInvoiceItem: {
+              productionInvoice: {
+                status: {
+                  notIn: [ProductionInvoiceStatus.DONE, ProductionInvoiceStatus.CANCELLED],
+                },
+              },
+            },
+          },
+        },
+        _sum: { reportedQty: true },
+      });
+      const usedRows = used.filter((u) => (u._sum.reportedQty ?? 0) > 0 && u.pieceId != null);
+      const orderIds = [...new Set(usedRows.map((u) => u.productionOrderId))];
+      const orders = await tx.productionOrder.findMany({
+        where: { id: { in: orderIds } },
+        select: { id: true, productionInvoiceItem: { select: { productionInvoiceId: true } } },
+      });
+      const piOf = new Map(
+        orders.map((o) => [o.id.toString(), o.productionInvoiceItem.productionInvoiceId]),
+      );
+      const piIds = uniqIds(
+        orders.flatMap((o) =>
+          o.productionInvoiceItem.productionInvoiceId != null
+            ? [o.productionInvoiceItem.productionInvoiceId]
+            : [],
+        ),
+      );
+      const rowsOf = new Map<string, PiPieceRow>();
+      for (const piId of piIds) {
+        for (const r of await this.loadPiPieces(tx, piId)) {
+          rowsOf.set(`${r.orderId}:${r.pieceId}`, r);
+        }
+      }
+      const data: Prisma.StageHandoverOverrideCreateManyInput[] = [];
+      for (const u of usedRows) {
+        const piId = piOf.get(u.productionOrderId.toString());
+        const row = rowsOf.get(`${u.productionOrderId}:${u.pieceId}`);
+        if (!piId || !row || row.cancelled || !capModeOf(row, u.stage)) continue;
+        data.push({
+          productionInvoiceId: piId,
+          productionOrderId: u.productionOrderId,
+          pieceId: u.pieceId,
+          stage: u.stage,
+          qty: u._sum.reportedQty ?? 0,
+          reason: 'Đầu kỳ ngày bật giao nhận: số đã báo trước ngày bật',
+          createdById: userId,
+          kind: StageHandoverOverrideKind.OPENING_DONE,
+        });
+      }
+      const { count } = await tx.stageHandoverOverride.createMany({ data, skipDuplicates: true });
+      return {
+        created: count,
+        lenh: new Set(data.map((d) => d.productionInvoiceId.toString())).size,
+      };
+    });
+  }
+
+  /**
+   * Danh sách cho thủ kho Hàn nhập khung chờ Sơn đầu kỳ: các (SKU, mảnh) qua cả Hàn và Sơn của lệnh chưa kết thúc làm ở xưởng của kho
+   * Hàn đang làm (xưởng có kho Sơn), đã có báo Hàn. Gợi ý = Hàn đạt KCS − Sơn đã báo (thủ kho vẫn đếm thật rồi nhập).
+   */
+  async getOpeningWaitingPlan(scope: string | null, warehouseCode?: string) {
+    const code = scope ?? warehouseCode;
+    if (!code) throw new BadRequestException('Chọn kho Hàn (tài khoản không gắn kho đang làm)');
+    const warehouse = await this.prisma.warehouse.findUnique({
+      where: { code },
+      select: { id: true, code: true, kind: true, workshopId: true },
+    });
+    if (!warehouse) throw new NotFoundException(`Không tìm thấy kho ${code}`);
+    const resolver = new WorkshopWarehouseResolver(this.prisma);
+    const enabled = isStageHandoverEnabled();
+    if (
+      !enabled ||
+      warehouse.kind !== WarehouseKind.HAN ||
+      !(await resolver.workshopHasPaint(warehouse.workshopId))
+    ) {
+      return { enabled, applicable: false, rows: [] };
+    }
+    const open = {
+      status: { notIn: [ProductionInvoiceStatus.DONE, ProductionInvoiceStatus.CANCELLED] },
+    };
+    const batches = await this.prisma.productionBatch.groupBy({
+      by: ['productionOrderId', 'pieceId', 'stage', 'status'],
+      where: {
+        stage: { in: [MfgStage.HAN, MfgStage.SON] },
+        productionOrder: {
+          ...NOT_CANCELLED_ORDER,
+          productionInvoiceItem: { productionInvoice: open },
+        },
+      },
+      _sum: { reportedQty: true },
+    });
+    const orderIds = [...new Set(batches.map((b) => b.productionOrderId))];
+    const orders = await this.prisma.productionOrder.findMany({
+      where: { id: { in: orderIds } },
+      select: {
+        id: true,
+        mfgProduct: { select: { factoryCode: true } },
+        productionInvoiceItem: { select: { productionInvoiceId: true } },
+      },
+    });
+    const piIds = uniqIds(
+      orders.flatMap((o) =>
+        o.productionInvoiceItem.productionInvoiceId != null
+          ? [o.productionInvoiceItem.productionInvoiceId]
+          : [],
+      ),
+    );
+    const piHere = new Set<string>();
+    for (const piId of piIds) {
+      if ((await resolver.workshopIdOfPi(piId)) === warehouse.workshopId)
+        piHere.add(piId.toString());
+    }
+    const rowsOf = new Map<string, PiPieceRow>();
+    for (const piId of piIds) {
+      if (!piHere.has(piId.toString())) continue;
+      for (const r of await this.loadPiPieces(this.prisma, piId)) {
+        rowsOf.set(`${r.orderId}:${r.pieceId}`, r);
+      }
+    }
+    const k2 = (o: bigint | null, p: bigint | null) => `${o}:${p}`;
+    const hanPassed = new Map<string, number>();
+    const hanReported = new Map<string, number>();
+    const sonReported = new Map<string, number>();
+    for (const b of batches) {
+      const k = k2(b.productionOrderId, b.pieceId);
+      const q = b._sum.reportedQty ?? 0;
+      if (b.stage === MfgStage.SON) sonReported.set(k, (sonReported.get(k) ?? 0) + q);
+      else {
+        hanReported.set(k, (hanReported.get(k) ?? 0) + q);
+        if (b.status === ProductionBatchStatus.QC_DONE)
+          hanPassed.set(k, (hanPassed.get(k) ?? 0) + q);
+      }
+    }
+    const [openings, pieces, codes] = await Promise.all([
+      this.prisma.stageHandoverOverride.findMany({
+        where: {
+          kind: StageHandoverOverrideKind.OPENING_WAITING,
+          productionOrderId: { in: orderIds },
+        },
+        select: { productionOrderId: true, pieceId: true, qty: true },
+      }),
+      this.prisma.piece.findMany({
+        where: { id: { in: [...new Set([...rowsOf.values()].map((r) => r.pieceId))] } },
+        select: { id: true, code: true, name: true },
+      }),
+      loadLenhDisplayCodes(this.prisma, piIds),
+    ]);
+    const openingOf = new Map(
+      openings.map((o) => [k2(o.productionOrderId, o.pieceId), o.qty.toNumber()]),
+    );
+    const pieceOf = new Map(pieces.map((p) => [p.id.toString(), p]));
+    const orderOf = new Map(orders.map((o) => [o.id.toString(), o]));
+    const out = [];
+    for (const [k, r] of rowsOf) {
+      if (r.cancelled || !r.needsHan || !r.needsSon || !(hanReported.get(k) ?? 0)) continue;
+      const o = orderOf.get(r.orderId.toString());
+      const piId = o?.productionInvoiceItem.productionInvoiceId;
+      const p = pieceOf.get(r.pieceId.toString());
+      const passed = hanPassed.get(k) ?? 0;
+      const son = sonReported.get(k) ?? 0;
+      out.push({
+        productionInvoiceId: piId?.toString() ?? null,
+        lenhCode: piId ? (codes.get(piId.toString()) ?? '') : '',
+        productionOrderId: r.orderId.toString(),
+        sku: o?.mfgProduct.factoryCode ?? '',
+        pieceId: r.pieceId.toString(),
+        pieceCode: p?.code ?? '',
+        pieceName: p?.name ?? '',
+        hanReportedQty: hanReported.get(k) ?? 0,
+        hanPassedQty: passed,
+        sonReportedQty: son,
+        suggestedQty: Math.max(0, passed - son),
+        openingWaitingQty: openingOf.get(k) ?? null,
+      });
+    }
+    out.sort((a, b) => a.lenhCode.localeCompare(b.lenhCode) || a.sku.localeCompare(b.sku));
+    return { enabled, applicable: true, warehouseCode: warehouse.code, rows: out };
+  }
+
+  /**
+   * Thủ kho Hàn (Phú An - xưởng có kho Sơn) nhập số khung đã Hàn đạt KCS đang chờ ở tổ Sơn lúc bật: Sơn coi như đã nhận số đó, khung
+   * vào tồn kho Sơn (trước ngày bật khung chỉ vào kho Sơn lúc KCS Sơn đạt). Mỗi (SKU, mảnh) nhập 1 lần. Admin nhập thay được.
+   */
+  async createOpeningWaiting(
+    dto: { productionOrderId: string; pieceId: string; qty: number },
+    user: { id: string; roles: string[]; warehouseScope: string | null },
+  ) {
+    this.assertEnabled();
+    assertWholeQty(dto.qty, 'Số khung chờ Sơn');
+    const orderId = parseBigIntId(dto.productionOrderId);
+    const pieceId = parseBigIntId(dto.pieceId);
+    const order = await this.prisma.productionOrder.findFirst({
+      where: { id: orderId, ...NOT_CANCELLED_ORDER },
+      select: {
+        bomRevisionId: true,
+        mfgProduct: { select: { factoryCode: true } },
+        productionInvoiceItem: {
+          select: {
+            productionInvoiceId: true,
+            productionInvoice: { select: { code: true, status: true } },
+          },
+        },
+      },
+    });
+    const piId = order?.productionInvoiceItem.productionInvoiceId;
+    const pi = order?.productionInvoiceItem.productionInvoice;
+    if (!order || !piId || !pi) {
+      throw new NotFoundException(
+        `Không tìm thấy SKU (lệnh sản xuất) ${dto.productionOrderId} còn chạy`,
+      );
+    }
+    this.assertPiOpen(pi);
+    const [bp, piece] = await Promise.all([
+      this.prisma.bomPiece.findUnique({
+        where: { bomRevisionId_pieceId: { bomRevisionId: order.bomRevisionId, pieceId } },
+        select: { needsHan: true, needsSon: true },
+      }),
+      this.prisma.piece.findUnique({ where: { id: pieceId }, select: { name: true } }),
+    ]);
+    const pieceName = piece?.name ?? `mảnh ${pieceId}`;
+    if (!bp?.needsHan || !bp.needsSon) {
+      throw new BadRequestException(`${pieceName} không qua cả Hàn và Sơn trong định mức của SKU`);
+    }
+    const resolver = new WorkshopWarehouseResolver(this.prisma);
+    const workshopId = await resolver.workshopIdOfPi(piId);
+    if (!(await resolver.workshopHasPaint(workshopId))) {
+      throw new BadRequestException(
+        `Lệnh ${pi.code} làm ở xưởng không có kho Sơn - khung sang Sơn bằng phiếu chuyển kho như cũ, không nhập đầu kỳ ở đây`,
+      );
+    }
+    const khoHan = await resolver.kindWarehouseOf(WarehouseKind.HAN, workshopId);
+    if (!khoHan) throw new BadRequestException('Xưởng của lệnh chưa có kho Hàn');
+    if (!user.roles.includes(DEFAULT_ROLES.ADMIN)) {
+      if (!user.warehouseScope) {
+        throw new ForbiddenException('Chỉ thủ kho Hàn của xưởng (hoặc Admin) nhập khung chờ Sơn');
+      }
+      this.assertScope(khoHan, user.warehouseScope, `Khung của lệnh ${pi.code}`);
+    }
+    const khoSon = await requireStageWarehouseOfPi(this.prisma, piId, MfgStage.SON);
+    const opening = await this.prisma.warehouse.findUnique({
+      where: { code: 'OPENING_BALANCE' },
+      select: { id: true },
+    });
+    if (!opening) throw new BadRequestException('Thiếu kho ảo OPENING_BALANCE - báo IT');
+    try {
+      const row = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.stageHandoverOverride.create({
+          data: {
+            productionInvoiceId: piId,
+            productionOrderId: orderId,
+            pieceId,
+            stage: MfgStage.SON,
+            qty: dto.qty,
+            reason: 'Đầu kỳ ngày bật giao nhận: khung Hàn đạt đang chờ ở tổ Sơn',
+            createdById: user.id,
+            kind: StageHandoverOverrideKind.OPENING_WAITING,
+          },
+        });
+        await this.stockLedger.postEntry(
+          {
+            fromWarehouseId: opening.id,
+            toWarehouseId: khoSon.id,
+            pieceId,
+            qty: dto.qty,
+            refType: StockLedgerRefType.OPENING_BALANCE,
+            refId: created.id.toString(),
+            idempotencyKey: `stage-handover-opening-waiting:${created.id}`,
+            note: `Đầu kỳ giao nhận: ${dto.qty} ${pieceName} (SKU ${order.mfgProduct.factoryCode}, lệnh ${pi.code}) đang chờ Sơn`,
+            createdById: user.id,
+          },
+          tx,
+        );
+        return created;
+      });
+      return this.toOverrideDto(row);
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException(
+          `${pieceName} (SKU ${order.mfgProduct.factoryCode}) đã nhập khung chờ Sơn đầu kỳ rồi - mỗi SKU, mảnh nhập 1 lần`,
+        );
+      }
+      throw error;
+    }
+  }
+
   async listOverrides(productionInvoiceId: string) {
     const rows = await this.prisma.stageHandoverOverride.findMany({
       where: { productionInvoiceId: parseBigIntId(productionInvoiceId) },
@@ -799,6 +1256,8 @@ export class StageHandoverService {
       materialId: r.materialId?.toString() ?? null,
       qty: r.qty.toNumber(),
       unit: r.stage === MfgStage.PHOI ? 'mm' : 'mảnh',
+      /** OVERRIDE = mở chặn; OPENING_DONE / OPENING_WAITING = đầu kỳ ngày bật (28/11/2026). */
+      kind: r.kind,
       reason: r.reason,
       createdById: r.createdById,
       createdAt: r.createdAt,
@@ -1147,7 +1606,7 @@ export class StageHandoverService {
     if (rows.length === 0) return [];
     const orderIds = [...new Set(rows.map((r) => r.orderId))];
     const pieceIds = [...new Set(rows.map((r) => r.pieceId))];
-    const [lines, draftLines, quants, pieces, orders] = await Promise.all([
+    const [lines, draftLines, quants, pieces, orders, openings] = await Promise.all([
       this.prisma.issueSlipLine.groupBy({
         by: ['productionOrderId', 'pieceId'],
         where: {
@@ -1178,8 +1637,18 @@ export class StageHandoverService {
         where: { id: { in: orderIds } },
         select: { id: true, mfgProduct: { select: { factoryCode: true } } },
       }),
+      this.prisma.stageHandoverOverride.findMany({
+        where: {
+          kind: StageHandoverOverrideKind.OPENING_WAITING,
+          productionOrderId: { in: orderIds },
+        },
+        select: { productionOrderId: true, pieceId: true, qty: true },
+      }),
     ]);
     const k2 = (o: bigint | null, p: bigint | null) => `${o}:${p}`;
+    const openingOf = new Map(
+      openings.map((o) => [k2(o.productionOrderId, o.pieceId), o.qty.toNumber()]),
+    );
     const handedOf = new Map(
       lines.map((r) => [k2(r.productionOrderId, r.pieceId), r._sum.qty?.toNumber() ?? 0]),
     );
@@ -1217,7 +1686,12 @@ export class StageHandoverService {
         draftQty,
         /** Tồn mảnh ở kho Hàn (theo mã mảnh, chung mọi lệnh). */
         inStockQty,
-        availableQty: round4(Math.max(0, inStockQty - draftQty)),
+        /** Đầu kỳ ngày bật (câu 2): số khung chờ Sơn thủ kho Hàn đã nhập; null = chưa nhập. */
+        openingWaitingQty: openingOf.get(key) ?? null,
+        // Lượt 1 (28/11/2026): không quá phần của chính SKU (cùng trần assertFrameCapInTx) - tồn mảnh kho chung mọi SKU.
+        availableQty: round4(
+          Math.max(0, Math.min(inStockQty - draftQty, passedQty - handedOverQty - draftQty)),
+        ),
       });
     }
     return out;

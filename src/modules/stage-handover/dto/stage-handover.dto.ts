@@ -82,3 +82,19 @@ export class CreateStageHandoverOverrideDto {
   @MaxLength(500)
   reason!: string;
 }
+
+/** Đầu kỳ ngày bật (câu 2, 28/11/2026): thủ kho Hàn nhập số khung Hàn đạt đang chờ ở tổ Sơn của 1 (SKU, mảnh). */
+export class CreateOpeningWaitingDto {
+  @ApiProperty({ description: 'SKU (lệnh sản xuất)' })
+  @IsString()
+  productionOrderId!: string;
+
+  @ApiProperty({ description: 'Mảnh (qua cả Hàn và Sơn)' })
+  @IsString()
+  pieceId!: string;
+
+  @ApiProperty({ description: 'Số khung đang chờ Sơn (nguyên, > 0)' })
+  @IsNumber({ maxDecimalPlaces: 0 })
+  @IsPositive()
+  qty!: number;
+}

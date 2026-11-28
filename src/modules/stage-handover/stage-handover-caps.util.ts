@@ -45,10 +45,34 @@ export interface SegmentPoolRow {
   leftQty: number;
 }
 
-/** Kho đoạn đã nhận của (lệnh, tổ) theo mã đoạn: nhận + mở chặn quy đoạn - đã làm (có thể âm khi dữ liệu cũ làm trước khi bật). */
+/**
+ * Đợt 2 lượt 1 (chốt 28/11/2026, cách a): QLSX mở chặn là "ỨNG TRƯỚC" hàng chưa có phiếu - phiếu giao xác nhận SAU lần mở chặn trả dần
+ * phần đã ứng (quy ước: mở chặn bao nhiêu thì kho lập phiếu bù bấy nhiêu). Trước đây phiếu bù cộng thêm vào mở chặn -> công nhân báo
+ * lố đúng bằng số đã mở chặn. Trả phần ứng trước CHƯA được phiếu trả. Cùng thời điểm: ứng trước tính trước, phiếu trả sau.
+ */
+export function outstandingAdvance(
+  events: readonly { at: Date; advance?: number; receipt?: number }[],
+): number {
+  const sorted = [...events].sort(
+    (a, b) => a.at.getTime() - b.at.getTime() || (b.advance ?? 0) - (a.advance ?? 0),
+  );
+  let loan = 0;
+  for (const e of sorted) {
+    if (e.advance) loan = round4(loan + e.advance);
+    if (e.receipt) loan = round4(Math.max(0, loan - e.receipt));
+  }
+  return loan;
+}
+
+/**
+ * Kho đoạn đã nhận của (lệnh, tổ) theo mã đoạn: nhận + mở chặn quy đoạn - đã làm (có thể âm khi dữ liệu cũ làm trước khi bật).
+ * `advanceLeftByCode` (lượt 1, 28/11/2026): phần mở chặn CÒN LẠI theo mã đoạn sau khi phiếu sau đó đã trả (outstandingAdvance) -
+ * có thì dùng thay cho Σ mở chặn × định mức.
+ */
 export function segmentPool(
   pieces: readonly SegmentPieceInput[],
   receivedByCode: ReadonlyMap<string, number>,
+  advanceLeftByCode?: ReadonlyMap<string, number>,
 ): Map<string, SegmentPoolRow> {
   const pool = new Map<string, SegmentPoolRow>();
   const rowOf = (code: string): SegmentPoolRow => {
@@ -67,7 +91,8 @@ export function segmentPool(
       r.overrideQty = round4(r.overrideQty + p.overrideQty * q);
     }
   }
-  for (const r of pool.values()) {
+  for (const [code, r] of pool) {
+    if (advanceLeftByCode) r.overrideQty = advanceLeftByCode.get(code) ?? 0;
     r.leftQty = round4(r.receivedQty + r.overrideQty - r.usedQty);
   }
   return pool;
@@ -77,8 +102,9 @@ export function segmentPool(
 export function segmentPieceCaps(
   pieces: readonly SegmentPieceInput[],
   receivedByCode: ReadonlyMap<string, number>,
+  advanceLeftByCode?: ReadonlyMap<string, number>,
 ): Map<string, PieceReceivedCap> {
-  const pool = segmentPool(pieces, receivedByCode);
+  const pool = segmentPool(pieces, receivedByCode, advanceLeftByCode);
   const out = new Map<string, PieceReceivedCap>();
   for (const p of pieces) {
     if (p.qtyPerPieceByCode.size === 0) continue;
